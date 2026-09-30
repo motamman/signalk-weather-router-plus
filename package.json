@@ -39,7 +39,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@signalk/server-api": "^2.24.0",
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "@types/node": "^20.11.0",
     "@typescript-eslint/eslint-plugin": "^8.71.0",
     "@typescript-eslint/parser": "^8.71.0",
