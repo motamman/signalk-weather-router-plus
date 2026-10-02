@@ -35,7 +35,7 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 | Route job API (REST + Server-Sent Events) | `/plugins/signalk-weather-router-plus/api/…` |
 | OpenAPI | `/plugins/signalk-weather-router-plus/api/openapi.json` |
 | Finished routes | saved to `/signalk/v2/api/resources/routes/{jobId}` (needs a routes provider, e.g. `resources-provider`) |
-| Weather API provider | point forecasts and observations anywhere from the global forecast (read from the decoded run on disk by the data worker) via `/signalk/v2/api/weather/forecasts/point?lat=&lon=` and `/observations`, with `water.level` / `water.levelTendency` (relative to mean sea level) when tides are on and `water.surfaceCurrentSpeed` / `surfaceCurrentDirection` (the set, towards) where a current source covers the point |
+| Weather API provider | point forecasts and observations anywhere from the global forecast (read from the decoded run on disk by the data worker) via `/signalk/v2/api/weather/forecasts/point?lat=&lon=` and `/observations`, with `outside.cloudCover` / `wind.gust` when the extra fields are on, `water.level` / `water.levelTendency` (relative to mean sea level) when tides are on and `water.surfaceCurrentSpeed` / `surfaceCurrentDirection` (the set, towards) where a current source covers the point |
 | Notifications | `notifications.weatherRouterPlus.{jobId}` on completion or failure |
 | CLI (no Signal K) | `wrp-route` |
 
@@ -51,13 +51,13 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   precision (exactly the decoded values), so overlays, conditions, the
   Weather API and routing work anywhere: 1440 × 721 cells × 4 B =
   4.15 MB per field per step. A 72 h horizon (25 steps) is 623 MB with
-  the six base fields and 1.14 GB with the extra fields (`2t`, `tprate`,
-  `skt`, `2d`, `ptype`).
+  the six base fields and 1.35 GB with the extra fields (`2t`, `tprate`,
+  `skt`, `2d`, `ptype`, `tcc`, `10fg`).
 
   **Decoded once per update, kept on disk, read per request.** The
   decoded forecast is not kept in memory. When a new ECMWF run arrives
   the data worker decodes it one step at a time into one reusable
-  one-step block (45.7 MB with the extra fields) plus decode buffers
+  one-step block (54.0 MB with the extra fields) plus decode buffers
   (20.8 MB: one global field as Uint32 + Float64 + Float32 + Int32) and
   writes each step to `forecast/<yyyymmddHH>/` under the
   plugin data directory: one raw Float32 file per field and step
@@ -82,12 +82,13 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   OS page cache (1–2 ms for a map view, below), so an in-process cache
   of field-steps was not added.
 
-  Disk: one run of 72 h with the extra fields is 1,142,064,000 B of
+  Disk: one run of 72 h with the extra fields is 1,349,712,000 B of
   `.f32` files plus a 3.5 kB `index.json`; with `keepCycles` 2 up to two
   runs are kept, next to the GRIB cache (212.5 MB for one 72 h cycle
   with the extra fields). An update writes the run once:
   1,144,471,552 B written by the plugin process during a forced reload
-  (`/proc/<pid>/io` `write_bytes`). The GRIB cache stays, so a settings
+  (`/proc/<pid>/io` `write_bytes`, measured on a build with the previous
+  extra-field set). The GRIB cache stays, so a settings
   change (horizon, extra fields) can decode again without downloading.
 
   *Measured on a Pi 5 (8 GB, NVMe), 2026-09-28*, the installed build
@@ -783,7 +784,7 @@ resolution L1 (`GSHHS_f_L1.shp`):
 - Internet access for the forecast, current, tide and coastline
   downloads.
 - Disk in the Signal K data directory: the decoded forecast (about
-  1.1 GB for 72 h with the extra fields, 3.9 GB at 360 h), the GRIB files
+  1.35 GB for 72 h with the extra fields, 4.6 GB at 360 h), the GRIB files
   of the cached cycles, the coastline (about 156 MB when downloaded),
   current and tide caches, and the saved map tiles (up to the configured
   cap, 20 GB by default).
@@ -2134,10 +2135,12 @@ Each entry (Signal K units: m/s, rad, Pa, K, m, s, ratio):
 | `description` | | `"ECMWF IFS 0.25° open data, cycle <ISO>, +<h> h"` |
 | `wind.speedTrue` | 10 m wind | m/s |
 | `wind.directionTrue` | 10 m wind direction FROM | rad |
+| `wind.gust` | `10fg`, 10 m wind gust | m/s; extra fields only |
 | `outside.pressure` | `msl` | Pa |
 | `outside.temperature` | `2t` | K; extra fields only |
 | `outside.dewPointTemperature` | `2d` | K; extra fields only |
 | `outside.relativeHumidity` | from `2t` and `2d` | ratio 0..1; extra fields only |
+| `outside.cloudCover` | `tcc`, total cloud cover | ratio 0..1; extra fields only |
 | `water.temperature` | `skt` | K; extra fields only |
 | `water.waveSignificantHeight` | `swh` | m |
 | `water.wavePeriod` | `mwp` | s |

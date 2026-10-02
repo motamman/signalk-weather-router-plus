@@ -6,6 +6,23 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Cloud cover and wind gust in the Weather API.** With the extra
+  fields on (the default) the plugin also fetches ECMWF's total cloud
+  cover `tcc` and 10 m wind gust `10fg` with every forecast, and point
+  forecasts and observations carry `outside.cloudCover` (ratio 0..1)
+  and `wind.gust` (m/s), the two fields the Signal K Weather API schema
+  defines and consumers such as energy predictors and stow advisories
+  read. Without the extra fields the run decodes as before and the two
+  fields stay left out. A decoded run made for the previous extra-field
+  set no longer matches the settings, so the first update after this
+  change decodes the current cycle again: the nine existing fields come
+  from the GRIB cache and only the two new fields' messages are
+  downloaded (HTTP byte ranges, tens of MB); one extra-field step is
+  54.0 MB on disk instead of 45.7 MB (about 1.35 GB per 72 h run
+  instead of 1.14 GB).
+
 ## [0.1.0-beta.7] - 2026-10-03
 
 ### Added
@@ -183,6 +200,7 @@ uses [Semantic Versioning](https://semver.org/).
   check and the warning-to-leg match measured across 180° the long way:
   all take longitude differences the short way now; the Freeboard panel fits a box that crosses 180° as
   west > east, as the Plotter Extensions API defines.
+
 
 ## [0.1.0-beta.6] - 2026-10-02
 

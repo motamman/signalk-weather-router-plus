@@ -29,8 +29,8 @@ import { type ResolvedConfig } from '../config';
 import { requireInit } from './state';
 import type { WorkerState } from './state';
 
-/** ECMWF open-data short names; 2 m dew point is `2d` in the index files. */
-const EXTRA_ATM = ['2t', 'tprate', 'skt', '2d', 'ptype'];
+/** ECMWF open-data short names; 2 m dew point is `2d` in the index files, 10 m wind gust `10fg`, total cloud cover `tcc`. */
+const EXTRA_ATM = ['2t', 'tprate', 'skt', '2d', 'ptype', 'tcc', '10fg'];
 
 export function extraParams(cfg: ResolvedConfig): string[] {
   return cfg.forecast.extraFields ? EXTRA_ATM : [];

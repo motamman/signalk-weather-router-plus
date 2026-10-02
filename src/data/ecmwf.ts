@@ -30,7 +30,8 @@ export const ECMWF_MIRRORS: Record<string, string> = {
 /** Parameters the router needs, by stream. */
 export const ATM_PARAMS = ['10u', '10v', 'msl'] as const;
 export const WAVE_PARAMS = ['swh', 'mwp', 'mwd'] as const;
-export type EcmwfParam = (typeof ATM_PARAMS)[number] | (typeof WAVE_PARAMS)[number] | '2t' | 'tprate';
+export type EcmwfParam =
+  (typeof ATM_PARAMS)[number] | (typeof WAVE_PARAMS)[number] | '2t' | 'tprate' | 'skt' | '2d' | 'ptype' | 'tcc' | '10fg';
 
 export interface IndexRecord {
   param: string;

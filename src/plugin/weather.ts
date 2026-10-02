@@ -18,10 +18,11 @@
  *
  * Every value is in the Signal K unit for its field: m/s, rad, Pa, K,
  * m, s, and relative humidity as a ratio. The extra fields (temperature,
- * dew point, humidity, water temperature) appear only when the plugin is
- * configured to fetch them. Precipitation volume is not provided: the
- * store holds only ECMWF's instantaneous `tprate`, not an accumulated
- * field or an interval-mean rate, so no interval depth can be derived.
+ * dew point, humidity, water temperature, total cloud cover, wind gust)
+ * appear only when the plugin is configured to fetch them. Precipitation
+ * volume is not provided: the store holds only ECMWF's instantaneous
+ * `tprate`, not an accumulated field or an interval-mean rate, so no
+ * interval depth can be derived.
  *
  * Water level (when tides are enabled): `water.level` is the total water
  * level (tide + surge) in metres relative to local MEAN SEA LEVEL (not
@@ -60,6 +61,8 @@ export interface WeatherData {
     dewPointTemperature?: number;
     /** Ratio 0..1. */
     relativeHumidity?: number;
+    /** Total cloud cover, ratio 0..1 (ECMWF `tcc`). */
+    cloudCover?: number;
     /** Depth in m accumulated over the interval ending at `date`. */
     precipitationVolume?: number;
   };
@@ -76,7 +79,7 @@ export interface WeatherData {
     /** rad, the set (direction the water flows towards), true. */
     surfaceCurrentDirection?: number;
   };
-  wind?: { speedTrue?: number; directionTrue?: number };
+  wind?: { speedTrue?: number; directionTrue?: number; /** m/s, 10 m wind gust (ECMWF `10fg`). */ gust?: number };
 }
 
 /** A current source as pointForecasts samples it (the data worker's CurrentStack). */
@@ -179,7 +182,7 @@ export function makeWeatherProvider(
 }
 
 /** Parameters pointForecasts reads. */
-export const POINT_FORECAST_PARAMS = ['10u', '10v', 'msl', 'swh', 'mwp', 'mwd', '2t', '2d', 'skt'] as const;
+export const POINT_FORECAST_PARAMS = ['10u', '10v', 'msl', 'swh', 'mwp', 'mwd', '2t', '2d', 'skt', 'tcc', '10fg'] as const;
 
 /**
  * Point forecasts from a store holding every step around the position
@@ -248,13 +251,18 @@ function weatherItemAt(
   const [ws, wd] = store.at(lon, lat, t);
   const wave = store.wavesAt(lon, lat, t);
   const msl = store.mslAt(lon, lat, t);
+  const wind: NonNullable<WeatherData['wind']> = { speedTrue: ws, directionTrue: (wd * Math.PI) / 180 };
+  const gust = store.has('10fg') ? finiteOr(store.paramAt('10fg', lon, lat, t)) : undefined;
+  if (gust !== undefined) wind.gust = gust;
   const item: WeatherData = {
     description,
     date: t.toISOString(),
     type,
-    wind: { speedTrue: ws, directionTrue: (wd * Math.PI) / 180 },
+    wind,
   };
   const outside: NonNullable<WeatherData['outside']> = {};
+  const tcc = store.has('tcc') ? finiteOr(store.paramAt('tcc', lon, lat, t)) : undefined;
+  if (tcc !== undefined) outside.cloudCover = tcc;
   if (Number.isFinite(msl)) outside.pressure = msl;
   const t2m = store.has('2t') ? finiteOr(store.paramAt('2t', lon, lat, t)) : undefined;
   const d2m = store.has('2d') ? finiteOr(store.paramAt('2d', lon, lat, t)) : undefined;

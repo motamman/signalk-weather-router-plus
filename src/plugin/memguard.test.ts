@@ -14,25 +14,25 @@ import { streamingDecodeBytes } from '../data/loader';
 test('forecastBytes (a decoded run on disk) is steps × fields × one global grid', () => {
   assert.equal(FIELD_STEP_BYTES, 4_152_960);
   assert.equal(forecastBytes(72 * HOUR_S, false), 25 * 6 * FIELD_STEP_BYTES); // 622,944,000
-  assert.equal(forecastBytes(72 * HOUR_S, true), 25 * 11 * FIELD_STEP_BYTES); // 1,142,064,000 (matches the measured store)
+  assert.equal(forecastBytes(72 * HOUR_S, true), 25 * 13 * FIELD_STEP_BYTES); // 1,349,712,000
 });
 
 test('update check: memory for one decode step, disk for the decoded run', () => {
   const GB = 1e9;
-  // One step with the extra fields: 11 global Float32 fields + decode buffers (12 B/cell) + wave fill temporaries (8 B/cell).
-  assert.equal(streamingDecodeBytes(11), 1440 * 721 * (11 * 4 + 12 + 8));
+  // One step with the extra fields: 13 global Float32 fields + decode buffers (12 B/cell) + wave fill temporaries (8 B/cell).
+  assert.equal(streamingDecodeBytes(13), 1440 * 721 * (13 * 4 + 12 + 8));
   const ok = checkDecodeResources(72 * HOUR_S, true, GB, null, { bytes: 2 * GB, source: 'test' }, 10 * GB);
   assert.equal(ok.ok, true);
-  assert.equal(ok.needBytes, streamingDecodeBytes(11));
+  assert.equal(ok.needBytes, streamingDecodeBytes(13));
   // Memory: one step fits where the old whole store (1.14 GB + 1 GB headroom) did not.
   assert.equal(
-    checkDecodeResources(72 * HOUR_S, true, GB, null, { bytes: GB + streamingDecodeBytes(11), source: 'test' }, 10 * GB).ok,
+    checkDecodeResources(72 * HOUR_S, true, GB, null, { bytes: GB + streamingDecodeBytes(13), source: 'test' }, 10 * GB).ok,
     true
   );
-  const noMem = checkDecodeResources(72 * HOUR_S, true, GB, null, { bytes: GB + streamingDecodeBytes(11) - 1, source: 'test' }, 10 * GB);
+  const noMem = checkDecodeResources(72 * HOUR_S, true, GB, null, { bytes: GB + streamingDecodeBytes(13) - 1, source: 'test' }, 10 * GB);
   assert.equal(noMem.ok, false);
   assert.match(noMem.message, /not enough memory/);
-  // Disk: 1.14 GB run + 1 GB reserve.
+  // Disk: 1.35 GB run + 1 GB reserve.
   const run = forecastBytes(72 * HOUR_S, true);
   assert.equal(checkDecodeResources(72 * HOUR_S, true, GB, null, { bytes: 5 * GB, source: 'test' }, run + DISK_RESERVE_BYTES).ok, true);
   const noDisk = checkDecodeResources(72 * HOUR_S, true, GB, null, { bytes: 5 * GB, source: 'test' }, run + DISK_RESERVE_BYTES - 1);

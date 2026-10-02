@@ -39,7 +39,7 @@ import { streamingDecodeBytes } from '../data/loader';
 
 /** Bytes of one global field for one step (Float32, 0.25°). */
 export const FIELD_STEP_BYTES = 1440 * 721 * 4;
-export const EXTRA_FIELD_COUNT = 5;
+export const EXTRA_FIELD_COUNT = 7;
 
 /** Bytes of a decoded run (on disk) for a horizon and field set: steps × fields × one global grid. */
 export function forecastBytes(horizonS: number, extraFields: boolean): number {

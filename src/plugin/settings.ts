@@ -226,10 +226,10 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
   {
     key: 'forecast.extraFields',
     group: 'forecast',
-    label: 'Temperature, precipitation, SST, humidity',
+    label: 'Temperature, precipitation, SST, humidity, cloud cover',
     type: 'boolean',
     default: true,
-    help: 'Also fetch 2t, tprate, skt, 2d and ptype (the temperature, SST and precipitation layers and the full conditions). Changing it reloads the forecast.',
+    help: 'Also fetch 2t, tprate, skt, 2d, ptype, tcc and 10fg (the temperature, SST and precipitation layers, total cloud cover, wind gust and the full conditions). Changing it reloads the forecast.',
     reload: 'forecast',
   },
   {

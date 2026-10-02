@@ -96,7 +96,7 @@ export interface ResolvedConfig {
     refreshIntervalS: number;
     mirror: 'ecmwf' | 'aws' | 'google';
     keepCycles: number;
-    /** Also fetch 2t, tprate, skt, 2d, ptype (temperature, precipitation, SST, humidity, precip type). */
+    /** Also fetch 2t, tprate, skt, 2d, ptype, tcc, 10fg (temperature, precipitation, SST, humidity, precip type, cloud cover, gust). */
     extraFields: boolean;
     /** Memory guard: bytes that must remain free after a forecast load. */
     memoryHeadroomBytes: number;
