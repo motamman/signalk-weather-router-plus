@@ -2326,3 +2326,28 @@ used at run time (ECMWF, Copernicus Marine, NOAA RTOFS, GSHHG) are
 credited in [NOTICE](NOTICE), which redistributions must carry. Forks are
 welcome; a published modified version must use its own name and icon
 (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+### Signal K chart layers
+
+In **Layers → Base**, enable **Signal K charts** and select a chart supplied by
+your installed chart providers. **Local charts together** keeps the combined
+local-tile view; online entries are selected individually and marked **online**.
+The app reads the shared Signal K chart catalog (v2, with v1 fallback), following
+Freeboard-SK's descriptor conventions. Charts Provider Simple, charts-plugin and
+other providers retain chart configuration, file handling, conversion and any
+provider-side proxy/cache. Weather Router Plus only displays the advertised URL
+and metadata using its existing OpenLayers map.
+
+Supported descriptors are raster XYZ tiles (PNG/JPEG/WebP, including raster
+MBTiles) and WMS image services with the provider's layer list. Zoom limits,
+coverage bounds, default opacity, 256/512-pixel tile sizes and legacy
+`tilemapUrl` / `serverType` fields are honored. Online services require internet
+access unless their provider supplies a working server-side proxy/cache.
+Vector MBTiles/S-57, WMTS, TileJSON and PMTiles are not supported by this adapter.
+
+Use **Refresh charts** after adding or enabling charts in your provider.
+Selection and visibility are remembered in this browser. Disable OpenStreetMap
+and OpenSeaMap to avoid their internet tiles; those choices are remembered too.
+Routes, weather and the vessel remain above the nautical charts. Chart selection
+changes the displayed map; route avoidance still uses the GSHHG land mask and
+does not interpret chart soundings as navigable-depth constraints.

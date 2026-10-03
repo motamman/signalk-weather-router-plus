@@ -806,6 +806,12 @@
     <div class="layer-group" data-group="base">
     <label style="display:block;font-size:11px;cursor:pointer;"><input type="checkbox" id="osmToggle" style="width:auto;margin-right:4px;" checked>OpenStreetMap</label>
     <label style="display:block;font-size:11px;cursor:pointer;"><input type="checkbox" id="seamarkToggle" style="width:auto;margin-right:4px;" checked>OpenSeaMap seamarks (buoys, lights)</label>
+    <label style="display:block;font-size:11px;cursor:pointer;"><input type="checkbox" id="localChartsToggle" style="width:auto;margin-right:4px;" disabled>Signal K charts</label>
+    <div style="margin:4px 0 8px 18px;">
+      <select id="localChartPicker" aria-label="Signal K chart" style="width:100%;font-size:11px;" disabled><option>Loading Signal K charts…</option></select>
+      <button id="localChartsRefresh" type="button" style="margin-top:4px;font-size:11px;">Refresh charts</button>
+      <div id="localChartsNote" style="font-size:11px;margin-top:4px;"></div>
+    </div>
     <label style="display:block;font-size:11px;cursor:pointer;"><input type="checkbox" id="vesselToggle" style="width:auto;margin-right:4px;" checked>Own vessel (Signal K position)</label>
     <label style="display:block;font-size:11px;cursor:pointer;" title="The router's search: the front of each stage (the candidates it kept, each with its own arrival time; not isochrones) and the best path so far, live while a route runs. Off by default; the same switch sits beside Find Route."><input type="checkbox" id="frontToggle" style="width:auto;margin-right:4px;">Decision lines (the router's search)</label>
     </div>

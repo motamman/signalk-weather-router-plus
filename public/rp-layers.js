@@ -1,3 +1,4 @@
+import { localChartLayer, initializeSignalKCharts } from './rp-charts.js';
 // Weather Router Plus — route planner UI: map module (imports rp-core.js).
 // The map, markers and route styling, weather/water overlays (JSON grids
 // drawn on canvas, or the plugin's PNG tiles), streamlines, pressure, the
@@ -1370,7 +1371,7 @@ try {
 
 export const map = new ol.Map({
   target: 'map',
-  layers: [osmLayer, seamarkLayer, windHeatmapLayer, currentHeatmapLayer, roughnessLayer, waveHeatmapLayer, precipHeatmapLayer, temperatureLayer, sstLayer, tideLayer, pressureLayer, currentLayer, windLayer, frontLayer, skeletonLayer, pastRouteLayer, trackLayer, routeLayer, proposedRouteLayer, vesselMarkerLayer, ringLayer, markerLayer, condMarkerLayer],
+  layers: [osmLayer, localChartLayer, seamarkLayer, windHeatmapLayer, currentHeatmapLayer, roughnessLayer, waveHeatmapLayer, precipHeatmapLayer, temperatureLayer, sstLayer, tideLayer, pressureLayer, currentLayer, windLayer, frontLayer, skeletonLayer, pastRouteLayer, trackLayer, routeLayer, proposedRouteLayer, vesselMarkerLayer, ringLayer, markerLayer, condMarkerLayer],
   view: new ol.View({
     // Last view this browser had (saved on every move), else Block
     // Island Sound at zoom 11. On a first visit the first Signal K
@@ -1580,6 +1581,14 @@ const LAYER_TOGGLES = [
   ['roughnessToggle', roughnessLayer, loadRoughness, () => roughnessLayer.setSource(null)],
   ['tideToggle', tideLayer, loadTide, () => tideLayer.setSource(null)],
 ];
+// Preserve base-map choices saved by the earlier chart test build.
+try {
+  for (const [id, legacy] of [['osmToggle', 'rp:osmEnabled'], ['seamarkToggle', 'rp:seamarksEnabled']]) {
+    if (localStorage.getItem('layer:' + id) !== null) continue;
+    const value = localStorage.getItem(legacy);
+    if (value === 'true' || value === 'false') localStorage.setItem('layer:' + id, value);
+  }
+} catch (_) {}
 for (const [id, layer, load, clear, streamlines, persist = true] of LAYER_TOGGLES) {
   const el = document.getElementById(id);
   if (!el) continue;
@@ -1615,3 +1624,5 @@ for (const [id, layer, load, clear, streamlines, persist = true] of LAYER_TOGGLE
     main.addEventListener('change', () => { twin.checked = main.checked; });
   }
 }
+
+initializeSignalKCharts();

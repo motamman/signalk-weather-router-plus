@@ -6,6 +6,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Display local and online raster XYZ/WMS charts advertised by the shared Signal K chart API in Layers → Base, with remembered selections and map-layer visibility.
+
 ## [0.1.0-beta.7] - 2026-10-03
 
 ### Added
