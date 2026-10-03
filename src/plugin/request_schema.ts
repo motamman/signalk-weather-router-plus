@@ -91,7 +91,12 @@ export const VESSEL_FIELDS: Record<string, RouteFieldSpec> = {
     max: 1.2,
     description: 'Share of the polar boat speeds achieved under sail (ratio, 1 = as written)',
   },
-  polar: { type: 'string', maxLength: 200, description: 'Polar token from /api/polars; absent = the configured default' },
+  polar: {
+    type: 'string',
+    maxLength: 200,
+    description:
+      'Polar token from /api/polars; absent = polarSource preference; auto = managed with local fallback; signalk-active = require managed; default or file token = local override',
+  },
 };
 
 const isPoint = (p: unknown): p is { lat: number; lon: number } =>

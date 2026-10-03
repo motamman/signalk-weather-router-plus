@@ -180,7 +180,7 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     min: 0.3,
     max: 1.2,
     default: 1,
-    help: "Share of the polar's boat speeds the boat actually makes under sail (100% = the polar as written). Polars are usually race predictions (flat water, racing sails, full crew); a loaded cruising boat is slower. Motor speed is not affected.",
+    help: "Share of the polar's boat speeds the boat actually makes under sail (100% = the polar as written). Polars are usually race predictions (flat water, racing sails, full crew); a loaded cruising boat is slower. Motor speed is not affected. Applies to the files polar source; the Signal K source uses polars.performanceFactor.",
     reload: 'next_job',
   },
 

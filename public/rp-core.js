@@ -439,21 +439,23 @@ function _renderPolarOptions(filterText) {
 
 function loadPolarList() {
   const sel = document.getElementById('polarSelect');
-  const stored = (() => { try { return localStorage.getItem('polarPath') || ''; } catch (_) { return ''; } })();
   return authFetch(API + '/polars', {}, null)
-    .then(r => r.json())
+    .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Cannot load polars'); return data; })
     .then(items => {
       if (!Array.isArray(items) || items.length === 0) {
-        sel.innerHTML = '<option value="">(no polars found — configure a polar file or polars directory in the plugin settings)</option>';
+        sel.innerHTML = '<option value="">(no polars found — select a polar in Polar Management or configure a local polar source)</option>';
         _polarItems = [];
         _polarAngles = null; _polarTable = null;
         drawPolarDiagram();
         return;
       }
+      document.getElementById('openVesselForm').hidden = false;
+      document.getElementById('polarFilter').hidden = false;
       _polarItems = items;
       _renderPolarOptions('');
       // Prefer the last-used selection if it's still in the list;
       // otherwise fall back to the vessel default (first item).
+      const stored = (() => { try { return localStorage.getItem('polarChoiceV2') || ''; } catch (_) { return ''; } })();
       const paths = items.map(it => it.path);
       sel.value = paths.includes(stored) ? stored : paths[0];
       loadPolarAngles(sel.value);
@@ -461,6 +463,9 @@ function loadPolarList() {
     })
     .catch(e => {
       sel.innerHTML = '<option value="">(error loading polars)</option>';
+      _polarItems = []; _polarAngles = null; _polarTable = null;
+      drawPolarDiagram();
+      document.getElementById('polarInfo').textContent = e.message;
       console.log('Polar list error:', e);
     });
 }
@@ -486,13 +491,27 @@ export function fetchPolarAngles(token) {
 // Half polar, TWA 0–180° clockwise from the top, one curve per TWS,
 // radius = boat speed in the display speed unit. Beat/run angles from
 // /polar-angles are dotted on each curve.
+let _polarPreviewGen = 0;
 let _polarTable = null;    // { twa_deg:[], tws_ms:[], speeds_ms:[][] } rows = twa
 function loadPolarTable(polarPath) {
+  const gen = ++_polarPreviewGen;
   if (!polarPath) { _polarTable = null; drawPolarDiagram(); return; }
   authFetch(API + '/polars/table?path=' + encodeURIComponent(polarPath), {}, 'polar-table')
     .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(new Error(d.error ? unitText(d.error) : 'HTTP ' + r.status))))
-    .then(d => { _polarTable = d; drawPolarDiagram(); })
+    .then(d => {
+      if (gen !== _polarPreviewGen) return;
+      _polarTable = d; drawPolarDiagram();
+      const hint = document.getElementById('polarSourceHint');
+      const automatic = polarPath === 'auto';
+      hint.textContent = d.source === 'signalk'
+        ? 'Active source: Polar Management — ' + d.label + (automatic ? ' (automatically detected).' : ' (selected override).')
+        : 'Active source: internal polar — ' + d.label + (automatic ? ' (fallback; no usable managed polar detected).' : ' (selected override).');
+      const link = document.createElement('a'); link.href = '/signalk-polar-management/'; link.textContent = 'Open Polar Management';
+      hint.appendChild(document.createTextNode(' ')); hint.appendChild(link);
+    })
     .catch(err => {
+      if (gen !== _polarPreviewGen) return;
+      document.getElementById('polarSourceHint').textContent = 'Active source unavailable: ' + err.message;
       _polarTable = null; drawPolarDiagram();
       const info = document.getElementById('polarInfo');
       if (info) info.textContent = 'Polar table unavailable: ' + err.message;
@@ -597,7 +616,7 @@ export function drawPolarDiagram() {
   if (info) {
     const sel = document.getElementById('polarSelect');
     const it = _polarItems.find(p => p.path === (sel ? sel.value : ''));
-    info.textContent = (it ? it.label + ' — ' : '') + T.twa_deg.length + ' angles × ' + nW + ' wind speeds';
+    info.textContent = (it ? it.label + ' — ' : '') + T.twa_deg.length + ' angles × ' + nW + ' wind speeds' + (T.performance_factor != null ? ' · performance ' + Math.round(T.performance_factor * 100) + '%' : '');
   }
 }
 // Linear interpolation of a polar row at an arbitrary TWA for curve k.
@@ -618,7 +637,7 @@ function _polarSpeedAt(T, twa, k) {
 }
 
 document.getElementById('polarSelect').addEventListener('change', function() {
-  try { localStorage.setItem('polarPath', this.value); } catch (_) {}
+  try { localStorage.setItem('polarChoiceV2', this.value); } catch (_) {}
   loadPolarAngles(this.value);
   loadPolarTable(this.value);
 });
@@ -679,6 +698,7 @@ document.getElementById('polarFilter').addEventListener('input', function() {
   _renderPolarOptions(this.value);
 });
 loadPolarList();
+setInterval(loadPolarList, 30000);
 
 // ─────────── Vessel/polar specs form (VPP generator) ───────────
 // POST /api/polar-from-specs runs the plugin's polar calculator on the specs
@@ -826,7 +846,7 @@ loadPolarList();
       // Refresh the polar dropdown so the new entry appears, and select it.
       // Stored first: loadPolarList() restores the stored path and loads
       // its angles and diagram. The filter is cleared so the entry shows.
-      try { localStorage.setItem('polarPath', data.path); } catch (_) {}
+      try { localStorage.setItem('polarChoiceV2', data.path); } catch (_) {}
       const filt = document.getElementById('polarFilter');
       if (filt) filt.value = '';
       await loadPolarList();

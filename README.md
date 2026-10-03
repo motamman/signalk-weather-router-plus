@@ -390,7 +390,8 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 
   ![Conditions popup, Tide & current tab: tide height, total water level and surge against current speed and set, with high and low waters](public/screenshots/04-conditions.jpg)
 
-- **Polars**: the picker lists the default polar and the polars
+- **Polars**: the picker detects the active Polar Management polar, with
+  internal fallback and library overrides. It also lists the default polar and the polars
   directory; "Create polar from boat specs…" generates one.
 
   ![Polar diagram of the selected polar, and the sailing strategy modes](public/screenshots/06-polars.jpg)
@@ -862,6 +863,7 @@ React and needs no build step for it.
 | Field | Notes |
 |---|---|
 | `landShapefiles` | comma-separated absolute paths; blank = download GSHHG 2.3.7 full-resolution level 1 once (see [Install](#install)) |
+| `polarSource` | `auto` (default: detect active Polar Management polar, else local fallback), `files` (prefer local default), or `signalk` (compatibility alias for auto) |
 | `polarFile` | `.csv` (`twa/tws,4,6,…`) or `.pol` (tab-delimited); the default polar (token `default`). Blank = the bundled Catalina 36 |
 | `polarsDir` | directory of `.pol`/`.csv` polars listed by `/api/polars`. Blank = the library bundled with the plugin (`data/polars/`: the ~700 polars of the OpenCPN [weather_routing_pi](https://github.com/seandepagnier/weather_routing_pi) library, GPL-3.0), with user polars (generated ones included) kept in `polars/user/` in the plugin data directory, so an update never removes them. Set, user polars are in `<polarsDir>/user/` |
 | `currents.harmonicDir` | directory of tidal-harmonic `.npz` files |
@@ -1240,13 +1242,15 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `vessel.name` | string | | | ignored (accepted so older clients still validate); the vessel name is Signal K's `vessels.self.name` |
 | `vessel.motor_speed_ms` | number | m/s | setting (3.087) | 0.01..50 |
 | `vessel.polar_performance` | number | ratio | setting (1) | 0.3..1.2; see below |
-| `vessel.polar` | string | | the configured `polarFile` | a token from `GET /api/polars`, at most 200 characters; see below |
+| `vessel.polar` | string | | `polarSource` preference (`auto`) | a token from `GET /api/polars`, at most 200 characters; see below |
 
-`vessel.polar` is a token from `GET /api/polars`. A file name such as
+`vessel.polar` is a token from `GET /api/polars`. `auto` detects the managed
+polar with local fallback; `signalk-active` requires the managed polar. A file name such as
 `a_boat.pol` resolves only inside the polar library (the configured
 `polarsDir`, or the bundled library), `user/…` inside the user polar
-directory. Use `"default"`, or omit the field, for the default polar
-(the configured `polarFile`, or the bundled Catalina 36).
+directory. Use `"default"` for the internal default polar (the configured
+`polarFile`, or the bundled Catalina 36). Omit the field to use `polarSource`
+(`auto` by default).
 
 `vessel.polar_performance` (ratio, 0.3..1.2) is the share of the polar's
 boat speeds the boat makes under sail; it overrides the vessel setting
@@ -1930,6 +1934,61 @@ colours.
 
 ### Polars
 
+#### Signal K Polar Management source
+
+Imported beat/run targets in `derived.rows` are folded into each wind-speed
+row and resampled onto the union of table and target angles using straight-line
+interpolation. Below each beat target the speed is zero; beyond the final point
+the existing linear extrapolation remains. Tables without targets retain their
+original axes and speed values. No smoothing or new runtime dependency is added.
+
+Weather Router Plus automatically detects the active polar from
+[Polar Management](https://github.com/Asw1n/signalk-polar-management).
+The picker always includes **Automatic**, the active managed polar when usable,
+and the internal polar library. Automatic uses the managed table and shared
+performance factor when available, otherwise the internal default. Select any
+internal table to override it; the internal polar generator remains available.
+The picker and preview refresh every 30 seconds, visibly identify the current
+source, and link to Polar Management. New routes read the current provider
+selection even before the next preview refresh. Their summaries identify both
+the source (`polar_source`) and table name.
+
+The plugin configuration defaults to `polarSource: auto`. `files` retains an
+explicit preference for the internal default for API requests without a polar
+token; the web app's **Automatic** choice still enables detection. The older
+`signalk` setting is a compatibility alias for automatic detection with fallback.
+Omit the API token for the configured preference, send `auto` to detect, or send
+`default`/a local library token for an internal override. `signalk-active` explicitly
+requires a usable managed polar and reports an error if unavailable.
+
+Detection reads `polars.activePolar.value.href` (`/resources/polars/<id>`) and
+calls `resourcesApi.getResource('polars', id)`. The plugin does not access the
+provider's storage or duplicate its import/selection tools.
+
+The canonical `polarTable` 1.0.0 resource has radians for `axes.twa`, m/s
+for `axes.tws` and `values.boatSpeedMatrix`, and matrix rows indexed by TWS.
+The adapter converts angles to degrees and transposes into `PolarDiagram`.
+Its existing interpolation, extrapolation, angle mirroring and no-go logic
+are unchanged. Zero cells are preserved. Complete, nonnegative, symmetric
+tables are required; missing/null cells and asymmetric tables fail explicitly
+rather than inventing speeds. Derived provider targets are not used.
+
+The active table and `polars.performanceFactor` (ratio 0..1, absent/null = 1)
+are read afresh before each sailing route, including same-id table edits,
+and captured in a worker snapshot. Changes during a route affect the next
+route. The shared factor replaces the local vessel performance setting;
+an explicit API `vessel.polar_performance` override (existing range 0.3..1.2)
+replaces the shared factor for that route, so scaling is applied once.
+Motor speed is unaffected; motor-only requests do not require a provider.
+
+If the provider is absent, stopped, has an invalid selection/table, or its load
+exceeds 10 seconds, **Automatic** uses the internal default. The UI marks this
+as an internal fallback; an explicit managed override fails rather than silently
+changing boats. Local libraries, generation, per-route file selection and the
+CLI remain available. No polars are migrated or deleted.
+
+
+
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/api/polars` | readonly | polar library |
@@ -1937,18 +1996,20 @@ colours.
 | GET | `/api/polars/table` | readonly | polar speed table in m/s |
 | POST | `/api/polar-from-specs` | readwrite | generate a polar from boat specs |
 
-A polar is named by a token. `default` is the default polar (the
-configured `polarFile`, or the bundled Catalina 36); any other token is
-a `.pol` or `.csv` file name in the library (for example `a_boat.pol`)
-or in the user polar directory (`user/my_boat.csv`,
-`user/<account>/<file>`). Tokens outside them are refused.
+A polar is named by a token. `auto` detects the managed polar with local
+fallback; `signalk-active` explicitly requires the active managed polar.
+`default` is the internal default (the configured `polarFile`, or the
+bundled Catalina 36). Local overrides are `.pol`/`.csv` file names in the
+library (for example `a_boat.pol`) or user polar directory
+(`user/my_boat.csv`, `user/<account>/<file>`). Other tokens are refused.
 
 #### GET /api/polars
 
 `200`: `[{path, label, source}]`. `path` is the token, `label` the name
 to show (`"<name> (default)"` for the default, `"user: <name>"` for
-user polars), and `source` is `"default"` or `"library"`. The list
-holds the default polar, then every `.pol`/`.csv` in the library, then
+user polars), and `source` is `"auto"`, `"signalk"`, `"default"` or `"library"`. The list
+starts with Automatic (`activeSource: "signalk"` or `"internal"`), then
+the active managed polar when usable, then the internal default and every `.pol`/`.csv` in the library, then
 those in the user polar directory and in each `<account>/` inside it; a
 file that is the same as one already listed is left out.
 
@@ -1956,7 +2017,7 @@ file that is the same as one already listed is left out.
 
 | Query | Default | Notes |
 |---|---|---|
-| `path` | the default polar | a token |
+| `path` | `auto` | a token |
 
 `200`: `{tws_ms[], nogo_deg[], beat_deg[], run_deg[]}`: for each true
 wind speed of the polar (m/s), the no-go angle (the tightest true wind
@@ -1971,9 +2032,11 @@ polar's first row with speed at or beyond the setting.
 
 | Query | Default | Notes |
 |---|---|---|
-| `path` | `default` | a token |
+| `path` | `auto` | a token |
 
-`200`: `{path, twa_deg[], tws_ms[], speeds_ms[][]}`. `speeds_ms[i][k]`
+`200`: `{path, source, label, performance_factor?, twa_deg[], tws_ms[], speeds_ms[][]}`.
+`source` identifies `signalk` or `internal`; a managed preview includes the
+shared performance factor. `speeds_ms[i][k]`
 is the boat speed (m/s, 4 decimals) at `twa_deg[i]` and `tws_ms[k]`.
 
 Errors for both: `404 {error: "polar not found…"}` for a token not in

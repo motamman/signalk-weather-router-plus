@@ -1,3 +1,4 @@
+import { managedDiagram, type ManagedPolar } from '../managedpolar';
 /**
  * Route worker: one route request, leg by leg (corridor → propagator → smoothing), with its forecast and SMOC areas.
  *
@@ -59,7 +60,7 @@ const ROUTE_PARAMS = ['10u', '10v', 'swh', 'mwp', 'mwd'];
  */
 const ROUTE_FORECAST_MARGIN_DEG = 5;
 
-export async function route(st: WorkerState, id: string, request: RouteRequest): Promise<void> {
+export async function route(st: WorkerState, id: string, request: RouteRequest, managedPolar?: ManagedPolar): Promise<void> {
   const { config: cfg, client: cl } = requireInit(st);
   Atomics.store(st.cancelFlag, 0, 0);
   const shouldCancel = (): boolean => Atomics.load(st.cancelFlag, 0) === 1;
@@ -129,7 +130,11 @@ export async function route(st: WorkerState, id: string, request: RouteRequest):
     // Per-route polar: a library token from GET /api/polars, else the configured default.
     let routePolar: PolarDiagram | null = st.polar;
     let polarLabel: string | null = cfg.polarFile ? path.basename(cfg.polarFile) : null;
-    if (request.vessel?.polar) {
+    if (managedPolar && request.mode !== 'motor') {
+      routePolar = managedDiagram(managedPolar);
+      polarLabel = managedPolar.label;
+      vessel.polarPerformance = request.vessel?.polar_performance ?? managedPolar.performanceFactor;
+    } else if (request.vessel?.polar && request.vessel.polar !== 'auto') {
       const file = resolvePolarPath(
         { polarFile: cfg.polarFile, polarsDir: cfg.polarsDir, userDir: cfg.polarUserDir },
         request.vessel.polar
@@ -425,6 +430,7 @@ export async function route(st: WorkerState, id: string, request: RouteRequest):
       regional_wind: regionalWind,
       current_sources: result.currentSources,
       polar: polarLabel,
+      polar_source: request.mode === 'motor' ? undefined : managedPolar ? 'signalk' : 'internal',
       polar_performance: routePolar ? vessel.polarPerformance : undefined,
       auto_vias: result.autoVias?.map(v => ({ name: v.name, width_m: Math.round(v.widthM) })),
     };

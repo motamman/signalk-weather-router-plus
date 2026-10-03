@@ -22,6 +22,7 @@ import type { RouteRequest } from './protocol';
 /** What the Signal K plugin config holds now. */
 export interface PluginConfig {
   landShapefiles?: string;
+  polarSource?: 'auto' | 'files' | 'signalk';
   polarFile?: string;
   polarsDir?: string;
   forecast?: {
@@ -84,6 +85,7 @@ export interface LegacyPluginConfig {
 
 export interface ResolvedConfig {
   landShapefiles: string[];
+  polarSource: 'auto' | 'files' | 'signalk';
   polarFile: string | null;
   polarsDir: string | null;
   /** Where user polars are kept and generated ones written (see polars.ts PolarLibraryConfig.userDir). */
@@ -185,6 +187,14 @@ export const CONFIG_SCHEMA = {
       description:
         'Absolute path(s) to polygon land shapefiles, comma-separated. Blank: GSHHG 2.3.7 full-resolution level 1 is downloaded once ' +
         '(149 MB from www.soest.hawaii.edu) into the plugin data directory and used. Add GSHHS_f_L6.shp for Antarctica.',
+    },
+    polarSource: {
+      type: 'string',
+      title: 'Polar source',
+      enum: ['auto', 'files', 'signalk'],
+      default: 'auto',
+      description:
+        'auto detects the active Polar Management polar with local fallback. files prefers the internal default. signalk is retained as an alias for auto. Local polars remain available as overrides.',
     },
     polarFile: {
       type: 'string',
@@ -302,6 +312,8 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
   const mirror = c.forecast?.mirror ?? 'ecmwf';
   if (!(MIRRORS as readonly string[]).includes(mirror))
     throw new Error(`config forecast.mirror: ${String(mirror)} is not one of ${MIRRORS.join(', ')}`);
+  if (c.polarSource !== undefined && c.polarSource !== 'auto' && c.polarSource !== 'files' && c.polarSource !== 'signalk')
+    throw new Error('config polarSource: expected auto, files or signalk');
   const harmonicDir = c.currents?.harmonicDir;
   const v = settings.vessel;
   const f = settings.forecast;
@@ -309,6 +321,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
   const r = settings.routing;
   const p = settings.publish;
   return {
+    polarSource: c.polarSource ?? 'auto',
     landShapefiles: land,
     polarFile: c.polarFile && c.polarFile.trim() ? c.polarFile.trim() : null,
     polarsDir: c.polarsDir && c.polarsDir.trim() ? c.polarsDir.trim() : null,

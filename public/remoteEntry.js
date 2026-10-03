@@ -247,6 +247,11 @@ var signalk_weather_router_plus = (function () {
 
     var otherSection = h('div', { className: 'mb-4' },
       h('h5', null, 'Polars, currents, forecast, Weather API'),
+      field('Polar source', 'Automatic prefers the active Polar Management polar, with the internal default as fallback. Internal tables remain available as route overrides.',
+        h('select', { className: 'form-select form-control', value: get(['polarSource'], 'auto') === 'files' ? 'files' : 'auto',
+          onChange: function (e) { set(['polarSource'], e.target.value); } },
+          h('option', { value: 'auto' }, 'Automatic (Polar Management with internal fallback)'),
+          h('option', { value: 'files' }, 'Internal default'))),
       field('Default polar file (.csv or .pol)', 'Boat speeds in knots. Blank = the bundled Catalina 36 polar.', text(['polarFile'], 'blank = bundled Catalina 36')),
       field('Polar library directory', "Polars offered in the web app's vessel picker. Blank = the ~700 polars bundled with the plugin (weather_routing_pi library, GPL-3.0); polars you generate are then kept in the plugin data directory.", text(['polarsDir'], 'blank = bundled library')),
       field('Tidal harmonics directory (.npz)', 'FES2014 / NECOFS extracts; every *.npz in it is loaded.', text(['currents', 'harmonicDir'])),

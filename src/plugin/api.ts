@@ -34,6 +34,7 @@
  * servers every route is admin-only, which is the server's default.
  */
 
+import { ACTIVE_POLAR_TOKEN, managedDiagram, type ManagedPolar } from './managedpolar';
 import * as fs from 'node:fs';
 import { validateRouteRequest } from './request_schema';
 import { NotStartedError } from './errors';
@@ -75,6 +76,7 @@ export interface ApiDeps {
   publicDir: string;
   /** Polar library configuration (null before the plugin has started). */
   polarLibrary: () => { polarFile: string | null; polarsDir: string | null; userDir?: string | null } | null;
+  managedPolar?: () => Promise<ManagedPolar | null>;
   /** Web-app settings; throws when the plugin is not started. */
   getSettings: () => {
     values: AppSettings;
@@ -267,17 +269,41 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     if (!lib) throw new NotStartedError();
     return lib;
   };
-  ro.get('/api/polars', (_req: Request, res: Response) => {
+  const selectedPolar = async (token: string) => {
+    const managed = token === 'auto' || token === ACTIVE_POLAR_TOKEN ? await deps.managedPolar?.() : null;
+    if (managed)
+      return {
+        polar: managedDiagram(managed).scaled(managed.performanceFactor),
+        source: 'signalk',
+        label: managed.label,
+        factor: managed.performanceFactor,
+      };
+    if (token === ACTIVE_POLAR_TOKEN) throw new Error('No active Polar Management polar; choose Automatic or an internal polar');
+    const file = resolvePolarPath(polarLib(), token === 'auto' ? 'default' : token);
+    if (!file) throw new Error('no polar configured');
+    return { polar: loadPolarCached(file), source: 'internal', label: path.basename(file), factor: undefined };
+  };
+  ro.get('/api/polars', async (_req: Request, res: Response) => {
     try {
-      json(res, 200, listPolars(polarLib()));
+      const managed = await deps.managedPolar?.();
+      const local = listPolars(polarLib());
+      json(res, 200, [
+        {
+          path: 'auto',
+          label: managed ? `Automatic — Polar Management: ${managed.label}` : `Automatic — internal fallback: ${local[0]?.label ?? 'none'}`,
+          source: 'auto',
+          activeSource: managed ? 'signalk' : 'internal',
+        },
+        ...(managed ? [{ path: ACTIVE_POLAR_TOKEN, label: `${managed.label} (Polar Management active)`, source: 'signalk' }] : []),
+        ...local.map(entry => ({ ...entry, label: `${entry.label} (internal)` })),
+      ]);
     } catch (err) {
       fail(res, err);
     }
   });
-  ro.get('/api/polar-angles', (req: Request, res: Response) => {
+  ro.get('/api/polar-angles', async (req: Request, res: Response) => {
     try {
-      const file = resolvePolarPath(polarLib(), String(req.query.path ?? ''));
-      if (!file) throw new Error('no polar configured');
+      const selected = await selectedPolar(String(req.query.path || 'auto'));
       // The tightest sailable angle setting, as the router applies it (degrees; 0 before the plugin has started).
       let minTwaDeg = 0;
       try {
@@ -285,17 +311,22 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       } catch {
         /* not started */
       }
-      json(res, 200, polarAngles(loadPolarCached(file), minTwaDeg));
+      json(res, 200, polarAngles(selected.polar, minTwaDeg));
     } catch (err) {
       fail(res, err);
     }
   });
-  ro.get('/api/polars/table', (req: Request, res: Response) => {
+  ro.get('/api/polars/table', async (req: Request, res: Response) => {
     try {
-      const token = req.query.path === undefined || req.query.path === '' ? 'default' : String(req.query.path);
-      const file = resolvePolarPath(polarLib(), token === 'default' ? '' : token);
-      if (!file) throw new Error('no polar configured');
-      json(res, 200, { path: token, ...polarTable(loadPolarCached(file)) });
+      const token = String(req.query.path || 'auto');
+      const selected = await selectedPolar(token);
+      json(res, 200, {
+        path: token,
+        source: selected.source,
+        label: selected.label,
+        performance_factor: selected.factor,
+        ...polarTable(selected.polar),
+      });
     } catch (err) {
       fail(res, err);
     }

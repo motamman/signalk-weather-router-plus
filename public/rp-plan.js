@@ -1901,7 +1901,7 @@ function _jobOnDone(job, d) {
   const { id, statusEl } = job;
   const elapsed = ((Date.now() - job.t0) / 1000).toFixed(1);
   appendLog('Route complete! (' + elapsed + 's)', 'done');
-  if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : ''));
+  if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + (d.summary.polar_source === 'signalk' ? 'Polar Management: ' : d.summary.polar_source === 'internal' ? 'internal: ' : '') + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : ''));
   modalStatus.textContent = 'Done in ' + elapsed + 's';
   statusEl.textContent = '';
   RouteProgress.done(elapsed);

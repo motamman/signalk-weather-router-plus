@@ -14,6 +14,7 @@
  */
 
 import { MINUTE_MS } from './geo/units';
+import { detectManagedPolar, selectManagedPolar } from './plugin/managedpolar';
 import * as path from 'node:path';
 import type { IRouter } from 'express';
 import { CONFIG_SCHEMA, resolveConfig, type LegacyPluginConfig, type PluginConfig, type ResolvedConfig } from './plugin/config';
@@ -72,6 +73,7 @@ interface SkApp {
     };
   }) => void;
   resourcesApi?: {
+    getResource?: (type: string, id: string) => Promise<unknown>;
     setResource: (type: string, id: string, data: Record<string, unknown>, providerId?: string) => Promise<void>;
   };
 }
@@ -126,6 +128,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
   let startGen = 0;
   /** A route started before the first forecast was ready: sent to the route worker when it is (see startServices). */
   let waitingForForecast: Job | null = null;
+  let resolvingPolarJob: string | null = null;
 
   /** Why the services are not up yet, for API answers and the status (`starting`). */
   function notStartedReason(): string {
@@ -147,7 +150,25 @@ export = function plugin(app: SkApp): SignalKPlugin {
     // It may have failed meanwhile (route worker crash/exit: failRunning).
     if (!jobs || jobs.runningId !== job.id || jobs.get(job.id)?.status !== 'running') return;
     jobs.onProgress(job.id, 0, 0, note);
-    pool.post('route', { type: 'route', id: job.id, request: job.request });
+    void dispatchRoute(job);
+  }
+
+  /** Provider I/O stays on the main thread; a route receives a fixed, cloneable snapshot. */
+  async function dispatchRoute(job: Job): Promise<void> {
+    const gen = startGen;
+    const manager = jobs;
+    try {
+      resolvingPolarJob = job.id;
+      const managedPolar =
+        config && job.request.mode !== 'motor' ? await selectManagedPolar(app, config.polarSource, job.request.vessel?.polar) : undefined;
+      if (stopped || gen !== startGen || jobs !== manager || manager?.get(job.id)?.status !== 'running') return;
+      pool.post('route', { type: 'route', id: job.id, request: job.request, managedPolar });
+    } catch (err) {
+      if (!stopped && gen === startGen && jobs === manager && manager?.get(job.id)?.status === 'running')
+        manager.onError(job.id, `Polar source: ${(err as Error).message}`);
+    } finally {
+      if (resolvingPolarJob === job.id) resolvingPolarJob = null;
+    }
   }
 
   /** The resolved config, with the downloaded coastline when none is configured. */
@@ -686,7 +707,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         updateStatus();
         return;
       }
-      pool.post('route', { type: 'route', id: job.id, request: job.request });
+      void dispatchRoute(job);
       updateStatus();
     });
     for (const role of ['data', 'route'] as MainRole[]) {
@@ -799,7 +820,9 @@ export = function plugin(app: SkApp): SignalKPlugin {
         jobs: jobs ? { running: jobs.runningId, queued: jobs.queueLength, total: jobs.list(500).length } : null,
         // The name is Signal K's (vessels.self.name), not a plugin setting.
         vessel: config?.vessel ? { ...config.vessel, name: selfName() } : undefined,
+        polar_source: config?.polarSource,
         polar: config?.polarFile,
+        managed_polar: app.getSelfPath?.('polars.activePolar'),
         land: config?.landShapefiles,
         harmonic_dir: config?.currents.harmonicDir,
         extra_fields: config?.forecast.extraFields,
@@ -820,6 +843,11 @@ export = function plugin(app: SkApp): SignalKPlugin {
       },
       refreshForecast: force => requestRefresh(force),
       cancelRunning: (id: string) => {
+        if (resolvingPolarJob === id) {
+          resolvingPolarJob = null;
+          jobs?.onError(id, 'cancelled', true);
+          return;
+        }
         // Still waiting for the first forecast: nothing was sent to the worker.
         if (waitingForForecast && waitingForForecast.id === id) {
           waitingForForecast = null;
@@ -835,6 +863,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       noteTileRequest: (z, x, y) => prebuilder?.noteRequest(z, x, y),
       publicDir,
       polarLibrary: () => (config ? { polarFile: config.polarFile, polarsDir: config.polarsDir, userDir: config.polarUserDir } : null),
+      managedPolar: () => detectManagedPolar(app),
       getSettings: () => {
         if (!settings || stopped) throw new NotStartedError();
         return { values: settings.values, schema: settingsSchema() };

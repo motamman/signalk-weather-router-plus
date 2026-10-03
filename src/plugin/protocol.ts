@@ -14,6 +14,7 @@
  * Everything crossing the boundary is structured-cloneable.
  */
 
+import type { ManagedPolar } from './managedpolar';
 import type { ResolvedConfig } from './config';
 import type { ModePolicy } from '../engine/legsim';
 import type { BBox } from '../geo/geodesy';
@@ -96,6 +97,7 @@ export interface RouteSummary {
   polar?: string | null;
   /** Polar performance applied (ratio; 1 = the polar as written). */
   polar_performance?: number;
+  polar_source?: 'signalk' | 'internal';
   /** Automatic vias placed at narrow passages (not waypoints of the route). */
   auto_vias?: { name: string; width_m: number }[];
   /** Routes with waypoints: number of legs and the waypoint precision used. */
@@ -252,7 +254,7 @@ export type MainToWorker =
       reload: { forecast: boolean; currents: boolean; tides?: boolean };
       position?: VesselPosition | null;
     }
-  | { type: 'route'; id: string; request: RouteRequest }
+  | { type: 'route'; id: string; request: RouteRequest; managedPolar?: ManagedPolar }
   | { type: 'query'; id: number; kind: QueryKind; args: QueryArgs[QueryKind] }
   /** tiles workers: the data worker's tide run (null: tides off or not loaded). */
   | { type: 'tides-run'; run: ArcoRun | null }
