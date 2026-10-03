@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Apply the GSHHG L1/L2/L3/L4 land/water hierarchy to global water grids,
+  route rasters, refined masks and exact polygon checks. The full global
+  grid is rebuilt from all four levels; old overlay caches are invalidated.
+  Lake Michigan is water and routable while Michigan remains land, with
+  regression coverage including the beta.6 `wrp-route` full pipeline.
+
 ## [0.1.0-beta.7] - 2026-10-03
 
 ### Added

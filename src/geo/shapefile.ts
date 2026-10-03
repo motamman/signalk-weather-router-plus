@@ -16,6 +16,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { BBox } from './geodesy';
 import { bboxWidth, lonOffsetFromWest } from './geodesy';
 
@@ -29,12 +30,37 @@ export interface Ring {
 }
 
 export interface ShapePolygon {
+  /** GSHHG nesting level; ordinary land polygons default to 1. */
+  level?: number;
   recordNumber: number;
   minLon: number;
   minLat: number;
   maxLon: number;
   maxLat: number;
   rings: Ring[];
+}
+
+/** Recognize only standard GSHHS layer names; OSM/custom polygons remain land. */
+export function shorelineLevel(file: string): number {
+  return Number(/^GSHHS_[fhilc]_L([1-4])\.shp$/i.exec(path.basename(file))?.[1] ?? 1);
+}
+
+/** A configured GSHHS layer means the complete same-resolution hierarchy. */
+export function shorelinePaths(files: string[]): string[] {
+  const out = new Set<string>();
+  for (const file of files) {
+    if (/^GSHHS_[fhilc]_L[1-4]\.shp$/i.test(path.basename(file))) {
+      for (let level = 1; level <= 4; level++) {
+        const sibling = file.replace(/_L[1-4]\.shp$/i, `_L${level}.shp`);
+        if (!fs.existsSync(sibling))
+          throw new Error(
+            `Incomplete GSHHG hierarchy: missing ${sibling}; supply levels 1–4 or clear the coastline setting to download them`
+          );
+        out.add(sibling);
+      }
+    } else out.add(file);
+  }
+  return [...out].sort((a, b) => shorelineLevel(a) - shorelineLevel(b));
 }
 
 export class ShapefileError extends Error {
@@ -141,7 +167,7 @@ function parseRecord(
     }
     rings.push({ coords, minLon: rMinLon, minLat: rMinLat, maxLon: rMaxLon, maxLat: rMaxLat });
   }
-  return rings.length ? { recordNumber, minLon, minLat, maxLon, maxLat, rings } : null;
+  return rings.length ? { level: shorelineLevel(shpPath), recordNumber, minLon, minLat, maxLon, maxLat, rings } : null;
 }
 
 /**

@@ -231,3 +231,40 @@ test(
     );
   }
 );
+
+test('GSHHG L1 configuration expands all levels for indexed points, streamed rasters and exact masks', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-hierarchy-'));
+  try {
+    for (let level = 1; level <= 4; level++) {
+      const lo = level,
+        hi = 10 - level;
+      writeShp(path.join(dir, `GSHHS_f_L${level}.shp`), [
+        [
+          [
+            [lo, lo],
+            [hi, lo],
+            [hi, hi],
+            [lo, hi],
+            [lo, lo],
+          ],
+        ],
+      ]);
+    }
+    const files = [path.join(dir, 'GSHHS_f_L1.shp')];
+    const land = new OnDemandLand(files);
+    const mask = LandMask.fromShapefiles(files, { west: 0, south: 0, east: 10, north: 10 }, { resolutionDeg: 0.1 });
+    for (const [x, expected] of [
+      [1.5, true],
+      [2.5, false],
+      [3.5, true],
+      [5, false],
+    ] as const) {
+      assert.equal(land.isLandAt(x, x), expected);
+      assert.equal(mask.isLandExact(x, x), expected);
+    }
+    fs.unlinkSync(path.join(dir, 'GSHHS_f_L2.shp'));
+    assert.throws(() => new OnDemandLand(files), /Incomplete GSHHG hierarchy/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
