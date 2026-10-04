@@ -119,8 +119,14 @@ export function roughnessIndex(
   const uOpp = Math.max(-uAlong, 0);
   const cg = (G * Math.max(mwp, 2)) / (4 * Math.PI);
   const steepen = 1 / Math.max(0.3, 1 - (2 * uOpp) / cg);
+  // Long-period swell rides easier than the steep short-period wind sea the
+  // index was tuned on: damp the swell term by 5/max(mwp, 5) so standard
+  // open-ocean swells (2.25 m at 12 s) no longer land in the extreme band
+  // by themselves. Periods of 5 s or less (and the missing-data default of
+  // 5 s) leave the original coastal behaviour untouched.
+  const periodScale = 5 / Math.max(mwp, 5);
   const swhSafe = Number.isFinite(swh) && swh > 0 ? swh : 0;
-  const idxSwell = 30 * swhSafe * swhSafe * steepen;
+  const idxSwell = 30 * swhSafe * swhSafe * periodScale * steepen;
   let idx = idxWind + idxSwell;
   if (!Number.isFinite(idx)) idx = 0;
   const signal = Math.max(Math.max(0, Math.min(1, W / WIND_FADE_MS)), Math.max(0, Math.min(1, swhSafe / SWH_FADE_M)));
