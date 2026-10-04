@@ -107,3 +107,94 @@ test('conditions: no current source with data here is reported as no value, not 
   assert.equal(some.current_ms, 0.5);
   assert.equal(some.current_dir_deg, 37);
 });
+
+test('conditions rows: gust, cloud cover, interval depth and fluxes appear only when the run holds them', async () => {
+  const { ForecastStore } = await import('../data/forecast');
+  const mk = (v: number) => ({ lat0: 40, lon0: -70, dLat: 1, dLon: 1, nLat: 3, nLon: 3, values: new Float32Array(9).fill(v) });
+  const base = ['10u', '10v', 'msl'] as const;
+  // A run with the extra and energy fields: interval values only from step 3 on.
+  const steps = [0, 3].map(h => ({
+    validMs: Date.UTC(2026, 8, 27) + h * 3600_000,
+    stepHours: h,
+    fields: new Map<string, ReturnType<typeof mk>>([
+      ['10u', mk(1)],
+      ['10v', mk(0)],
+      ['msl', mk(101000)],
+      ['tcc', mk(0.75)],
+      ...(h === 0
+        ? []
+        : ([
+            ['10fg', mk(9)],
+            ['tp', mk(0.004)],
+            ['ssrd', mk(333)],
+            ['mucape', mk(1200)],
+          ] as [string, ReturnType<typeof mk>][])),
+    ]),
+    ...(h === 0
+      ? {}
+      : {
+          intervals: new Map([
+            ['tp', 3],
+            ['ssrd', 3],
+          ]),
+        }),
+  }));
+  const store = new ForecastStore(
+    steps,
+    {
+      cycleTime: new Date(Date.UTC(2026, 8, 27)),
+      bbox: { west: -70, south: 40, east: -68, north: 42 },
+      steps: [0, 3],
+      params: [...base, '10fg', 'tcc', 'tp', 'ssrd', 'mucape'],
+      loadedAt: new Date(),
+    },
+    { requireWind: false }
+  );
+  const { sampleConditions } = await import('./overlays');
+  const src = { forecast: store, currents: null, land: null };
+  const t3 = new Date(Date.UTC(2026, 8, 27, 3));
+  const r = sampleConditions(src, -69, 41, t3);
+  assert.equal(r.gust_ms, 9);
+  assert.equal(r.cloud_cover, 0.75);
+  assert.equal(r.precip_m, 0.004);
+  assert.equal(r.interval_h, 3);
+  assert.equal(r.ssrd_wm2, 333);
+  assert.equal(r.mucape_jkg, 1200);
+  assert.equal(r.snowfall_m, null);
+  assert.equal(r.strd_wm2, null);
+  // Mid-interval: the containing interval's values, unblended.
+  const mid = sampleConditions(src, -69, 41, new Date(Date.UTC(2026, 8, 27, 1, 30)));
+  assert.equal(mid.precip_m, 0.004);
+  assert.equal(mid.interval_h, 3);
+  // Step 0: no gust and no interval values.
+  const r0 = sampleConditions(src, -69, 41, new Date(Date.UTC(2026, 8, 27)));
+  assert.equal(r0.gust_ms, null);
+  assert.equal(r0.precip_m, null);
+  assert.equal(r0.interval_h, null);
+  assert.equal(r0.cloud_cover, 0.75, 'tcc is instant: it is in every step, unlike the interval fields');
+  // A run without the fields: the columns stay null, the rest keeps coming.
+  const bare = new ForecastStore(
+    [0, 3].map(h => ({
+      validMs: Date.UTC(2026, 8, 27) + h * 3600_000,
+      stepHours: h,
+      fields: new Map([
+        ['10u', mk(1)],
+        ['10v', mk(0)],
+        ['msl', mk(101000)],
+      ]),
+    })),
+    {
+      cycleTime: new Date(Date.UTC(2026, 8, 27)),
+      bbox: { west: -70, south: 40, east: -68, north: 42 },
+      steps: [0, 3],
+      params: [...base],
+      loadedAt: new Date(),
+    },
+    { requireWind: false }
+  );
+  const b = sampleConditions({ forecast: bare, currents: null, land: null }, -69, 41, t3);
+  assert.equal(b.wind_ms, 1);
+  assert.equal(b.gust_ms, null);
+  assert.equal(b.precip_m, null);
+  assert.equal(b.ssrd_wm2, null);
+});

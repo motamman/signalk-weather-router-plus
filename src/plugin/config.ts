@@ -58,6 +58,7 @@ export interface LegacyPluginConfig {
     refreshMinutes?: number;
     keepCycles?: number;
     extraFields?: boolean;
+    energyFields?: boolean;
   };
   currents?: {
     rtofsEnabled?: boolean;
@@ -98,6 +99,8 @@ export interface ResolvedConfig {
     keepCycles: number;
     /** Also fetch 2t, tprate, skt, 2d, ptype, tcc, 10fg (temperature, precipitation, SST, humidity, precip type, cloud cover, gust). */
     extraFields: boolean;
+    /** Also fetch tp, ssrd, sf, strd, str, mucape (precipitation depth, solar and thermal radiation, snowfall, convective instability), for energy modelling. */
+    energyFields: boolean;
     /** Memory guard: bytes that must remain free after a forecast load. */
     memoryHeadroomBytes: number;
     /** signalk-grib-downloader's folder; empty = find it. */
@@ -323,6 +326,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       mirror,
       keepCycles: f.keepCycles,
       extraFields: f.extraFields,
+      energyFields: f.energyFields,
       memoryHeadroomBytes: f.memoryHeadroom,
       regionalGribs: f.regionalGribs ?? '',
     },

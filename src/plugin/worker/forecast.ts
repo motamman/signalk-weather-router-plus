@@ -32,8 +32,11 @@ import type { WorkerState } from './state';
 /** ECMWF open-data short names; 2 m dew point is `2d` in the index files, 10 m wind gust `10fg`, total cloud cover `tcc`. */
 const EXTRA_ATM = ['2t', 'tprate', 'skt', '2d', 'ptype', 'tcc', '10fg'];
 
+/** Energy-modelling fields (the forecast.energyFields setting, off by default): total precipitation, surface solar radiation, snowfall, surface thermal radiation down and net, most-unstable CAPE. tp/sf/ssrd/strd/str are accumulated since the forecast start; the decode turns them into per-interval values. */
+const ENERGY_ATM = ['tp', 'ssrd', 'sf', 'strd', 'str', 'mucape'];
+
 export function extraParams(cfg: ResolvedConfig): string[] {
-  return cfg.forecast.extraFields ? EXTRA_ATM : [];
+  return [...(cfg.forecast.extraFields ? EXTRA_ATM : []), ...(cfg.forecast.energyFields ? ENERGY_ATM : [])];
 }
 
 /** Parameters the configured forecast holds (atmosphere + waves), in store order. */
@@ -194,7 +197,13 @@ export async function refreshForecast(st: WorkerState, force: boolean): Promise<
   }
   // Guard: memory for one step of decoding, disk for the whole run.
   fs.mkdirSync(decodedRoot(st), { recursive: true });
-  const res = checkDecodeResources(horizon, cfg.forecast.extraFields, cfg.forecast.memoryHeadroomBytes, decodedRoot(st));
+  const res = checkDecodeResources(
+    horizon,
+    cfg.forecast.extraFields,
+    cfg.forecast.energyFields,
+    cfg.forecast.memoryHeadroomBytes,
+    decodedRoot(st)
+  );
   if (!res.ok) {
     st.log('error', `forecast: ${res.message} [${res.source}]`);
     st.send({ type: 'refresh-error', message: res.message });

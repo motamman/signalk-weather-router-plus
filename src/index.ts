@@ -803,6 +803,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         land: config?.landShapefiles,
         harmonic_dir: config?.currents.harmonicDir,
         extra_fields: config?.forecast.extraFields,
+        energy_fields: config?.forecast.energyFields,
       }),
       forecastInfo: async (lat, lon) => {
         if (!forecastRun) throw new Error(forecastError ? `forecast unavailable: ${forecastError}` : 'forecast not loaded yet');
@@ -845,9 +846,14 @@ export = function plugin(app: SkApp): SignalKPlugin {
         // (memory for one decode step, disk for the decoded run), before
         // saving, so the running forecast and settings stay as they are.
         const prospective = mergeSettings(settings.values, partial);
-        if (prospective.changed.some(k => k === 'forecast.horizon' || k === 'forecast.extraFields' || k === 'forecast.memoryHeadroom')) {
+        if (
+          prospective.changed.some(
+            k =>
+              k === 'forecast.horizon' || k === 'forecast.extraFields' || k === 'forecast.energyFields' || k === 'forecast.memoryHeadroom'
+          )
+        ) {
           const f = prospective.values.forecast;
-          const mem = checkDecodeResources(f.horizon, f.extraFields, f.memoryHeadroom, app.getDataDirPath());
+          const mem = checkDecodeResources(f.horizon, f.extraFields, f.energyFields, f.memoryHeadroom, app.getDataDirPath());
           if (!mem.ok) {
             const key = prospective.changed.find(k => k.startsWith('forecast.')) ?? 'forecast.horizon';
             throw new SettingsValidationError({ [key]: mem.message });

@@ -26,7 +26,7 @@
 
 import type { DecodeScratch, Grib2Grid, Grib2Message } from '../grib/grib2';
 import { norm360, wrapLon, lonOffset } from '../geo/angles';
-import { HOUR_MS } from '../geo/units';
+import { HOUR_MS, HOUR_S } from '../geo/units';
 import type { BBox } from '../geo/geodesy';
 import { bboxWidth } from '../geo/geodesy';
 import { bilinearCorners, gridXY, lerp2 } from './sampling';
@@ -154,6 +154,66 @@ export interface ForecastStep {
   validMs: number;
   stepHours: number;
   fields: Map<string, FieldGrid>;
+  /**
+   * Hours of the interval each interval field of this step covers
+   * (ACCUMULATED_PARAMS, end time = validMs), set only for the fields
+   * present. Steps 3–144 h cover 3 h, steps past 144 h cover 6 h; step 0
+   * has no interval fields (ECMWF's accumulations start with an empty
+   * range, and the step-0 gust is coded 0 m/s everywhere).
+   */
+  intervals?: Map<string, number>;
+}
+
+/**
+ * ECMWF fields accumulated since the forecast started. The streaming
+ * decode turns each into its per-interval value (step N minus step N−1):
+ * a depth in m for `tp` and `sf` (snowfall water equivalent), an average
+ * W/m² over the interval for `ssrd`, `strd` and `str` (the GRIB holds
+ * J/m², divided by the interval's seconds). The step-0 fields, whose
+ * range is empty, are dropped.
+ */
+export const ACCUMULATED_PARAMS = ['tp', 'ssrd', 'sf', 'strd', 'str'] as const;
+
+/** The accumulated fields published in J/m², stored as average W/m² over the interval. */
+export const RADIATIVE_ACCUM: ReadonlySet<string> = new Set(['ssrd', 'strd', 'str']);
+
+/** The previous step's raw accumulated field, kept by the streaming decoder for the step difference. */
+export interface AccumPrev {
+  values: Float32Array;
+  stepHours: number;
+}
+
+/**
+ * Turn the accumulated-since-start fields of one decoded step into their
+ * per-interval values, in place, and record the interval length on the
+ * step. `prev` carries the previous step's raw accumulated values across
+ * steps (the streaming decoder holds one Map for the run). A field whose
+ * previous value is missing (the first step the parameter appears, and
+ * step 0) has an empty or unknown range: it is dropped from the step, and
+ * its raw values become the new previous. A parameter absent from a
+ * cycle's index leaves `prev` untouched, so the next appearance diffs
+ * over the real span.
+ */
+export function applyAccumulated(step: ForecastStep, prev: Map<string, AccumPrev>): void {
+  for (const p of ACCUMULATED_PARAMS) {
+    const f = step.fields.get(p);
+    if (!f) continue;
+    const was = prev.get(p);
+    // The previous RAW accumulation first: the in-place difference below must
+    // not pollute it (step N's diff is raw N − raw N−1, not raw N − diff N−1).
+    const raw = new Float32Array(f.values);
+    if (was) {
+      const intervalH = step.stepHours - was.stepHours;
+      const div = RADIATIVE_ACCUM.has(p) ? intervalH * HOUR_S : 1;
+      const v = f.values;
+      if (div === 1) for (let i = 0; i < v.length; i++) v[i] -= was.values[i];
+      else for (let i = 0; i < v.length; i++) v[i] = (v[i] - was.values[i]) / div;
+      if (!step.intervals) step.intervals = new Map();
+      step.intervals.set(p, intervalH);
+    }
+    prev.set(p, { values: raw, stepHours: step.stepHours });
+    if (!was) step.fields.delete(p);
+  }
 }
 
 /** The whole globe, as a BBox (meta.bbox of a global store). */
@@ -439,6 +499,20 @@ export class ForecastStore implements WindSource {
     this.global = this.steps.every(s => [...s.fields.values()].every(isGlobal));
   }
 
+  /** Is this parameter present in every step? */
+  has(param: string): boolean {
+    return this.steps.every(s => s.fields.has(param));
+  }
+
+  /**
+   * Is this parameter present in at least one step? Interval fields start
+   * at step 3 (step 0's range is empty), so an interval field is never in
+   * *every* step: ask hasAny, not has, before sampling one.
+   */
+  hasAny(param: string): boolean {
+    return this.steps.some(s => s.fields.has(param));
+  }
+
   /** Any field of the first step (the geometry reference for covers()). */
   private refField(): FieldGrid | undefined {
     const s = this.steps[0];
@@ -479,11 +553,6 @@ export class ForecastStore implements WindSource {
     const f1 = this.steps[i1].fields.get(param);
     if (!f1) return v0;
     return v0 * (1 - a) + sampleField(f1, lon, lat) * a;
-  }
-
-  /** Is this parameter loaded in every step? */
-  has(param: string): boolean {
-    return this.steps.every(s => s.fields.has(param));
   }
 
   /** Wind [speed m/s, direction FROM degrees]. */
@@ -590,9 +659,28 @@ export class ForecastStore implements WindSource {
     return this.blended('msl', lon, lat, time);
   }
 
-  /** Generic sampler for any loaded parameter (SI as in the GRIB). */
+  /** Generic sampler for any loaded parameter (SI as in the store's unit). */
   paramAt(param: string, lon: number, lat: number, time: Date): number {
     return this.blended(param, lon, lat, time);
+  }
+
+  /**
+   * The value of an interval field (ACCUMULATED_PARAMS: an accumulation
+   * turned into its per-interval amount or average) at a time: the value
+   * of the step whose interval contains the time (the step ending at the
+   * time, or — strictly inside an interval — the step ending after it).
+   * Interval values are not interpolated: mixing the depths of two
+   * adjacent 3 h intervals is no interval's depth. Null when the
+   * parameter is not loaded or the time falls in no interval of the run
+   * (before the first, whose fields start at step 3).
+   */
+  intervalAt(param: string, lon: number, lat: number, time: Date): { value: number; intervalHours: number } | null {
+    const [i0, i1, a] = this.timeBlend(time);
+    const step = this.steps[a === 0 ? i0 : i1];
+    const intervalHours = step.intervals?.get(param);
+    const f = step.fields.get(param);
+    if (intervalHours === undefined || !f) return null;
+    return { value: sampleField(f, lon, lat), intervalHours };
   }
 
   get validRange(): [Date, Date] {
@@ -631,7 +719,12 @@ export class ForecastStore implements WindSource {
    */
   serialize(): SerializedForecast {
     return {
-      steps: this.steps.map(s => ({ validMs: s.validMs, stepHours: s.stepHours, fields: [...s.fields.entries()] })),
+      steps: this.steps.map(s => ({
+        validMs: s.validMs,
+        stepHours: s.stepHours,
+        fields: [...s.fields.entries()],
+        intervals: s.intervals ? [...s.intervals.entries()] : undefined,
+      })),
       meta: {
         cycleTimeMs: this.meta.cycleTime.getTime(),
         bbox: this.meta.bbox,
@@ -645,7 +738,12 @@ export class ForecastStore implements WindSource {
   /** Wrap a serialized store; shared field memory stays shared (nothing is copied). */
   static deserialize(s: SerializedForecast): ForecastStore {
     return new ForecastStore(
-      s.steps.map(st => ({ validMs: st.validMs, stepHours: st.stepHours, fields: new Map(st.fields) })),
+      s.steps.map(st => ({
+        validMs: st.validMs,
+        stepHours: st.stepHours,
+        fields: new Map(st.fields),
+        intervals: st.intervals ? new Map(st.intervals) : undefined,
+      })),
       {
         cycleTime: new Date(s.meta.cycleTimeMs),
         bbox: s.meta.bbox,
@@ -677,7 +775,7 @@ export class ForecastStore implements WindSource {
 }
 
 export interface SerializedForecast {
-  steps: { validMs: number; stepHours: number; fields: [string, FieldGrid][] }[];
+  steps: { validMs: number; stepHours: number; fields: [string, FieldGrid][]; intervals?: [string, number][] }[];
   meta: { cycleTimeMs: number; bbox: BBox; steps: number[]; params: string[]; loadedAtMs: number };
 }
 
@@ -718,6 +816,10 @@ export function buildStep(
   for (const { param, message } of named) {
     const v = message.referenceTime.getTime() + message.product.forecastHours * HOUR_MS;
     if (v !== validMs) throw new Error(`buildStep: ${param} valid time differs from the first message`);
+    // An interval message with an empty range carries no statistic: ECMWF
+    // codes the step-0 gust (a maximum over 0–0 h) as 0 m/s everywhere.
+    // Later steps carry the real maximum over the past interval.
+    if (param === '10fg' && message.product.intervalHours === 0) continue;
     const isWave = param === 'swh' || param === 'mwp' || param === 'mwd';
     let f: FieldGrid;
     if (bbox) {

@@ -32,6 +32,8 @@ export interface AppSettings {
     refreshInterval: number;
     keepCycles: number;
     extraFields: boolean;
+    /** Also tp, ssrd, sf, strd, str, mucape, for energy modelling (off by default: about doubles the download). */
+    energyFields: boolean;
     /** Bytes that must stay free after the forecast loads (memory guard). */
     memoryHeadroom: number;
     /** Folder of signalk-grib-downloader's runs; empty = find it (its config, else ~/.signalk/gribs). */
@@ -230,6 +232,15 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     type: 'boolean',
     default: true,
     help: 'Also fetch 2t, tprate, skt, 2d, ptype, tcc and 10fg (the temperature, SST and precipitation layers, total cloud cover, wind gust and the full conditions). Changing it reloads the forecast.',
+    reload: 'forecast',
+  },
+  {
+    key: 'forecast.energyFields',
+    group: 'forecast',
+    label: 'Solar, thermal radiation, snowfall and instability',
+    type: 'boolean',
+    default: false,
+    help: 'Also fetch tp, ssrd, sf, strd, str and mucape (total precipitation, surface solar radiation, snowfall, surface thermal radiation down and net, and convective instability) for energy modelling: roughly doubles the download (about +177 MB per 72 h cycle) and adds about 830 MB of decoded data on disk. Off by default, so a metered connection only pays for it on purpose. Changing it reloads the forecast.',
     reload: 'forecast',
   },
   {
@@ -783,6 +794,7 @@ export function migrateLegacy(legacy: LegacyPluginConfig | undefined): { values:
   set(src.forecast, 'refreshInterval', num(f.refreshMinutes, 60));
   set(src.forecast, 'keepCycles', num(f.keepCycles));
   set(src.forecast, 'extraFields', f.extraFields);
+  set(src.forecast, 'energyFields', f.energyFields);
   const c = l.currents ?? {};
   set(src.currents, 'rtofsEnabled', c.rtofsEnabled);
   set(src.currents, 'rtofsRegion', typeof c.rtofsRegion === 'string' ? c.rtofsRegion.trim() : c.rtofsRegion);

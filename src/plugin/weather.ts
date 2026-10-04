@@ -19,10 +19,13 @@
  * Every value is in the Signal K unit for its field: m/s, rad, Pa, K,
  * m, s, and relative humidity as a ratio. The extra fields (temperature,
  * dew point, humidity, water temperature, total cloud cover, wind gust)
- * appear only when the plugin is configured to fetch them. Precipitation
- * volume is not provided: the store holds only ECMWF's instantaneous
- * `tprate`, not an accumulated field or an interval-mean rate, so no
- * interval depth can be derived.
+ * appear only when the plugin is configured to fetch them, as do the
+ * energy fields (total precipitation as `precipitationVolume`, the depth
+ * of the interval ending at the forecast time; solar and infrared fluxes,
+ * snowfall and convective instability only through the plugin's own API
+ * and the conditions popup, which have no Signal K slot). The step-0
+ * gust, whose time range is empty (ECMWF codes it 0 m/s everywhere), is
+ * never published; from step 3 on every step carries the real maximum.
  *
  * Water level (when tides are enabled): `water.level` is the total water
  * level (tide + surge) in metres relative to local MEAN SEA LEVEL (not
@@ -181,8 +184,26 @@ export function makeWeatherProvider(
   };
 }
 
-/** Parameters pointForecasts reads. */
-export const POINT_FORECAST_PARAMS = ['10u', '10v', 'msl', 'swh', 'mwp', 'mwd', '2t', '2d', 'skt', 'tcc', '10fg'] as const;
+/** Parameters pointForecasts reads. The energy parameters are skipped for runs decoded without them. */
+export const POINT_FORECAST_PARAMS = [
+  '10u',
+  '10v',
+  'msl',
+  'swh',
+  'mwp',
+  'mwd',
+  '2t',
+  '2d',
+  'skt',
+  'tcc',
+  '10fg',
+  'tp',
+  'ssrd',
+  'sf',
+  'strd',
+  'str',
+  'mucape',
+] as const;
 
 /**
  * Point forecasts from a store holding every step around the position
@@ -252,7 +273,8 @@ function weatherItemAt(
   const wave = store.wavesAt(lon, lat, t);
   const msl = store.mslAt(lon, lat, t);
   const wind: NonNullable<WeatherData['wind']> = { speedTrue: ws, directionTrue: (wd * Math.PI) / 180 };
-  const gust = store.has('10fg') ? finiteOr(store.paramAt('10fg', lon, lat, t)) : undefined;
+  // hasAny, not has: the step-0 gust is dropped at the decode (empty range).
+  const gust = store.hasAny('10fg') ? finiteOr(store.paramAt('10fg', lon, lat, t)) : undefined;
   if (gust !== undefined) wind.gust = gust;
   const item: WeatherData = {
     description,
@@ -263,6 +285,14 @@ function weatherItemAt(
   const outside: NonNullable<WeatherData['outside']> = {};
   const tcc = store.has('tcc') ? finiteOr(store.paramAt('tcc', lon, lat, t)) : undefined;
   if (tcc !== undefined) outside.cloudCover = tcc;
+  // Total precipitation: the interval depth ending at the item's time.
+  // Point forecasts sit on step valid times, where the interval is the
+  // step's own (3 h to 144 h, 6 h past it); an observation's time falls
+  // inside an interval that has not ended, so the field is left out there.
+  if (type === 'point' && store.hasAny('tp')) {
+    const iv = store.intervalAt('tp', lon, lat, t);
+    if (iv && Number.isFinite(iv.value)) outside.precipitationVolume = iv.value;
+  }
   if (Number.isFinite(msl)) outside.pressure = msl;
   const t2m = store.has('2t') ? finiteOr(store.paramAt('2t', lon, lat, t)) : undefined;
   const d2m = store.has('2d') ? finiteOr(store.paramAt('2d', lon, lat, t)) : undefined;

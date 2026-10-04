@@ -188,6 +188,21 @@ test('template 4.8: a gust and the wind of the same file build one step', () => 
   assert.ok(step.fields.has('10fg'));
 });
 
+test('template 4.8: the step-0 gust (an empty range, coded 0 everywhere) is left out of the step', () => {
+  const wind = [...iterateGrib2(new Uint8Array(fs.readFileSync(fixture)))].filter(w => w.product.forecastHours === 0);
+  const [gust0] = [...iterateGrib2(gustAt(wind[0].referenceTime, 0, 0))];
+  const step = buildStep(
+    [
+      { param: '10u', message: wind[0] },
+      { param: '10v', message: wind[1] },
+      { param: '10fg', message: gust0 },
+    ],
+    { west: -75, south: 36, east: -65, north: 45 }
+  );
+  assert.ok(!step.fields.has('10fg'), 'no real value: the field is absent, not 0');
+  assert.ok(step.fields.has('10u'));
+});
+
 test('template 4.8: a range that ends before it starts is refused', () => {
   const b = gustAt(new Date('2026-10-03T00:00:00Z'), 2, 1);
   const { s4 } = sectionsOf(b);

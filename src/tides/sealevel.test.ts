@@ -548,6 +548,7 @@ test('Weather API: water.level (m above MSL) and water.levelTendency from the po
   const store = {
     covers: () => true,
     has: () => false,
+    hasAny: () => false,
     steps,
     meta: { cycleTime: new Date(t0) },
     at: () => [5, 90],
