@@ -30,8 +30,28 @@ export function overlaySources(st: WorkerState, forecast: ForecastStore | null):
   return { forecast, currents: st.stack.isEmpty ? null : st.stack, land: st.overlayLand, tides: st.tides };
 }
 
-/** Every parameter conditionsSeries samples. */
-const CONDITIONS_PARAMS = ['10u', '10v', 'swh', 'mwp', 'mwd', 'msl', '2t', 'skt', 'tprate', '2d', 'ptype'];
+/** Every parameter conditionsSeries samples. The interval/energy parameters are skipped for runs decoded without them. */
+const CONDITIONS_PARAMS = [
+  '10u',
+  '10v',
+  'swh',
+  'mwp',
+  'mwd',
+  'msl',
+  '2t',
+  'skt',
+  'tprate',
+  '2d',
+  'ptype',
+  'tcc',
+  '10fg',
+  'tp',
+  'ssrd',
+  'sf',
+  'strd',
+  'str',
+  'mucape',
+];
 
 const INFO_PARAMS = ['10u', '10v', 'msl', 'swh', 'mwp', 'mwd'];
 

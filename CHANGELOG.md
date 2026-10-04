@@ -6,6 +6,53 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Cloud cover and wind gust in the Weather API.** With the extra
+  fields on (the default) the plugin also fetches ECMWF's total cloud
+  cover `tcc` and 10 m wind gust `10fg` with every forecast, and point
+  forecasts and observations carry `outside.cloudCover` (ratio 0..1)
+  and `wind.gust` (m/s), the two fields the Signal K Weather API schema
+  defines and consumers such as energy predictors and stow advisories
+  read. Without the extra fields the run decodes as before and the two
+  fields stay left out. A decoded run made for the previous extra-field
+  set no longer matches the settings, so the first update after this
+  change decodes the current cycle again: the nine existing fields come
+  from the GRIB cache and only the two new fields' messages are
+  downloaded (HTTP byte ranges, tens of MB); one extra-field step is
+  54.0 MB on disk instead of 45.7 MB (about 1.35 GB per 72 h run
+  instead of 1.14 GB).
+- **Solar, thermal radiation, snowfall and instability fields, behind
+  their own setting (off by default).** Settings → Forecast → "Solar,
+  thermal radiation, snowfall and instability" fetches ECMWF's total
+  precipitation `tp`, surface solar radiation `ssrd`, snowfall `sf`,
+  surface thermal radiation down and net `strd`/`str`, and most-unstable
+  CAPE `mucape`. The five accumulated fields (everything but `mucape`)
+  are published as totals since the forecast start; the decode now runs
+  a step-subtraction pass that turns each into its per-interval value —
+  a depth in m for `tp` and `sf`, an average W/m² over the interval for
+  the three fluxes — and each step carries its interval length (3 h to
+  144 h, 6 h past it; step 0's range is empty and holds no interval
+  values). `tp` finally fills the Weather API's `outside.precipitationVolume`
+  (the interval depth ending at each point forecast; an observation's
+  interval has not ended, so it is left out there). The rest go through
+  the plugin's own API and the conditions popup, which gains an Energy
+  tab (solar and infrared fluxes), a depth line in the Precip tab, a gust
+  line in the Wind tab and cloud, solar and gust columns in the Raw
+  table. The setting is off by default: the six fields roughly double
+  the download (about +177 MB per 72 h cycle) and add about 830 MB of
+  decoded data on disk, so a metered connection only pays for them on
+  purpose. The memory and disk guard knows the new field set and suggests
+  turning the setting off when a run would not fit.
+
+### Fixed
+
+- **The step-0 wind gust is no longer published as 0 m/s.** ECMWF codes
+  the gust's step 0 (an empty maximum-over-time range) as 0 everywhere,
+  which is not a real value; the step is decoded without a gust field and
+  the first three hours answer without one. From step 3 on every step
+  carries the real maximum over the past interval.
+
 ## [0.1.0-beta.7] - 2026-10-03
 
 ### Added
@@ -183,6 +230,7 @@ uses [Semantic Versioning](https://semver.org/).
   check and the warning-to-leg match measured across 180° the long way:
   all take longitude differences the short way now; the Freeboard panel fits a box that crosses 180° as
   west > east, as the Plotter Extensions API defines.
+
 
 ## [0.1.0-beta.6] - 2026-10-02
 

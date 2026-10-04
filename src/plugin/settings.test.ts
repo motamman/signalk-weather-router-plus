@@ -64,6 +64,7 @@ test('defaults resolve to the same engine config the plugin config gave before',
   assert.equal(c.forecast.refreshIntervalS, 3600);
   assert.equal(c.forecast.keepCycles, 2);
   assert.equal(c.forecast.extraFields, true);
+  assert.equal(c.forecast.energyFields, false, 'the solar and radiation fields are opt-in (they about double the download)');
   assert.equal(c.forecast.mirror, 'ecmwf');
   assert.equal(c.currents.rtofsRegion, 'west_atl');
   assert.equal(c.currents.rtofsHorizonS, 72 * HOUR_S);
@@ -138,6 +139,7 @@ test('partial merge validates with the old ranges and enums, all-or-nothing', ()
 test('reload kinds per changed key', () => {
   assert.deepEqual([...reloadsFor(['forecast.horizon'])], ['forecast']);
   assert.deepEqual([...reloadsFor(['forecast.extraFields'])], ['forecast']);
+  assert.deepEqual([...reloadsFor(['forecast.energyFields'])], ['forecast']);
   assert.deepEqual([...reloadsFor(['currents.rtofsRegion', 'currents.rtofsEnabled'])], ['currents']);
   assert.deepEqual([...reloadsFor(['vessel.motorSpeed', 'routing.stages', 'publish.toResources'])], ['next_job']);
   assert.deepEqual([...reloadsFor(['forecast.refreshInterval'])], ['refresh_timer']);

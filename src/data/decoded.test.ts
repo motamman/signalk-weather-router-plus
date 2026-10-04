@@ -33,7 +33,7 @@ function rng(seed: number): () => number {
   };
 }
 
-const PARAMS = ['10u', '10v', 'msl', '2t', 'tprate', 'skt', '2d', 'ptype', 'swh', 'mwp', 'mwd'];
+const PARAMS = ['10u', '10v', 'msl', '2t', 'tprate', 'skt', '2d', 'ptype', 'tcc', '10fg', 'swh', 'mwp', 'mwd'];
 const T0 = Date.UTC(2026, 8, 28, 12);
 
 /**
@@ -41,14 +41,14 @@ const T0 = Date.UTC(2026, 8, 28, 12);
  * pole, the same geometry rules as ECMWF's 0.25°): smooth fields with
  * noise, NaN "land" blocks in the wave fields, -0 and integer codes.
  */
-function syntheticStore(nSteps = 5): ForecastStore {
+function syntheticStore(nSteps = 5, params: readonly string[] = PARAMS): ForecastStore {
   const nLon = 360;
   const nLat = 181;
   const rand = rng(7);
   const steps: ForecastStep[] = [];
   for (let k = 0; k < nSteps; k++) {
     const fields = new Map<string, FieldGrid>();
-    PARAMS.forEach((p, pi) => {
+    params.forEach((p, pi) => {
       const v = new Float32Array(nLon * nLat);
       for (let r = 0; r < nLat; r++) {
         for (let c = 0; c < nLon; c++) {
@@ -393,6 +393,9 @@ test('Weather API: an observation is one entry interpolated to its time, and sur
   const [ws, wd] = store.at(lon, lat, new Date(mid));
   assert.equal(obs.wind?.speedTrue, ws);
   assert.equal(obs.wind?.directionTrue, (wd * Math.PI) / 180);
+  // Cloud cover and gust map from the extra fields, sampled like every other field.
+  assert.equal(obs.outside?.cloudCover, store.paramAt('tcc', lon, lat, new Date(mid)));
+  assert.equal(obs.wind?.gust, store.paramAt('10fg', lon, lat, new Date(mid)));
   assert.equal(obs.water?.surfaceCurrentSpeed, undefined, 'no current source: no current fields');
   // A current source covering the point: u east 0.3, v north 0.4 → 0.5 m/s towards 036.87°.
   const currents = {
@@ -409,4 +412,26 @@ test('Weather API: an observation is one entry interpolated to its time, and sur
   assert.ok(Math.abs((steps[0].water?.surfaceCurrentSpeed ?? 0) - 0.5) < 1e-12);
   const far = pointForecasts(store, lon + 5, lat, s0, 1, { currents });
   assert.equal(far[0].water?.surfaceCurrentSpeed, undefined);
+});
+
+test('Weather API: cloud cover and gust are extra fields; a run decoded without them leaves the fields out', async () => {
+  const withExtras = syntheticStore(2);
+  const lon = -71.3;
+  const lat = 41.4;
+  const s0 = withExtras.steps[0].validMs;
+  const [item] = pointForecasts(withExtras, lon, lat, s0, 1);
+  assert.equal(item.outside?.cloudCover, withExtras.paramAt('tcc', lon, lat, new Date(s0)));
+  assert.equal(item.wind?.gust, withExtras.paramAt('10fg', lon, lat, new Date(s0)));
+
+  // extraFields off: the decoded run holds none of the two, and the fields vanish
+  // while everything else keeps coming.
+  const base = syntheticStore(
+    2,
+    PARAMS.filter(p => p !== 'tcc' && p !== '10fg')
+  );
+  const [bare] = pointForecasts(base, lon, lat, s0, 1);
+  assert.equal(bare.outside?.cloudCover, undefined);
+  assert.equal(bare.wind?.gust, undefined);
+  assert.notEqual(bare.outside?.temperature, undefined);
+  assert.notEqual(bare.wind?.speedTrue, undefined);
 });

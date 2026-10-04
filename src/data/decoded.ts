@@ -57,6 +57,12 @@ export interface DecodedStepMeta {
   validMs: number;
   /** Parameters present in this step (a parameter missing from a cycle's index is absent). */
   params: string[];
+  /**
+   * Interval length in hours per interval field (ACCUMULATED_PARAMS),
+   * end time = validMs. Written only for steps that hold interval fields
+   * (3 h to 144 h, 6 h past it); step 0 has none.
+   */
+  intervals?: [string, number][];
 }
 
 export interface DecodedIndex {
@@ -162,7 +168,12 @@ export class DecodedRunWriter {
       this.bytes += f.values.byteLength;
       params.push(param);
     }
-    this.steps.push({ stepHours: step.stepHours, validMs: step.validMs, params });
+    this.steps.push({
+      stepHours: step.stepHours,
+      validMs: step.validMs,
+      params,
+      intervals: step.intervals ? [...step.intervals.entries()] : undefined,
+    });
   }
 
   /** Write index.json and move the run into place (replacing an older copy of the same cycle). */
@@ -488,6 +499,7 @@ export class DecodedRun {
       validMs: this.index.steps[i].validMs,
       stepHours: this.index.steps[i].stepHours,
       fields,
+      intervals: this.index.steps[i].intervals ? new Map(this.index.steps[i].intervals) : undefined,
     }));
     return new ForecastStore(
       steps,

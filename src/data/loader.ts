@@ -18,7 +18,16 @@ import type { BBox } from '../geo/geodesy';
 import { HOUR_S } from '../geo/units';
 import { parseGrib2Message, type DecodeScratch } from '../grib/grib2';
 import { ATM_PARAMS, WAVE_PARAMS, availableSteps, latestExpectedCycle, type Cycle, type EcmwfClient, type IndexRecord } from './ecmwf';
-import { buildStep, ForecastStore, GLOBAL_BBOX, type ForecastStep, FloatSlab, type NanFillScratch } from './forecast';
+import {
+  buildStep,
+  ForecastStore,
+  GLOBAL_BBOX,
+  applyAccumulated,
+  type AccumPrev,
+  type ForecastStep,
+  FloatSlab,
+  type NanFillScratch,
+} from './forecast';
 import { cycleName, type DecodedIndex, type DecodedRunWriter } from './decoded';
 
 export interface LoadOptions {
@@ -140,6 +149,9 @@ async function decodeSteps(
   // instead of fresh ones per field: a 72 h load decodes ~275 fields.
   const scratch: DecodeScratch = {};
   const fillScratch: NanFillScratch = {};
+  // Previous step's raw accumulated fields, for the step-difference pass
+  // (ACCUMULATED_PARAMS): five global fields, about 21 MB.
+  const accumPrev = new Map<string, AccumPrev>();
   const fieldsPerStep = atmParams.length + (includeWaves ? WAVE_PARAMS.length : 0);
   const slab = slabFor(steps.length, fieldsPerStep);
   let done = 0;
@@ -177,7 +189,9 @@ async function decodeSteps(
         named.push({ param: p, message: parseGrib2Message(msg) });
       }
     }
-    onStep(buildStep(named, bbox, opts.waveFillCells ?? 3, scratch, slab, fillScratch));
+    const built = buildStep(named, bbox, opts.waveFillCells ?? 3, scratch, slab, fillScratch);
+    applyAccumulated(built, accumPrev);
+    onStep(built);
     done++;
     opts.onStep?.(done, steps.length);
     // Yield to the event loop between steps so a host process stays responsive.

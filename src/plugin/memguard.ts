@@ -36,16 +36,18 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { availableSteps, ATM_PARAMS, WAVE_PARAMS, MAIN_MAX_STEP } from '../data/ecmwf';
 import { streamingDecodeBytes } from '../data/loader';
+import { ACCUMULATED_PARAMS } from '../data/forecast';
 
 /** Bytes of one global field for one step (Float32, 0.25°). */
 export const FIELD_STEP_BYTES = 1440 * 721 * 4;
-export const EXTRA_FIELD_COUNT = 5;
+export const EXTRA_FIELD_COUNT = 7;
+export const ENERGY_FIELD_COUNT = 6;
 
 /** Bytes of a decoded run (on disk) for a horizon and field set: steps × fields × one global grid. */
-export function forecastBytes(horizonS: number, extraFields: boolean): number {
+export function forecastBytes(horizonS: number, extraFields: boolean, energyFields = false): number {
   // The longest schedule (a 00z/12z cycle), so the estimate never falls short.
   const steps = availableSteps({ maxStep: MAIN_MAX_STEP }, horizonS / HOUR_S).length;
-  return steps * fieldsPerStep(extraFields) * FIELD_STEP_BYTES;
+  return steps * fieldsPerStep(extraFields, energyFields) * FIELD_STEP_BYTES;
 }
 
 function readNumber(file: string): number | null {
@@ -126,8 +128,8 @@ const mb = (b: number): string => `{dataSize:${Math.round(b)}}`;
 const hrs = (h: number): string => `{time:${Math.round(h * HOUR_S)}}`;
 
 /** Parameters per step for a field set. */
-export function fieldsPerStep(extraFields: boolean): number {
-  return ATM_PARAMS.length + WAVE_PARAMS.length + (extraFields ? EXTRA_FIELD_COUNT : 0);
+export function fieldsPerStep(extraFields: boolean, energyFields = false): number {
+  return ATM_PARAMS.length + WAVE_PARAMS.length + (extraFields ? EXTRA_FIELD_COUNT : 0) + (energyFields ? ENERGY_FIELD_COUNT : 0);
 }
 
 /** Disk left free after writing a decoded run (a policy, not a measurement). */
@@ -151,32 +153,48 @@ export function availableDisk(dir: string): number | null {
 export function checkDecodeResources(
   horizonS: number,
   extraFields: boolean,
+  energyFields: boolean,
   headroomBytes: number,
   dir: string | null,
   available: { bytes: number; source: string } = availableMemory(),
   disk: number | null = dir ? availableDisk(dir) : null
 ): MemoryCheck {
-  const need = streamingDecodeBytes(fieldsPerStep(extraFields));
+  // Besides the one-step block and decode buffers, the accumulated fields
+  // (energy fields) keep the previous step's raw values for the step
+  // difference: one global field per accumulated parameter.
+  const need =
+    streamingDecodeBytes(fieldsPerStep(extraFields, energyFields)) + (energyFields ? ACCUMULATED_PARAMS.length * FIELD_STEP_BYTES : 0);
   const horizonHours = horizonS / HOUR_S;
-  const runBytes = forecastBytes(horizonS, extraFields);
+  const runBytes = forecastBytes(horizonS, extraFields, energyFields);
   const memOk = need + headroomBytes <= available.bytes;
   const diskOk = disk === null || runBytes + DISK_RESERVE_BYTES <= disk;
   const diskText = disk === null ? 'free disk space unknown' : `${mb(disk)} disk free`;
-  let message = `update needs ${mb(need)} of memory for one decode step (${hrs(horizonHours)}${extraFields ? ', extra fields' : ''}) and ${mb(runBytes)} of disk for the decoded run; ${mb(available.bytes)} memory available, ${mb(headroomBytes)} headroom kept; ${diskText}`;
+  const fieldText = [extraFields ? 'extra fields' : '', energyFields ? 'solar and radiation fields' : ''].filter(Boolean).join(', ');
+  let message = `update needs ${mb(need)} of memory for one decode step (${hrs(horizonHours)}${fieldText ? `, ${fieldText}` : ''}) and ${mb(runBytes)} of disk for the decoded run; ${mb(available.bytes)} memory available, ${mb(headroomBytes)} headroom kept; ${diskText}`;
   if (!memOk) {
     message = `not enough memory: ${message}. Free memory or lower the memory headroom setting (Settings tab).`;
   } else if (!diskOk) {
-    const fits = (h: number, x: boolean): boolean => forecastBytes(h * HOUR_S, x) + DISK_RESERVE_BYTES <= disk!;
+    const fits = (h: number, x: boolean, e: boolean): boolean => forecastBytes(h * HOUR_S, x, e) + DISK_RESERVE_BYTES <= disk!;
     const options: string[] = [];
-    if (extraFields && fits(horizonHours, false)) options.push('turn off the extra fields');
+    if (extraFields && fits(horizonHours, false, energyFields)) options.push('turn off the extra fields');
+    if (energyFields && fits(horizonHours, extraFields, false)) options.push('turn off the solar and radiation fields');
+    if (extraFields && energyFields && fits(horizonHours, false, false)) options.push('turn off both field settings');
     for (const h of [120, 96, 72, 48, 24, 12]) {
       if (h >= horizonHours) continue;
-      if (fits(h, extraFields)) {
+      if (fits(h, extraFields, energyFields)) {
         options.push(`shorten the forecast horizon to ${hrs(h)}`);
         break;
       }
-      if (extraFields && fits(h, false)) {
+      if (extraFields && fits(h, false, energyFields)) {
         options.push(`shorten the horizon to ${hrs(h)} with the extra fields off`);
+        break;
+      }
+      if (energyFields && fits(h, extraFields, false)) {
+        options.push(`shorten the horizon to ${hrs(h)} with the solar and radiation fields off`);
+        break;
+      }
+      if (extraFields && energyFields && fits(h, false, false)) {
+        options.push(`shorten the horizon to ${hrs(h)} with both field settings off`);
         break;
       }
     }
