@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { beaufort, douglas, feelsLike, heatIndexK, relativeHumidity, seaStateBand } from './conditions';
+import { beaufort, douglas, feelsLike, heatIndexK, relativeHumidity, roughnessIndex, seaStateBand } from './conditions';
 
 test('relative humidity is a ratio in 0..1, not a percent', () => {
   // 20 °C air, 10 °C dew point → about 52.5 % by the Magnus form.
@@ -31,4 +31,23 @@ test('dimensionless scales stay integer indices', () => {
   assert.equal(douglas(0), 0);
   assert.equal(douglas(1.25), 4);
   assert.equal(seaStateBand(151), 'extreme');
+});
+
+test('long-period swell is dampened, short-period coastal swell is not', () => {
+  // Calm wind and no current: only the swell term contributes.
+  const swellOnly = (swh: number, mwp: number) => roughnessIndex(0, 0, 0, 0, swh, mwp, 0).idx;
+  // 2.25 m at 5 s (steep coastal wind sea) keeps the original value:
+  // 30 * 2.25^2 = 151.875, still in the extreme band.
+  assert.ok(Math.abs(swellOnly(2.25, 5) - 151.875) < 0.01, `got ${swellOnly(2.25, 5)}`);
+  assert.equal(seaStateBand(swellOnly(2.25, 5)), 'extreme');
+  // Periods under 5 s are treated the same as 5 s (no amplification).
+  assert.ok(Math.abs(swellOnly(2.25, 3) - 151.875) < 0.01);
+  // The same height at a lazy 12 s trade swell is cut to 5/12:
+  // 151.875 * 5/12 = 63.28, back into the slight band.
+  assert.ok(Math.abs(swellOnly(2.25, 12) - 151.875 * (5 / 12)) < 0.01, `got ${swellOnly(2.25, 12)}`);
+  assert.equal(seaStateBand(swellOnly(2.25, 12)), 'slight');
+  // Against an opposing current (flowing against the waves) the steepening
+  // factor still applies on top of the period dampening.
+  const steep = roughnessIndex(0, 1, 0, 0, 2.25, 12, 0).idx;
+  assert.ok(steep > swellOnly(2.25, 12), `steepened ${steep} should exceed dampened ${swellOnly(2.25, 12)}`);
 });

@@ -6,6 +6,19 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The sea-state index no longer flags ordinary long-period ocean swell as
+  extreme.** The swell term was a plain quadratic in wave height, so any
+  open-ocean cell above about 2.23 m — a routine 2.25 m trade swell at
+  12 s — scored over 150 and landed in the `extreme` band even in light
+  wind and slack current. The swell term is now scaled by
+  `5 / max(mwp, 5)`, which leaves steep short-period coastal seas (period
+  5 s or less, and the missing-wave-data default of 5 s) at their original
+  values and cuts a 12 s swell to 5/12, shifting standard trade swells
+  back into the `slight`/`good` bands. The band cuts themselves (35 / 50 /
+  75 / 100 / 150) are unchanged.
+
 ## [0.1.0-beta.8] - 2026-10-03
 
 ### Fixed
