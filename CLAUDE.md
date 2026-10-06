@@ -31,7 +31,8 @@ These come from the owner and override default behaviour.
 - Do not restart Signal K, change plugin config or deploy without asking.
 - Ask before attaching to the live process (inspector, heap snapshots), and
   say what it costs first (a main-thread heap snapshot left about 400 MB in
-  glibc that never came back, 2026-10-06).
+  glibc that never came back, 2026-10-06; not measured: no command or file
+  for that figure is recorded).
 
 ## Fixes
 

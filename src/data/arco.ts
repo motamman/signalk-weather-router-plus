@@ -847,45 +847,48 @@ export async function loadRegion(
   const work: { v: string; jobs: ChunkJob[] }[] = [];
   for (const variable of vars) for (const js of byChunk.values()) work.push({ v: variable, jobs: js });
   stats.chunks = work.length;
-  await client.pool(
-    work,
-    async ({ v: variable, jobs: js }) => {
-      const j0 = js[0];
-      const idx = new Array<number>(level.dims.rank).fill(0);
-      idx[level.dims.time] = j0.tc;
-      idx[level.dims.lat] = j0.rc;
-      idx[level.dims.lon] = j0.run.cc;
-      const stored = await client.chunk(run, layout, variable, idx, stats);
-      if (stored === null) return; // all fill: the area stays NaN there
-      const td = Date.now();
-      // Decoded into the shared scratch and copied out below before the next await.
-      const vals = decodeChunk(level.meta[variable], stored, chunkScratch);
-      const dst = data[variable];
-      const rowLo = Math.max(region.row0, j0.rc * cr);
-      const rowHi = Math.min(region.row0 + region.nRows - 1, j0.rc * cr + cr - 1, grid.nLat - 1);
-      for (const j of js) {
-        for (const s of j.steps) {
-          const tl = tIdx[s] - j.tc * ct;
-          const base = s * nCells;
-          for (let gr = rowLo; gr <= rowHi; gr++) {
-            const rl = gr - j.rc * cr;
-            const src0 =
-              tl * strides[level.dims.time] + rl * strides[level.dims.lat] + (j.run.g0 - j.run.cc * cc) * strides[level.dims.lon];
-            const dst0 = base + (gr - region.row0) * region.nCols + j.run.local0;
-            for (let k = 0; k < j.run.len; k++) dst[dst0 + k] = vals[src0 + k];
+  try {
+    await client.pool(
+      work,
+      async ({ v: variable, jobs: js }) => {
+        const j0 = js[0];
+        const idx = new Array<number>(level.dims.rank).fill(0);
+        idx[level.dims.time] = j0.tc;
+        idx[level.dims.lat] = j0.rc;
+        idx[level.dims.lon] = j0.run.cc;
+        const stored = await client.chunk(run, layout, variable, idx, stats);
+        if (stored === null) return; // all fill: the area stays NaN there
+        const td = Date.now();
+        // Decoded into the shared scratch and copied out below before the next await.
+        const vals = decodeChunk(level.meta[variable], stored, chunkScratch);
+        const dst = data[variable];
+        const rowLo = Math.max(region.row0, j0.rc * cr);
+        const rowHi = Math.min(region.row0 + region.nRows - 1, j0.rc * cr + cr - 1, grid.nLat - 1);
+        for (const j of js) {
+          for (const s of j.steps) {
+            const tl = tIdx[s] - j.tc * ct;
+            const base = s * nCells;
+            for (let gr = rowLo; gr <= rowHi; gr++) {
+              const rl = gr - j.rc * cr;
+              const src0 =
+                tl * strides[level.dims.time] + rl * strides[level.dims.lat] + (j.run.g0 - j.run.cc * cc) * strides[level.dims.lon];
+              const dst0 = base + (gr - region.row0) * region.nCols + j.run.local0;
+              for (let k = 0; k < j.run.len; k++) dst[dst0 + k] = vals[src0 + k];
+            }
           }
         }
-      }
-      stats.decodeMs += Date.now() - td;
-      // Let other messages interleave between chunks.
-      await new Promise(r => setImmediate(r));
-    },
-    opts.shouldCancel
-  );
+        stats.decodeMs += Date.now() - td;
+        // Let other messages interleave between chunks.
+        await new Promise(r => setImmediate(r));
+      },
+      opts.shouldCancel
+    );
+  } finally {
+    // Shared across this load's chunks only: a worker does not keep 8 MB between loads, failed ones included.
+    chunkScratch.raw = null;
+    chunkScratch.out = null;
+  }
   stats.seconds = (Date.now() - t0) / 1000;
-  // Shared across this load's chunks only: a worker does not keep 8 MB between loads.
-  chunkScratch.raw = null;
-  chunkScratch.out = null;
   return { layout, data, stats };
 }
 
