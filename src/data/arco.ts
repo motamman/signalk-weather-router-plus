@@ -883,6 +883,9 @@ export async function loadRegion(
     opts.shouldCancel
   );
   stats.seconds = (Date.now() - t0) / 1000;
+  // Shared across this load's chunks only: a worker does not keep 8 MB between loads.
+  chunkScratch.raw = null;
+  chunkScratch.out = null;
   return { layout, data, stats };
 }
 

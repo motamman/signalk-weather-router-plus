@@ -49,6 +49,7 @@ import type {
   WorkerToMain,
 } from './plugin/protocol';
 import type { SerializedSmoc } from './currents/smoc';
+import type { SerializedRtofs } from './currents/rtofs';
 import type { SerializedHarmonic } from './currents/harmonic';
 
 const PLUGIN_ID = 'signalk-weather-router-plus';
@@ -99,6 +100,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
   let routeForecastMemory: ForecastMemory | null = null;
   /** The data worker's CMEMS SMOC run + resident area (shared memory), relayed to the route worker. */
   let smocShared: SerializedSmoc | null = null;
+  /** The data worker's RTOFS run (shared memory), relayed to the route and tiles workers. */
+  let rtofsShared: SerializedRtofs | null = null;
   /** The data worker's tidal-harmonic sources (shared constituent blocks), relayed to the route worker. */
   let harmonicShared: SerializedHarmonic[] | null = null;
   /** Raw Signal K plugin options from start(). */
@@ -262,6 +265,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
     const m: MainToWorker[] = [];
     if (forecastRun) m.push({ type: 'forecast', run: forecastRun });
     if (smocShared) m.push({ type: 'smoc', smoc: smocShared });
+    if (rtofsShared) m.push({ type: 'rtofs', rtofs: rtofsShared });
     if (harmonicShared) m.push({ type: 'harmonic', sources: harmonicShared });
     return m;
   }
@@ -545,6 +549,13 @@ export = function plugin(app: SkApp): SignalKPlugin {
           prebuilder?.broadcast({ type: 'harmonic', sources: msg.sources });
         }
         return;
+      case 'rtofs':
+        if (role === 'data') {
+          rtofsShared = msg.rtofs;
+          pool.post('route', { type: 'rtofs', rtofs: msg.rtofs });
+          prebuilder?.broadcast({ type: 'rtofs', rtofs: msg.rtofs });
+        }
+        return;
       case 'smoc':
         if (role === 'data') {
           // SharedArrayBuffer views: the route worker gets the same memory.
@@ -636,7 +647,10 @@ export = function plugin(app: SkApp): SignalKPlugin {
     if (stopped || !settings || changed.length === 0)
       return { forecast: false, currents: false, tides: false, refresh_timer: false, jobs: false };
     config = resolve(pluginOptions, settings.values);
-    if (out.currents) smocShared = null;
+    if (out.currents) {
+      smocShared = null;
+      rtofsShared = null;
+    }
     if (out.forecast || out.currents || out.tides) {
       dataSettingsRev++;
       updateTileGenerations();
@@ -679,8 +693,6 @@ export = function plugin(app: SkApp): SignalKPlugin {
         dataDir,
         workerPath,
         execArgv,
-        // Its own flag: route cancellation must not reach the tiles workers.
-        cancelFlag: new SharedArrayBuffer(4),
         initMessage: () => ({ type: 'init', role: 'tiles', config: config as ResolvedConfig, cacheDir: dataDir }),
         replayMessages: () => {
           const m = sharedDataMessages();
@@ -801,6 +813,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
     forecastLoading = null;
     routeForecastMemory = null;
     smocShared = null;
+    rtofsShared = null;
     harmonicShared = null;
     routeCurrents = null;
     currentsKey = '';

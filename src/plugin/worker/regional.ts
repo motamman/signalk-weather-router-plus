@@ -7,7 +7,7 @@
 
 import * as path from 'node:path';
 import { scanRegional } from '../../data/regional';
-import { decodeRegionalRun } from '../../data/regionaldecode';
+import { runChildTask } from '../childtask';
 import type { WorkerState } from './state';
 
 /** ECMWF open data's grid spacing, for when no global run is loaded yet. */
@@ -66,7 +66,16 @@ async function refreshRegionalNow(st: WorkerState): Promise<void> {
       continue;
     }
     try {
-      const r = await decodeRegionalRun(src, path.join(scan.root, src.name), st.cacheRoot, Math.max(1, st.config.forecast.keepCycles));
+      // Decoded in a child process: a decode reads whole GRIB files (50+ MB
+      // each) and its memory, freed here, stayed with Signal K (brain,
+      // 2026-10-06: 86 MB per run). A child's memory goes back when it exits.
+      const r = await runChildTask({
+        task: 'regional',
+        src,
+        srcDir: path.join(scan.root, src.name),
+        dataDir: st.cacheRoot,
+        keepRuns: Math.max(1, st.config.forecast.keepCycles),
+      });
       st.regional.set(src.name, {
         source: src.name,
         cycle: r.cycle,

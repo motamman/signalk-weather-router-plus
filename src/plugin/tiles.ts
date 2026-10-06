@@ -25,6 +25,7 @@ import { promisify } from 'node:util';
 import * as zlib from 'node:zlib';
 import type { BBox } from '../geo/geodesy';
 import type { QueryArgs, QueryKind } from './protocol';
+import { rmtree, runChildTask, type RmtreeResult } from './childtask';
 
 export { FIELD_LAYERS as TILE_FIELD_LAYERS } from './layers';
 import { FIELD_LAYERS } from './layers';
@@ -525,17 +526,24 @@ export class TileStore {
       const g = n.slice(0, n.indexOf('-')) as TileGroup;
       if (this.gens[g] === null) continue; // not known yet (startup): keep until it is
       const dir = path.join(this.root, n);
-      const gone = this.totals ? await this.count(dir) : null;
-      // Subtracted only when the directory is really gone: a failed removal leaves its files in the store.
-      const ok = await fs.promises.rm(dir, { recursive: true, force: true }).then(
-        () => true,
-        (err: Error) => {
-          this.log(`overlay tiles: could not remove ${dir}: ${err.message}`);
-          return false;
-        }
-      );
-      if (!ok) continue;
-      if (this.totals && gone) {
+      // Counted and deleted in a child process: a superseded generation is
+      // hundreds of thousands of files, and walking and deleting them here,
+      // on Signal K's main thread, left 537 MB of malloc memory that was
+      // never handed back (brain, 2026-10-06). The child's memory goes back
+      // to the system when it exits. Subtracted only when the directory is
+      // really gone: a failed removal leaves its files in the store.
+      let gone: RmtreeResult | null;
+      try {
+        gone = await runChildTask({ task: 'rmtree', dir });
+      } catch (err) {
+        this.log(`overlay tiles: child process could not remove ${dir} (${(err as Error).message}); removing it here`);
+        gone = await rmtree(dir).catch((e: Error) => {
+          this.log(`overlay tiles: could not remove ${dir}: ${e.message}`);
+          return null;
+        });
+      }
+      if (!gone) continue;
+      if (this.totals) {
         this.totals.files = Math.max(0, this.totals.files - gone.files);
         this.totals.bytes = Math.max(0, this.totals.bytes - gone.bytes);
         this.scheduleSave();

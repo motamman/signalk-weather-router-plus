@@ -55,12 +55,23 @@ const SHAPE_POLYGON = 5;
  * Allocating it per call churned that through the allocator, which keeps
  * the freed space (brain, 2026-10-06).
  */
-let contentScratch = Buffer.alloc(1 << 20);
+const CONTENT_BASE = 1 << 20;
+const PTS_BASE = 1 << 12;
+let contentScratch = Buffer.alloc(CONTENT_BASE);
 function contentBuffer(n: number): Buffer {
   if (contentScratch.length < n) contentScratch = Buffer.alloc(n);
   return contentScratch;
 }
-let ptsScratch = new Float64Array(1 << 12);
+let ptsScratch = new Float64Array(PTS_BASE);
+/**
+ * After a read: drop a scratch grown past its base size (a continent's
+ * record is 13–27 MB), so a worker does not keep its largest record's
+ * buffer for good (brain, 2026-10-06: 13–27 MB in each of four workers).
+ */
+function releaseScratch(): void {
+  if (contentScratch.length > CONTENT_BASE) contentScratch = Buffer.alloc(CONTENT_BASE);
+  if (ptsScratch.length > PTS_BASE) ptsScratch = new Float64Array(PTS_BASE);
+}
 const SHAPE_POLYGON_Z = 15;
 const SHAPE_POLYGON_M = 25;
 
@@ -188,6 +199,7 @@ export function readShapefilePolygons(shpPath: string, clip?: BBox): ShapePolygo
     return out;
   } finally {
     fs.closeSync(fd);
+    releaseScratch();
   }
 }
 
@@ -388,6 +400,7 @@ export class ShapefileIndex {
       return false;
     } finally {
       fs.closeSync(fd);
+      releaseScratch();
     }
   }
 
@@ -440,7 +453,10 @@ export class ShapefileIndex {
         }
         return parseRecord(content, len, this.recNo[i], this.shapeType, this.path);
       },
-      close: () => fs.closeSync(fd),
+      close: () => {
+        fs.closeSync(fd);
+        releaseScratch();
+      },
     };
   }
 }
