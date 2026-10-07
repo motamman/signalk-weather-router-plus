@@ -1,6 +1,6 @@
 {
   "name": "signalk-weather-router-plus",
-  "version": "0.1.1",
+  "version": "0.1.2-beta.1",
   "description": "Signal K plugin: standalone open-water weather routing (isochrone) using ECMWF open-data forecasts decoded in-process, GSHHG land avoidance, vessel polars. Publishes routes to the Signal K Resources API and registers as a Weather API provider.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
