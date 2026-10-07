@@ -160,7 +160,19 @@ export function unshared<T>(v: T, memo = new Map<unknown, unknown>()): T {
   if (v === null || typeof v !== 'object') return v;
   if (memo.has(v)) return memo.get(v) as T;
   if (ArrayBuffer.isView(v)) {
-    const out = v.buffer instanceof SharedArrayBuffer ? (v as unknown as { slice: () => unknown }).slice() : v;
+    let out: unknown = v;
+    if (v.buffer instanceof SharedArrayBuffer) {
+      if (v instanceof DataView) {
+        // No slice(): copy its bytes into a plain buffer.
+        const bytes = new Uint8Array(v.byteLength);
+        bytes.set(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+        out = new DataView(bytes.buffer);
+      } else if (Buffer.isBuffer(v)) {
+        out = Buffer.from(v); // Buffer.slice() is a view on the same memory; Buffer.from copies
+      } else {
+        out = (v as unknown as { slice: () => unknown }).slice(); // a typed array's slice() copies into a plain buffer
+      }
+    }
     memo.set(v, out);
     return out as T;
   }

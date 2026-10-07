@@ -46,3 +46,13 @@ test('unshared: SharedArrayBuffer views become plain copies, aliasing kept, othe
   assert.equal(out.smoc.when, msg.smoc.when);
   assert.ok(msg.smoc.resident.u.buffer instanceof SharedArrayBuffer, 'the original is not changed');
 });
+
+test('unshared: a shared-backed DataView and Buffer are copied too', () => {
+  const sab = new SharedArrayBuffer(8);
+  new Uint8Array(sab).set([1, 2, 3, 4, 5, 6, 7, 8]);
+  const out = unshared({ dv: new DataView(sab, 2, 4), buf: Buffer.from(sab, 4, 4) });
+  assert.ok(out.dv instanceof DataView && !(out.dv.buffer instanceof SharedArrayBuffer));
+  assert.deepEqual([out.dv.byteLength, out.dv.getUint8(0), out.dv.getUint8(3)], [4, 3, 6]);
+  assert.ok(Buffer.isBuffer(out.buf) && !(out.buf.buffer instanceof SharedArrayBuffer));
+  assert.deepEqual([...out.buf], [5, 6, 7, 8]);
+});
