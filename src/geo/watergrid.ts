@@ -48,6 +48,7 @@
  *   (bits 0–3 east, 4–7 north, 8–11 west, 12–15 south).
  */
 
+import { shorelinePaths } from './shapefile';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -525,7 +526,7 @@ export class WaterGrid {
 
 /** Content fingerprints of coastline shapefiles (reads 2 MiB per file). */
 export function sourceFingerprints(paths: string[]): WaterGridSource[] {
-  return paths.map(p => {
+  return shorelinePaths(paths).map(p => {
     const st = fs.statSync(p);
     const h = crypto.createHash('sha256');
     h.update(String(st.size));

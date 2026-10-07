@@ -187,8 +187,8 @@ export const CONFIG_SCHEMA = {
       type: 'string',
       title: 'Coastline shapefile(s)',
       description:
-        'Absolute path(s) to polygon land shapefiles, comma-separated. Blank: GSHHG 2.3.7 full-resolution level 1 is downloaded once ' +
-        '(149 MB from www.soest.hawaii.edu) into the plugin data directory and used. Add GSHHS_f_L6.shp for Antarctica.',
+        'Absolute path(s) to polygon land shapefiles, comma-separated. Blank: GSHHG 2.3.7 full-resolution levels 1–4 are downloaded once ' +
+        '(149 MB from www.soest.hawaii.edu) into the plugin data directory and used. A GSHHS layer path requires all four sibling levels. Add GSHHS_f_L6.shp for Antarctica.',
     },
     polarFile: {
       type: 'string',

@@ -1,5 +1,5 @@
 /**
- * Land mask built from coastline polygons (GSHHG L1 or OSM land
+ * Land mask built from coastline polygons (GSHHG L1–L4 or OSM land
  * polygons), rasterised over a route bounding box.
  *
  * Two query paths, mirroring the routing engine this is ported from:
@@ -27,7 +27,7 @@
 import type { BBox } from './geodesy';
 import { wrapLon, unwrapLonNear } from './angles';
 import { bboxHeight, bboxWidth, lonOffsetFromWest, slerpSamples, haversineDistanceM } from './geodesy';
-import { pointInShape, type ShapePolygon } from './shapefile';
+import { pointInShape, shorelinePaths, type ShapePolygon } from './shapefile';
 import { polygonCache } from './polygoncache';
 import { avoidAt, legHitsAvoid, type AvoidArea } from './avoid';
 
@@ -73,6 +73,8 @@ export class LandMask {
   readonly patches: LandPatch[] = [];
   /** Mark cells crossed by polygon edges (conservative raster). */
   private edgeCells = true;
+  private boundaryPass = false;
+  private fillValue = 1;
 
   private constructor(
     shapes: ShapePolygon[],
@@ -81,7 +83,7 @@ export class LandMask {
     raster?: Uint8Array,
     dims?: { nx?: number; ny?: number; edgeCells?: boolean }
   ) {
-    this.shapes = shapes;
+    this.shapes = [...shapes].sort((a, b) => (a.level ?? 1) - (b.level ?? 1));
     this.bbox = bbox;
     this.resolutionDeg = resolutionDeg;
     this.nx = dims?.nx ?? Math.max(1, Math.ceil(bboxWidth(bbox) / resolutionDeg));
@@ -134,7 +136,7 @@ export class LandMask {
       south: Math.max(-90, bbox.south - buffer),
       north: Math.min(90, bbox.north + buffer),
     };
-    const shapes: ShapePolygon[] = polygonCache.read(paths, padded);
+    const shapes: ShapePolygon[] = polygonCache.read(shorelinePaths(paths), padded);
     return new LandMask(shapes, padded, resolutionDeg);
   }
 
@@ -161,6 +163,8 @@ export class LandMask {
    * Raster-only mask fed one polygon at a time: `feed` calls `add` for
    * each polygon, which is rasterised and can then be dropped, so memory
    * is bounded by the largest single polygon rather than all of them.
+   * Feed levels in ascending order; conservative masks replay feed once
+   * to mark all boundaries after the land/water fills.
    * The raster equals fromPolygons(all, bbox, res).raster; no polygons
    * are kept (isLandExact is unavailable).
    */
@@ -172,6 +176,11 @@ export class LandMask {
   ): LandMask {
     const m = new LandMask([], bbox, resolutionDeg, undefined, { nx: opts.nx, ny: opts.ny, edgeCells: opts.edgeCells });
     feed(s => m.rasterizeShape(s));
+    if (m.edgeCells) {
+      m.boundaryPass = true;
+      feed(s => m.rasterizeShape(s));
+      m.boundaryPass = false;
+    }
     return m;
   }
 
@@ -212,11 +221,8 @@ export class LandMask {
     for (const p of this.patches) {
       if (p.resolutionDeg <= res * 1.0001 && bboxCovers(p.bbox, pb)) return null;
     }
-    const m = new LandMask([], pb, res, undefined, { nx, ny });
-    for (const s of this.shapes) {
-      if (s.maxLat < pb.south || s.minLat > pb.north) continue;
-      m.rasterizeShape(s);
-    }
+    const shapes = this.shapes.filter(s => s.maxLat >= pb.south && s.minLat <= pb.north);
+    const m = LandMask.rasterStreamed(pb, res, add => shapes.forEach(add), { nx, ny });
     const patch: LandPatch = { bbox: pb, resolutionDeg: res, nx, ny, raster: m.raster };
     // Finest first, so lookups hit the finest patch covering a point.
     this.patches.push(patch);
@@ -249,9 +255,15 @@ export class LandMask {
 
   private rasterize(): void {
     for (const shape of this.shapes) this.rasterizeShape(shape);
+    if (this.edgeCells) {
+      this.boundaryPass = true;
+      for (const shape of this.shapes) this.rasterizeShape(shape);
+      this.boundaryPass = false;
+    }
   }
 
   private rasterizeShape(shape: ShapePolygon): void {
+    this.fillValue = (shape.level ?? 1) % 2;
     const { nx, ny, resolutionDeg: res, raster } = this;
     const width = bboxWidth(this.bbox);
     const south = this.bbox.south;
@@ -341,8 +353,8 @@ export class LandMask {
         const xb = xs[2 * i] + shift;
         const yb = xs[2 * i + 1];
         // Conservative boundary marking: every cell the edge touches.
-        if (this.edgeCells) this.markEdgeCells(xa, ya, xb, yb, nx, res, south, raster, width);
-        if (ya === yb) continue; // horizontal edges do not cross scanlines
+        if (this.boundaryPass) this.markEdgeCells(xa, ya, xb, yb, nx, res, south, raster, width);
+        if (this.boundaryPass || ya === yb) continue; // horizontal edges do not cross scanlines
         const y0 = Math.min(ya, yb);
         const y1 = Math.max(ya, yb);
         // Scanline at row centre lat = south + (row + 0.5) * res crosses the
@@ -389,7 +401,7 @@ export class LandMask {
         let jEnd = Math.ceil(xsRow[k + 1] / res - 0.5) - 1;
         if (jStart < 0) jStart = 0;
         if (jEnd > nx - 1) jEnd = nx - 1;
-        for (let j = jStart; j <= jEnd; j++) raster[base + j] = 1;
+        for (let j = jStart; j <= jEnd; j++) raster[base + j] = this.fillValue;
       }
     }
   }
@@ -497,7 +509,7 @@ export class LandMask {
    * Exact even-odd polygon test against the loaded shapes. A point in a
    * water cell of the conservative raster (or of a patch) is water without
    * a polygon test: no polygon boundary passes through such a cell and its
-   * centre is outside every polygon, so the whole cell is outside.
+   * centre is classified as water by the hierarchy, so the whole cell is water.
    */
   isLandExact(lon: number, lat: number): boolean {
     if (this.edgeCells && this.shapes.length) {
@@ -516,10 +528,11 @@ export class LandMask {
 
   /** Point-in-polygon over every loaded shape (no raster shortcut). */
   isLandPolygons(lon: number, lat: number): boolean {
+    let level = 0;
     for (const s of this.shapes) {
-      if (pointInShape(s, lon, lat)) return true;
+      if ((s.level ?? 1) > level && pointInShape(s, lon, lat)) level = s.level ?? 1;
     }
-    return false;
+    return level % 2 === 1;
   }
 
   private inAnyPatch(lon: number, lat: number): boolean {

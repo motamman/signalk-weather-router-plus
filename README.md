@@ -118,7 +118,7 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   decodes its CMEMS SMOC area again from the disk cache (2.1–3.4 s
   measured).
 - **Land:** GSHHG shorelines as shapefiles (`GSHHS_f_L1.shp` for full
-  resolution; add `GSHHS_f_L6.shp` for Antarctica) or the OSM
+  resolution, automatically including L2–L4 siblings; add `GSHHS_f_L6.shp` for Antarctica) or the OSM
   land-polygons export. Overlay land flags use a raster built on demand
   for each requested bbox at a resolution matched to the request's
   sample spacing (a quarter of it, 0.002° to 0.25°, at most 4 M cells),
@@ -837,14 +837,14 @@ run past it. Each stage's progress line also carries those counts.
 
 ### Global water grid
 
-`data/water-grid-0.02.bin.gz` (shipped, 1.49 MB) is a navigability graph
+`data/water-grid-0.02.bin.gz` (shipped, about 1.99 MB) is a navigability graph
 of the whole world at 0.02° (18000 × 9000 cells), built from GSHHG full
-resolution L1 (`GSHHS_f_L1.shp`):
+resolution levels 1–4 (`GSHHS_f_L1.shp` through `GSHHS_f_L4.shp`):
 
 - **Water and edges.** The coastline is rasterised at 0.005° (4 × 4 fine
   cells per grid cell) in 10° tiles with a 1.2° halo, so edges on tile
   borders and across the antimeridian see the neighbouring tile. A fine
-  cell is water when its centre is outside every polygon. Per grid cell
+  cell is water when the deepest containing GSHHG level is even (or no polygon contains it). Per grid cell
   the file stores a water bit and two edge bits (east, north). An edge is
   open when a 4-connected path of fine water cells inside the two cells
   crosses it, i.e. when some fine row (or column) has water on both
@@ -953,18 +953,21 @@ LGPL) once from the authors' site,
 `https://www.soest.hawaii.edu/pwessel/gshhg/gshhg-shp-2.3.7.zip`
 (149 MB; if that fails, the identical copy at
 `https://router.zeddisplay.com/downloads/gshhg-shp-2.3.7.zip`; the
-archive's SHA-256 is checked either way), extracts the full-resolution level-1 shoreline
-(`GSHHS_f_L1.shp` with its `.shx` and `.prj`, about 156 MB) into
+archive's SHA-256 is checked either way), extracts the full-resolution levels 1–4
+(`GSHHS_f_L1.shp` through `GSHHS_f_L4.shp`, with their `.shx` and `.prj`) into
 `coastline/gshhg-2.3.7/` in the plugin data directory, deletes the
 archive and starts; the plugin status shows the progress. The global
-water grid shipped with the plugin was built from this same file, so it
+water grid shipped with the plugin was built from this same hierarchy, so it
 is used as is. The download does not hold up the server's start-up; if
 it fails (offline, server error, short file) the plugin status says why
 and it is tried again every 10 minutes (or at once with **Download
 coastline** in the plugin's configuration panel); stopping the plugin
 cancels it.
 To use another coastline, or an existing GSHHG copy, set its path in the
-plugin configuration. A configured coastline is never replaced by the
+plugin configuration. A standard GSHHS layer path automatically includes all four
+sibling layers at the same resolution; missing siblings are an error. An older
+automatic L1-only installation downloads the complete hierarchy on upgrade.
+A configured coastline is never replaced by the
 download: if a configured file is missing or unreadable, the plugin does
 not start and its status names the file.
 
@@ -993,7 +996,7 @@ React and needs no build step for it.
 
 | Field | Notes |
 |---|---|
-| `landShapefiles` | comma-separated absolute paths; blank = download GSHHG 2.3.7 full-resolution level 1 once (see [Install](#install)) |
+| `landShapefiles` | comma-separated absolute paths; blank = download GSHHG 2.3.7 full-resolution levels 1–4 once (see [Install](#install)) |
 | `polarFile` | `.csv` (`twa/tws,4,6,…`) or `.pol` (tab-delimited); the default polar (token `default`). Blank = the bundled Catalina 36 |
 | `polarsDir` | directory of `.pol`/`.csv` polars listed by `/api/polars`. Blank = the library bundled with the plugin (`data/polars/`: the ~700 polars of the OpenCPN [weather_routing_pi](https://github.com/seandepagnier/weather_routing_pi) library, GPL-3.0), with user polars (generated ones included) kept in `polars/user/` in the plugin data directory, so an update never removes them. Set, user polars are in `<polarsDir>/user/` |
 | `currents.harmonicDir` | directory of tidal-harmonic `.npz` files |

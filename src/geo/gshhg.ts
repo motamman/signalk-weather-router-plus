@@ -1,6 +1,6 @@
 /**
  * The coastline when none is configured: GSHHG 2.3.7 full-resolution
- * level 1 (continental and island shorelines), downloaded once from the
+ * levels 1–4 (land, lakes, islands in lakes, ponds), downloaded once from the
  * authors' site into the plugin data directory.
  *
  * Source: https://www.soest.hawaii.edu/pwessel/gshhg/ (Wessel & Smith;
@@ -8,8 +8,8 @@
  * the fallback. The shapefile archive is 149,157,845 bytes, SHA-256
  * 8dbbe7e0…15cf41 (both checked 2026-09-29; a copy from either source
  * must match);
- * only GSHHS_shp/f/GSHHS_f_L1.shp and its .shx/.prj are extracted (about
- * 156 MB). The shipped global water grid was built from this same file,
+ * GSHHS_shp/f/GSHHS_f_L1–L4.shp and their .shx/.prj are extracted.
+ * The shipped global water grid was built from this same hierarchy,
  * so it matches and is not rebuilt.
  *
  * The archive is read with Node's zlib (a zip's central directory, then
@@ -33,7 +33,7 @@ export const GSHHG_ZIP_BYTES = 149_157_845;
 /** SHA-256 of the archive: a copy from any source must be this exact file. */
 export const GSHHG_ZIP_SHA256 = '8dbbe7e071e77e9e75f2d639239099ebca8d5c16d6a07df8169729d49f15cf41';
 /** Entries extracted (the .shp is what the plugin reads). */
-export const GSHHG_ENTRIES = ['GSHHS_shp/f/GSHHS_f_L1.shp', 'GSHHS_shp/f/GSHHS_f_L1.shx', 'GSHHS_shp/f/GSHHS_f_L1.prj'];
+export const GSHHG_ENTRIES = [1, 2, 3, 4].flatMap(level => ['shp', 'shx', 'prj'].map(ext => `GSHHS_shp/f/GSHHS_f_L${level}.${ext}`));
 
 /** Where the downloaded coastline lives under the plugin data directory. */
 export function gshhgDir(dataDir: string): string {
@@ -242,7 +242,7 @@ export async function ensureGshhg(dataDir: string, log: (msg: string) => void, o
   fs.rmSync(zip, { force: true });
   const shp = gshhgInstalled(dataDir);
   if (!shp) throw new Error('coastline extraction incomplete');
-  log(`coastline: GSHHG full-resolution level 1 ready at ${shp}`);
+  log(`coastline: GSHHG full-resolution levels 1–4 ready at ${shp}`);
   return shp;
 }
 
