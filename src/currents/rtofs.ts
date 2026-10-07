@@ -27,7 +27,7 @@ import { HOUR_MS, HOUR_S } from '../geo/units';
 import * as path from 'node:path';
 import type { BBox } from '../geo/geodesy';
 import { iterateGrib2 } from '../grib/grib2';
-import { cropField, type FieldGrid, sampleField } from '../data/forecast';
+import { cropField, type FieldGrid, sampleField, sharedFloat32 } from '../data/forecast';
 import { bboxContains, type CurrentSourceLike, type SourceBBox } from './types';
 import { sampleFieldPairFilled } from './coastfill';
 
@@ -226,6 +226,31 @@ export interface RtofsStep {
   validMs: number;
   u: FieldGrid;
   v: FieldGrid;
+}
+
+/**
+ * The steps with their values moved into SharedArrayBuffers, so the run can
+ * be relayed to the other workers without a copy (as SMOC): the data worker
+ * loads RTOFS once and every worker samples the same memory. Before, each
+ * worker loaded its own copy (brain, 2026-10-06: 46 MB × 4 workers).
+ */
+export function shareRtofsSteps(steps: RtofsStep[]): RtofsStep[] {
+  const share = (g: FieldGrid): FieldGrid => {
+    if (g.values.buffer instanceof SharedArrayBuffer) return g;
+    const v = sharedFloat32(g.values.length);
+    v.set(g.values);
+    return { ...g, values: v };
+  };
+  return steps.map(s => ({ validMs: s.validMs, u: share(s.u), v: share(s.v) }));
+}
+
+/**
+ * The relayed run when it is the configured product's, else null: a run
+ * loaded before a currents settings change (another region) can still
+ * arrive after it and must not be used.
+ */
+export function rtofsForRegion(s: SerializedRtofs | null, enabled: boolean, region: string): SerializedRtofs | null {
+  return s && enabled && s.name === `RTOFS-${region}` ? s : null;
 }
 
 export interface SerializedRtofs {

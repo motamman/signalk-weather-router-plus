@@ -1,5 +1,24 @@
 # What's new
 
+## 0.1.2-beta.1
+
+- **Less memory on a small computer.** On a Raspberry Pi, Signal K's
+  memory climbed with every map session, forecast and GRIB file and never
+  came back down. The heavy, occasional work now runs in separate
+  processes that hand their memory back when they finish: building map
+  tiles ahead of time, deleting old tiles after a new forecast, and
+  decoding regional GRIB files. RTOFS currents are loaded once instead of
+  once per worker. On the test Pi, when the tile builders finished and handed back
+  their memory, Signal K and the builders together went from 1.4 GB to
+  820 MB.
+- **Fresher forecasts.** The 06z and 18z ECMWF runs were being skipped
+  with some forecast horizons; the plugin now picks up a new forecast
+  four times a day.
+- **The map follows your route.** When a route comes back, the map zooms
+  to show all of it.
+- **A check on far waypoints.** A waypoint more than 500 km from the last
+  one asks first: add it, start a new route there, or cancel.
+
 ## 0.1.1
 
 - **A regular release.** Everything from 0.1.0-beta.9 below, now

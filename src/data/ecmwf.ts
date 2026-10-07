@@ -95,7 +95,11 @@ export const PUBLICATION_LAG_MINUTES = 400;
  * The most recent cycle that should be published by `now`, given a
  * ~400 minute publication lag: cycles run at 00/06/12/18Z. When the
  * horizon exceeds what the 06z/18z cycles publish (144 h), only 00z/12z
- * cycles qualify.
+ * cycles qualify. A cycle qualifies when it runs at least as far as the
+ * horizon (the same test as findLatestCycle), not when one of its 3-hourly
+ * steps lands exactly on it: with a 110 h horizon the last step is 108 h,
+ * and the old test rejected every 06z/18z run (brain, 2026-10-06: the 00z
+ * run stayed in use all day while the 06z run had been published for hours).
  */
 export function latestExpectedCycle(now: Date, horizonS: number): Cycle {
   const horizonHours = horizonS / HOUR_S;
@@ -103,8 +107,7 @@ export function latestExpectedCycle(now: Date, horizonS: number): Cycle {
   let start = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), Math.floor(t.getUTCHours() / 6) * 6));
   for (;;) {
     const c = cycleFor(start);
-    const steps = availableSteps(c, horizonHours);
-    if (steps[steps.length - 1] >= horizonHours || c.maxStep === MAIN_MAX_STEP) return c;
+    if (c.maxStep >= horizonHours || c.maxStep === MAIN_MAX_STEP) return c;
     start = new Date(start.getTime() - 6 * HOUR_MS);
   }
 }

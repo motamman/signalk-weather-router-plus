@@ -1,7 +1,8 @@
 # signalk-weather-router-plus
 
-Standalone open-water weather routing as a Signal K plugin. Nothing runs
-outside the Signal K process: the plugin downloads ECMWF open-data
+Standalone open-water weather routing as a Signal K plugin. No outside
+service: everything runs in Signal K's process and in short-lived
+processes the plugin starts itself. The plugin downloads ECMWF open-data
 forecasts by HTTP byte range, decodes the CCSDS-packed GRIB2 fields in
 TypeScript, reads Copernicus Marine SMOC ocean currents (worldwide,
 including tides) and the Copernicus Marine hourly sea level (tide
@@ -21,7 +22,7 @@ much for a plugin; it lives in the separate
 ![A finished route from the western Mediterranean through the Strait of Gibraltar to Lisbon, with wind speed, isobars and the itinerary of legs](public/screenshots/01-route.jpg)
 
 
-**Status: beta** (0.1.1). Please report
+**Status: beta** (0.1.2-beta.1). Please report
 problems at https://github.com/motamman/signalk-weather-router-plus/issues.
 
 What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
@@ -1007,7 +1008,7 @@ React and needs no build step for it.
 | `overlayCache.window` | s, how far ahead tiles are built from now; 0 = the whole forecast (default 0, max 1296000) |
 | `overlayCache.maxZoom` | deepest zoom built ahead (default 15, 6–18) |
 | `overlayCache.diskCap` | bytes for saved tiles, least recently used removed first (default 20e9 = 20 GB, min 100e6) |
-| `overlayCache.workers` | threads building tiles ahead (default 2, 1–8) |
+| `overlayCache.workers` | processes building tiles ahead (default 2, 1–8); they start when there are tiles to build and exit when the walk is complete |
 | `overlayCache.followView` | also build around the area the map shows (default on) |
 
 Stored in SI (metres, seconds, bytes); the configuration panel shows
@@ -1025,7 +1026,14 @@ skipped. A new forecast cycle, currents run or tide run removes the
 tiles made from the old one and the walk starts again; so do a new
 hour, a boat move of more than 1 km, a new view and a settings change.
 No new tile is started while a route runs or the map's own queries are
-waiting. The boat's last position is kept in `last-position.json` in
+waiting. The builders are separate processes, not threads: they are
+started when the walk has a tile to build and exit when it is complete,
+so the memory they used goes back to the system (a thread's memory stays
+with Signal K until it restarts). While they run, each holds its own copy
+of the current, tide and RTOFS data. Folders of tiles made obsolete by a
+new forecast, currents run or tide run are normally deleted by a
+short-lived child process; if that process cannot run, the deletion
+falls back to Signal K's own process. The boat's last position is kept in `last-position.json` in
 the plugin data directory, so the boat's area is known after a restart
 before a fix arrives.
 
@@ -1800,8 +1808,8 @@ Plugin, forecast, currents, tides and queue status. Access: readonly.
 | `tides` | Copernicus Marine sea-level source status (run, resident and on-demand areas, point cache, memory, downloads), or null when off or not loaded |
 | `tides_enabled` | the tides setting, or null before start |
 | `tides_error` | last tide source error, or null |
-| `overlay_land` | overlay land-raster cache: `{entries, cells, bytes, index_bytes, builds, hits, last_build_ms, disk_hits, disk_writes, disk}`, or null |
-| `overlay_tiles` | saved map tiles: `{dir, cap_bytes, files, bytes, hits, misses, writes, not_kept, generations, inflight}` (`files`/`bytes` after the first scan; `not_kept`: answered but not saved because an on-demand current or tide load was late or failed; `generations`: the data each layer group was built from; `inflight`: tile queries waiting or running), or null before start |
+| `overlay_land` | overlay land-raster cache: `{entries, cells, bytes, index_bytes, builds, hits, last_build_ms, disk_hits, disk_writes, disk, polygons}`, or null; `polygons`: the data worker's decoded-coastline cache `{entries, bytes, budget_bytes, hits, decodes, evictions}` |
+| `overlay_tiles` | saved map tiles: `{dir, cap_bytes, files, bytes, hits, misses, writes, not_kept, generations, inflight}` (`files`/`bytes` from the totals saved in `.totals.json` in the tile folder, counted once when missing or a day old; `not_kept`: answered but not saved because an on-demand current or tide load was late or failed; `generations`: the data each layer group was built from; `inflight`: tile queries waiting or running), or null before start |
 | `starting` | while the plugin is starting and not answering yet, why (e.g. `"starting: downloading the coastline (40 %)"`); null once started. 503 answers carry the same text |
 | `overlay_prebuild` | tiles built ahead of time: `{enabled, workers, workers_ready, paused, areas, window, max_zoom, walk_started_at, seen, built, skipped, not_kept, errors, last_error, at, complete, built_total, build_ms_avg}`; `areas`: `[{kind: "view" or "boat", lat, lon, radius_m}]`; `at`: `{area, hour, z}` of the last tile started; `complete`: every tile of the window is saved. Null before start |
 | `weather_provider_registered` | the Weather API provider is registered |

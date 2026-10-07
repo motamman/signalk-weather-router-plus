@@ -20,6 +20,7 @@ import type { ModePolicy } from '../engine/legsim';
 import type { BBox } from '../geo/geodesy';
 import type { DecodedIndex } from '../data/decoded';
 import type { SerializedSmoc, SmocStatus } from '../currents/smoc';
+import type { SerializedRtofs } from '../currents/rtofs';
 import type { SerializedHarmonic } from '../currents/harmonic';
 import type { TideStatus } from '../tides/sealevel';
 import type { ArcoRun } from '../data/arco';
@@ -278,6 +279,8 @@ export type MainToWorker =
   | { type: 'refresh'; force?: boolean; position?: VesselPosition | null }
   /** route worker: adopt the data worker's SMOC run and resident area (shared memory, relayed by the main thread). */
   | { type: 'smoc'; smoc: SerializedSmoc | null }
+  /** The data worker's RTOFS run (SharedArrayBuffer views: relaying shares, not copies). */
+  | { type: 'rtofs'; rtofs: SerializedRtofs | null }
   /** route worker: adopt the data worker's tidal-harmonic sources (shared constituent blocks, relayed by the main thread). */
   | { type: 'harmonic'; sources: SerializedHarmonic[] }
   /** route worker: the decoded run to read route areas from (null: none yet). */
@@ -313,6 +316,8 @@ export type WorkerToMain =
   | { type: 'data-status'; status: DataStatus }
   /** data worker: SMOC run / resident area changed (SharedArrayBuffer views: relaying shares, not copies). */
   | { type: 'smoc'; smoc: SerializedSmoc | null }
+  /** data worker: the RTOFS run loaded (SharedArrayBuffer views, relayed to the route and tiles workers). */
+  | { type: 'rtofs'; rtofs: SerializedRtofs | null }
   /** data worker: the tide run in use (relayed to tiles workers, which open it themselves). */
   | { type: 'tides-run'; run: ArcoRun | null }
   /** data worker: tidal-harmonic sources loaded (shared constituent blocks). */

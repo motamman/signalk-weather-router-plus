@@ -173,6 +173,10 @@ test('latestExpectedCycle applies the 400-minute lag and skips short cycles for 
   assert.equal(latestExpectedCycle(new Date('2026-09-27T14:00:00Z'), 72 * HOUR_S).hh, '06');
   assert.equal(latestExpectedCycle(new Date('2026-09-27T14:00:00Z'), 144 * HOUR_S).hh, '06');
   assert.equal(latestExpectedCycle(new Date('2026-09-27T14:00:00Z'), 150 * HOUR_S).hh, '00');
+  // A horizon between two 3-hourly steps (110 h: last step 108 h) still lets 06z/18z qualify: they run to 144 h.
+  assert.equal(latestExpectedCycle(new Date('2026-10-06T18:34:00Z'), 110 * HOUR_S).hh, '06');
+  assert.equal(latestExpectedCycle(new Date('2026-10-06T01:00:00Z'), 110 * HOUR_S).hh, '18');
+  assert.equal(latestExpectedCycle(new Date('2026-10-06T18:34:00Z'), 145 * HOUR_S).hh, '00');
 });
 
 test('parseRetryAfterMs handles seconds and HTTP dates', () => {

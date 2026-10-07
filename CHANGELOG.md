@@ -14,6 +14,80 @@ uses [Semantic Versioning](https://semver.org/).
   Lake Michigan is water and routable while Michigan remains land, with
   regression coverage including the beta.6 `wrp-route` full pipeline.
 
+## [0.1.2-beta.1] - 2026-10-06
+
+Memory work on a Raspberry Pi 5 (8 GB). Signal K's memory stepped up with
+use and never came back down. Measured on brain on 2026-10-06: Signal K
+used about 600 MB without the plugin and 2,550 MB after six hours with
+it (0.1.1). The plugin's own data was not growing: heavy bursts of work
+inside Signal K's process freed memory that glibc kept for the process.
+This release moves the bursty work out of Signal K's process, or stops
+it holding duplicate data.
+
+### Added
+
+- **Zoom to a computed route.** When a route comes back from the router
+  the map fits the whole track beside the panel, as it already did for a
+  route opened from the library.
+- **Confirmation for a far waypoint.** Adding a waypoint more than
+  500 km from the previous one asks first: add it, clear the route and
+  start a new one at that point, or cancel. Distances are shown in the
+  Signal K user's distance unit.
+- **`overlay_land.polygons` in `/api/status`:** the per-thread cache of
+  decoded coastline polygons (entries, bytes, budget, hits, decodes,
+  evictions).
+
+### Changed
+
+- **Tiles are built ahead of time by separate processes, not threads.**
+  The builders start when the walk has a tile to build and exit when it
+  is complete, so their memory goes back to the system. A thread's
+  memory stays with Signal K until it restarts. Measured on brain: when
+  the two builders exited at the end of a walk, Signal K plus the
+  builders went from 1,404 MB to 820 MB. While they run, each builder
+  holds its own copy of the current, tide and RTOFS data (about 280 MB
+  each measured), because shared memory cannot cross processes. The
+  `overlayCache.workers` setting now counts processes.
+- **RTOFS is loaded once and shared.** The data worker loads it into
+  shared memory and passes it to the route worker, the way the SMOC
+  currents already were. Before, every worker loaded its own 46 MB copy.
+  Measured on brain: the data worker's buffers went from 154–228 MB
+  (0.1.1) to 47 MB.
+- **Old map tiles are deleted by a separate process.** A new forecast,
+  currents run or tide run makes a whole folder of tiles obsolete
+  (about 823,000 files after one forecast on brain). Deleting them on
+  Signal K's main thread left 537 MB that was never handed back
+  (measured, 0.1.1); a child process now counts and deletes them and
+  exits. The saving in this release is not measured yet.
+- **Regional GRIB runs are decoded by a separate process.** Runs from
+  signalk-grib-downloader are decoded in a child process that exits when
+  done. Measured in 0.1.1: each decode left 86 MB with Signal K. The
+  saving in this release is not measured yet.
+- **The tile store keeps its totals.** The file count and size are saved
+  in `.totals.json` in the tile folder and read at start, instead of
+  walking every saved tile (over a million on brain) on Signal K's main
+  thread at each start; a removed folder is subtracted, and a day-old
+  total is recounted in the background without building a list.
+- **Coastline polygons are decoded once per thread** and kept in a small
+  cache (24 MB, records over 2 MB not kept), for routes and map land
+  masks alike; the shapefile reader and the current/tide chunk decoder
+  free their large buffers after each read.
+
+### Fixed
+
+- **06z and 18z forecast runs are used again.** With a forecast horizon
+  that is not a multiple of 3 hours (110 h on brain), the rule for which
+  run should be published rejected every 06z and 18z run, because their
+  last 3-hourly step (108 h) fell short of the horizon. The plugin
+  stayed on the 00z run all day while the 06z run had been out for
+  hours. A run now counts when it reaches the horizon (06z/18z: 144 h),
+  so the forecast updates four times a day instead of twice.
+- **The chunk decoder frees its buffers when a load fails,** not only
+  when it succeeds.
+- **Tile-store totals stay correct** when a tile is written again, when a
+  save overlaps another, and when the plugin stops (the totals are saved
+  before a restart starts the plugin again).
+
 ## [0.1.1] - 2026-10-05
 
 ### Changed

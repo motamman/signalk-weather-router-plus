@@ -12,7 +12,7 @@ import * as path from 'node:path';
 import { type BBox } from '../../geo/geodesy';
 import { HarmonicCurrentSource } from '../../currents/harmonic';
 import { CurrentStack } from '../../currents/stack';
-import { loadRtofsSteps, RtofsCurrentSource, type RtofsRun, rtofsRunFor } from '../../currents/rtofs';
+import { loadRtofsSteps, RtofsCurrentSource, type RtofsRun, rtofsRunFor, shareRtofsSteps } from '../../currents/rtofs';
 import { type CurrentSourceLike } from '../../currents/types';
 import {
   alignedSteps,
@@ -258,8 +258,19 @@ export function loadHarmonic(st: WorkerState, dir: string | null): void {
   }
 }
 
+/** data worker → main → route and tiles workers: the RTOFS run (shared memory, no copy). */
+export function sendRtofs(st: WorkerState): void {
+  if (st.role === 'data') st.send({ type: 'rtofs', rtofs: st.rtofs ? st.rtofs.serialize() : null });
+}
+
+/**
+ * Data worker: load the newest RTOFS run (network, else the disk cache) into
+ * shared memory and relay it. The route and tiles workers do not load RTOFS
+ * themselves: they adopt the data worker's run ('rtofs' message).
+ */
 export async function refreshRtofs(st: WorkerState, networkAllowed: boolean): Promise<void> {
   const { config: cfg } = requireInit(st);
+  if (st.role !== 'data') return;
   if (!cfg.currents.rtofsEnabled || !st.rtofsClient) return;
   const horizon = cfg.currents.rtofsHorizonS;
   let run: RtofsRun | null;
@@ -292,8 +303,9 @@ export async function refreshRtofs(st: WorkerState, networkAllowed: boolean): Pr
     if (steps.length === 0) throw new Error(`run ${run.yyyymmdd} has no steps in product ${st.rtofsClient.region}`);
     const g = steps[0].u;
     const extent = { south: g.lat0, west: g.lon0, north: g.lat0 + (g.nLat - 1) * g.dLat, east: g.lon0 + (g.nLon - 1) * g.dLon };
-    st.rtofs = new RtofsCurrentSource(`RTOFS-${st.rtofsClient.region}`, run.time.getTime(), extent, steps);
+    st.rtofs = new RtofsCurrentSource(`RTOFS-${st.rtofsClient.region}`, run.time.getTime(), extent, shareRtofsSteps(steps));
     rebuildStack(st);
+    sendRtofs(st);
     st.log(
       'info',
       `rtofs: run ${run.yyyymmdd}, ${steps.length} steps, ${(st.rtofs.bytes() / 1e6).toFixed(1)} MB resident, ${((Date.now() - t) / 1000).toFixed(1)} s`

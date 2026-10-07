@@ -28,8 +28,18 @@ export function polygonBytes(s: ShapePolygon): number {
   return b;
 }
 
-/** Default budget per thread. The largest GSHHG full-resolution ring (Eurasia) is about 30 MB. */
-export const POLYGON_CACHE_DEFAULT_BYTES = 128 * 1024 * 1024;
+/**
+ * Budget per thread. Small on purpose: every worker has its own cache, and
+ * a 128 MB budget per worker let the caches hold 105 MB together on brain
+ * (2026-10-06).
+ */
+export const POLYGON_CACHE_DEFAULT_BYTES = 24 * 1024 * 1024;
+/**
+ * Records larger than this are decoded, used and dropped, never kept: the
+ * continents (13–30 MB each in GSHHG full resolution) would take the whole
+ * budget, and every worker kept its own copy.
+ */
+export const POLYGON_CACHE_MAX_RECORD_BYTES = 2 * 1024 * 1024;
 
 interface Entry {
   shape: ShapePolygon;
@@ -44,7 +54,10 @@ export class PolygonCache {
   decodes = 0;
   evictions = 0;
 
-  constructor(readonly budgetBytes: number = POLYGON_CACHE_DEFAULT_BYTES) {}
+  constructor(
+    readonly budgetBytes: number = POLYGON_CACHE_DEFAULT_BYTES,
+    readonly maxRecordBytes: number = POLYGON_CACHE_MAX_RECORD_BYTES
+  ) {}
 
   private key(path: string, recordNumber: number): string {
     return `${path}#${recordNumber}`;
@@ -61,6 +74,7 @@ export class PolygonCache {
 
   private put(k: string, shape: ShapePolygon): void {
     const bytes = polygonBytes(shape);
+    if (bytes > this.maxRecordBytes) return; // too big to keep (see POLYGON_CACHE_MAX_RECORD_BYTES)
     const old = this.entries.get(k);
     if (old) {
       this.entries.delete(k);

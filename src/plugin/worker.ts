@@ -37,27 +37,57 @@ import { OnDemandLand } from '../geo/landcache';
 import { PolarDiagram } from '../vessel/polar';
 import { HarmonicCurrentSource } from '../currents/harmonic';
 import { CurrentStack } from '../currents/stack';
-import { RtofsClient } from '../currents/rtofs';
+import { RtofsClient, RtofsCurrentSource, rtofsForRegion } from '../currents/rtofs';
 import { SmocCurrentSource } from '../currents/smoc';
 import { TideSource } from '../tides/sealevel';
 import { type MainToWorker, type WorkerRole, type WorkerToMain } from './protocol';
 import { requireInit } from './worker/state';
 import { refreshForecast } from './worker/forecast';
 import { prepareWaterGrid } from './worker/landgrid';
-import { loadHarmonic, makeSmocClient, rebuildStack, refreshRtofs, refreshSmoc, sendCurrents, sendSmoc } from './worker/currents';
+import {
+  loadHarmonic,
+  makeSmocClient,
+  rebuildStack,
+  refreshRtofs,
+  refreshSmoc,
+  sendCurrents,
+  sendRtofs,
+  sendSmoc,
+} from './worker/currents';
 import { makeSeaLevelClient, refreshTides, tideSettings } from './worker/tides';
 import { refreshRegional } from './worker/regional';
 import { route } from './worker/route';
 import { dataStatus, query } from './worker/query';
 import type { WorkerState } from './worker/state';
 
-if (!parentPort) throw new Error('worker.ts must run as a worker thread');
-const port = parentPort;
-const role: WorkerRole = workerData.role as WorkerRole;
+/**
+ * The parent: a worker thread's port (data, route), or the IPC channel of a
+ * child process (tiles: the prebuilder runs tile building in separate
+ * processes that exit when a walk is done, so their memory goes back to the
+ * system; see prebuild.ts). Same messages either way.
+ */
+interface ParentChannel {
+  postMessage(m: WorkerToMain): void;
+  on(event: 'message', fn: (m: MainToWorker) => void): void;
+}
+function childProcessChannel(): ParentChannel {
+  if (typeof process.send !== 'function') throw new Error('worker.ts must run as a worker thread or a forked child process');
+  // The parent is gone (plugin stopped, Signal K exited): nothing left to work for.
+  process.on('disconnect', () => process.exit(0));
+  return {
+    postMessage: m => {
+      if (process.connected) process.send!(m);
+    },
+    on: (_event, fn) => process.on('message', fn as (m: unknown) => void),
+  };
+}
+const port: ParentChannel = parentPort ?? childProcessChannel();
+const role: WorkerRole = parentPort ? (workerData.role as WorkerRole) : ((process.env.WRP_WORKER_ROLE as WorkerRole) ?? 'tiles');
 const send = (m: WorkerToMain): void => port.postMessage(m);
 const st: WorkerState = {
   role,
-  cancelFlag: new Int32Array(workerData.cancelFlag as SharedArrayBuffer),
+  // A child process has no shared memory with the parent; nothing cancels tile queries through the flag.
+  cancelFlag: new Int32Array(parentPort ? (workerData.cancelFlag as SharedArrayBuffer) : new SharedArrayBuffer(4)),
   send,
   log: (level, message) => send({ type: 'log', level, message: `[${role}] ${message}` }),
   config: null,
@@ -211,6 +241,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
           await refreshSmoc(st);
         }
         await refreshRtofs(st, st.role === 'data');
+        sendRtofs(st); // off, another region or the same run again: the other workers follow the data worker
         sendCurrents(st);
         st.log(
           'info',
@@ -268,6 +299,16 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
         'info',
         `currents: adopted ${st.harmonic.length} tidal-harmonic source(s) from the data worker (${(st.harmonic.reduce((a, s) => a + s.blockBytes(), 0) / 1e6).toFixed(1)} MB shared, no copy)`
       );
+      return;
+    }
+    case 'rtofs': {
+      // Route / tiles worker: the data worker's RTOFS run (shared memory).
+      if (st.role === 'data') return;
+      const cur = requireInit(st).config.currents;
+      const run = rtofsForRegion(msg.rtofs, cur.rtofsEnabled, cur.rtofsRegion);
+      st.rtofs = run ? RtofsCurrentSource.fromSerialized(run) : null;
+      rebuildStack(st);
+      sendCurrents(st);
       return;
     }
     case 'smoc': {

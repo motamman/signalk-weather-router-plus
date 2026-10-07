@@ -242,7 +242,7 @@ export async function ensureGshhg(dataDir: string, log: (msg: string) => void, o
   fs.rmSync(zip, { force: true });
   const shp = gshhgInstalled(dataDir);
   if (!shp) throw new Error('coastline extraction incomplete');
-  log(`coastline: GSHHG full-resolution levels 1–4 ready at ${shp}`);
+  log(`coastline: GSHHG full-resolution levels 1–4 ready in ${path.dirname(shp)}`);
   return shp;
 }
 

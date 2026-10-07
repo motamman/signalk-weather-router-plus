@@ -15,16 +15,25 @@
  * generation), a new hour, a boat move of more than a kilometre, a new
  * view or a settings change starts the walk again from the top.
  *
- * Priority: the workers are separate threads, so the map's own queries
+ * Priority: the builders are separate processes, so the map's own queries
  * (data worker) and routes (route worker) never queue behind them; no new
  * tile is started while a route runs or the data worker has map queries
  * waiting.
+ *
+ * Builders are child processes (not worker threads), started when the walk
+ * has a tile to build and stopped when it is complete. A thread's memory,
+ * freed, stays with Signal K's process until it restarts; a child process
+ * gives all of it back when it exits (brain, 2026-10-06: the two tile
+ * threads held 95–110 MB of buffers each and kept them after the walk; a
+ * map session added 350 MB that stayed). Shared memory does not cross
+ * processes, so the current, tide and harmonic data relayed to a builder
+ * are copies (unshared()), freed with the process.
  */
 
 import * as fs from 'node:fs';
 import { DEG, M_PER_DEG, HOUR_MS } from '../geo/units';
 import * as path from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { fork, type ChildProcess } from 'node:child_process';
 import type { MainToWorker, VesselPosition, WorkerToMain } from './protocol';
 import { PRESSURE_TILE_ZOOM } from './tilejoin';
 import {
@@ -56,6 +65,10 @@ export const PREBUILD_LAYERS: readonly TileLayer[] = [
 ];
 
 const QUERY_TIMEOUT_MS = 120_000;
+/** A builder that has not reported ready within this long is stopped (its start-up failed). */
+const READY_TIMEOUT_MS = 60_000;
+/** After a builder failed to start, no new one is started for this long (a lasting error does not respawn in a loop). */
+const START_RETRY_MS = 5 * 60_000;
 /** A view is the deepest zoom the page asked for within this long. */
 const VIEW_WINDOW_MS = 5_000;
 /** Consecutive errors after which a layer is left out until the walk restarts. */
@@ -76,7 +89,6 @@ export interface PrebuildDeps {
   /** Worker script and its exec args (index.ts startWorker). */
   workerPath: string;
   execArgv: string[];
-  cancelFlag: SharedArrayBuffer;
   /** init for a new tiles worker. */
   initMessage: () => MainToWorker;
   /** What a new tiles worker must adopt: forecast, SMOC, harmonics, tide run, a refresh. */
@@ -101,8 +113,10 @@ interface Area {
 }
 
 interface TilesWorker {
-  worker: Worker;
+  proc: ChildProcess;
   ready: boolean;
+  /** Stopped on purpose (walk complete, plugin stopped): its exit is not an error and it is not replaced. */
+  retiring: boolean;
   /** Query in flight. */
   pending: {
     id: number;
@@ -136,6 +150,51 @@ export interface PrebuildStatus {
   build_ms_avg: number | null;
 }
 
+/**
+ * A copy of a message with every SharedArrayBuffer-backed typed array
+ * replaced by a plain copy: shared memory cannot be sent to another
+ * process. The same source array gives the same copy (an area's `u` and
+ * `data.utotal` stay one array).
+ */
+export function unshared<T>(v: T, memo = new Map<unknown, unknown>()): T {
+  if (v === null || typeof v !== 'object') return v;
+  if (memo.has(v)) return memo.get(v) as T;
+  if (ArrayBuffer.isView(v)) {
+    let out: unknown = v;
+    if (v.buffer instanceof SharedArrayBuffer) {
+      if (v instanceof DataView) {
+        // No slice(): copy its bytes into a plain buffer.
+        const bytes = new Uint8Array(v.byteLength);
+        bytes.set(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+        out = new DataView(bytes.buffer);
+      } else if (Buffer.isBuffer(v)) {
+        out = Buffer.from(v); // Buffer.slice() is a view on the same memory; Buffer.from copies
+      } else {
+        out = (v as unknown as { slice: () => unknown }).slice(); // a typed array's slice() copies into a plain buffer
+      }
+    }
+    memo.set(v, out);
+    return out as T;
+  }
+  if (Array.isArray(v)) {
+    const out: unknown[] = [];
+    memo.set(v, out);
+    for (const x of v) out.push(unshared(x, memo));
+    return out as T;
+  }
+  if (v instanceof Map) {
+    const out = new Map();
+    memo.set(v, out);
+    for (const [k, x] of v) out.set(k, unshared(x, memo));
+    return out as T;
+  }
+  if (Object.getPrototypeOf(v) !== Object.prototype) return v; // Date and the like: sent as they are
+  const out: Record<string, unknown> = {};
+  memo.set(v, out);
+  for (const [k, x] of Object.entries(v)) out[k] = unshared(x, memo);
+  return out as T;
+}
+
 function hourIso(ms: number): string {
   return new Date(ms).toISOString().slice(0, 13) + 'Z';
 }
@@ -159,6 +218,10 @@ export class TilePrebuilder {
   private complete = false;
   private paused = false;
   private timer: NodeJS.Timeout | null = null;
+  /** The walk's next tile, taken before a builder was free to build it. */
+  private peeked: { t: TileId; area: Area } | null = null;
+  /** No new builder before this time (a builder failed to start). */
+  private noStartUntil = 0;
   private boat: VesselPosition | null = null;
   private readonly recent: { z: number; x: number; y: number; at: number }[] = [];
   private areas: Area[] = [];
@@ -176,7 +239,7 @@ export class TilePrebuilder {
   start(): void {
     this.stopped = false;
     if (!this.settings.enabled) return;
-    for (let i = 0; i < this.settings.workers; i++) this.spawn();
+    // Builders are started when the walk has a tile for them (pump).
     this.schedule(1000);
   }
 
@@ -184,22 +247,43 @@ export class TilePrebuilder {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    for (const w of this.workers) {
-      if (w.pending) {
-        clearTimeout(w.pending.timer);
-        w.pending.reject(new Error('stopped'));
-      }
-      w.worker.postMessage({ type: 'shutdown' } as MainToWorker);
-      const ww = w.worker;
-      setTimeout(() => void ww.terminate(), 2000);
-    }
+    this.peeked = null;
+    for (const w of [...this.workers]) this.retire(w, 'stopped');
     this.workers = [];
   }
 
-  /** Forward a message to every tiles worker (forecast, SMOC, harmonics, tide run, config, refresh). */
+  /** Send a message to a builder process (shared memory copied). */
+  private post(h: TilesWorker, msg: MainToWorker): void {
+    if (!h.proc.connected) return;
+    try {
+      h.proc.send(unshared(msg));
+    } catch (err) {
+      this.deps.error(`tiles builder: could not send ${msg.type}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Stop a builder on purpose: shut down, killed after 2 s; a query in flight is rejected. */
+  private retire(h: TilesWorker, why: string): void {
+    h.retiring = true;
+    if (h.pending) {
+      clearTimeout(h.pending.timer);
+      const p = h.pending;
+      h.pending = null;
+      p.reject(new Error(why));
+    }
+    this.post(h, { type: 'shutdown' } as MainToWorker);
+    const proc = h.proc;
+    setTimeout(() => {
+      if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+    }, 2000);
+    const i = this.workers.indexOf(h);
+    if (i >= 0) this.workers.splice(i, 1);
+  }
+
+  /** Forward a message to every builder (forecast, SMOC, harmonics, RTOFS, tide run, config, refresh). */
   broadcast(msg: MainToWorker): void {
     if (msg.type !== 'config' && msg.type !== 'refresh') this.broadcastLog.set(msg.type, msg);
-    for (const w of this.workers) if (w.ready) w.worker.postMessage(msg);
+    for (const w of this.workers) if (w.ready) this.post(w, msg);
   }
 
   /** The page asked for this tile (view inference). */
@@ -224,38 +308,50 @@ export class TilePrebuilder {
   }
 
   private spawn(): void {
-    const worker = new Worker(this.deps.workerPath, {
-      workerData: { cancelFlag: this.deps.cancelFlag, role: 'tiles' },
+    const proc = fork(this.deps.workerPath, [], {
       execArgv: this.deps.execArgv,
+      env: { ...process.env, WRP_WORKER_ROLE: 'tiles' },
+      serialization: 'advanced',
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     });
-    const h: TilesWorker = { worker, ready: false, pending: null };
+    const h: TilesWorker = { proc, ready: false, retiring: false, pending: null };
     this.workers.push(h);
-    worker.on('message', (m: WorkerToMain) => this.onMessage(h, m));
-    worker.on('error', err => this.deps.error(`tiles worker error: ${err.message}`));
-    worker.on('exit', code => {
+    // Start-up failed (e.g. its init threw): it would hold its slot for good and no replacement would start.
+    const readyTimer = setTimeout(() => {
+      if (h.ready || h.retiring) return;
+      this.deps.error(
+        `tiles builder did not start within ${READY_TIMEOUT_MS / 1000} s; stopped, next attempt in ${START_RETRY_MS / 60_000} min`
+      );
+      this.noStartUntil = Date.now() + START_RETRY_MS;
+      this.retire(h, 'did not start');
+      this.schedule(START_RETRY_MS);
+    }, READY_TIMEOUT_MS);
+    proc.on('exit', () => clearTimeout(readyTimer));
+    proc.on('message', (m: WorkerToMain) => this.onMessage(h, m));
+    proc.on('error', err => this.deps.error(`tiles builder error: ${err.message}`));
+    proc.on('exit', (code, signal) => {
       const i = this.workers.indexOf(h);
-      if (i < 0) return; // stopped
-      this.workers.splice(i, 1);
+      if (i >= 0) this.workers.splice(i, 1);
       if (h.pending) {
         clearTimeout(h.pending.timer);
-        h.pending.reject(new Error(`tiles worker exited with code ${code}`));
+        const p = h.pending;
+        h.pending = null;
+        p.reject(new Error(`tiles builder exited (${code ?? signal})`));
       }
-      if (!this.stopped) {
-        this.deps.error(`tiles worker exited with code ${code}; restarting in 5 s`);
-        setTimeout(() => {
-          if (!this.stopped && this.workers.length < this.settings.workers) this.spawn();
-        }, 5000);
-      }
+      if (h.retiring || this.stopped) return;
+      // Died on its own: the walk starts another builder when it next has a tile.
+      this.deps.error(`tiles builder exited (${code ?? signal}); a new one is started in 5 s`);
+      this.schedule(5000);
     });
-    worker.postMessage(this.deps.initMessage());
+    this.post(h, this.deps.initMessage());
   }
 
   private onMessage(h: TilesWorker, m: WorkerToMain): void {
     switch (m.type) {
       case 'ready': {
         h.ready = true;
-        for (const msg of this.deps.replayMessages()) h.worker.postMessage(msg);
-        for (const msg of this.broadcastLog.values()) h.worker.postMessage(msg);
+        for (const msg of this.deps.replayMessages()) this.post(h, msg);
+        for (const msg of this.broadcastLog.values()) this.post(h, msg);
         this.schedule(0);
         return;
       }
@@ -292,11 +388,11 @@ export class TilePrebuilder {
         // cancelled: restart the worker (its exit handler rejects this query
         // and starts a new one), so the worker count stays the cap.
         if (h.pending?.id !== id) return;
-        this.deps.error(`tiles worker: tile query timed out after ${QUERY_TIMEOUT_MS / 1000} s; restarting the worker`);
-        void h.worker.terminate();
+        this.deps.error(`tiles builder: tile query timed out after ${QUERY_TIMEOUT_MS / 1000} s; restarting the builder`);
+        h.proc.kill('SIGKILL');
       }, QUERY_TIMEOUT_MS);
       h.pending = { id, resolve, reject, timer };
-      h.worker.postMessage({ type: 'query', id, kind, args } as MainToWorker);
+      this.post(h, { type: 'query', id, kind, args } as MainToWorker);
     });
   }
 
@@ -388,6 +484,7 @@ export class TilePrebuilder {
     this.window = lasts.length ? { fromMs, toMs } : null;
     this.walk = lasts.length ? this.tiles(this.areas, layers, fromMs, windowEnd) : null;
     this.walkKey = key;
+    this.peeked = null;
     this.walkStartedAt = now;
     this.counts = { seen: 0, built: 0, skipped: 0, notKept: 0, errors: 0 };
     this.layerErrors.clear();
@@ -430,9 +527,9 @@ export class TilePrebuilder {
         this.schedule(500);
         return;
       }
-      for (const h of this.workers) {
-        if (!h.ready || h.pending) continue;
-        const item = await this.next();
+      for (;;) {
+        const item = this.peeked ?? (await this.next());
+        this.peeked = null;
         if (!item) {
           if (!this.complete && this.walk) {
             this.complete = true;
@@ -442,8 +539,17 @@ export class TilePrebuilder {
           }
           break;
         }
+        const h = this.workers.find(w => w.ready && !w.pending);
+        if (!h) {
+          // No free builder: keep the tile, start a builder if fewer than the setting are running.
+          this.peeked = item;
+          if (this.workers.length < this.settings.workers && Date.now() >= this.noStartUntil) this.spawn();
+          break;
+        }
         void this.build(h, item);
       }
+      // Walk complete (or nothing to walk): idle builders exit and give their memory back.
+      if (this.complete || !this.walk) for (const h of this.workers.filter(w => !w.pending)) this.retire(h, 'walk complete');
     } finally {
       this.pumping = false;
     }
