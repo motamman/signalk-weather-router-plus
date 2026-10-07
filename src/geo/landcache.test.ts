@@ -332,3 +332,15 @@ test('PolygonCache stays under its budget and still lists everything', () => {
   });
   assert.deepEqual(streamed.raster, all.raster);
 });
+
+test('shorelinePaths keeps the case of the .shp suffix when it adds levels 2–4', async () => {
+  const { shorelinePaths } = await import('./shapefile');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-gshhs-'));
+  for (let l = 1; l <= 4; l++) fs.writeFileSync(path.join(dir, `GSHHS_f_L${l}.SHP`), '');
+  const out = shorelinePaths([path.join(dir, 'GSHHS_f_L1.SHP')]);
+  assert.deepEqual(
+    out.map(f => path.basename(f)),
+    ['GSHHS_f_L1.SHP', 'GSHHS_f_L2.SHP', 'GSHHS_f_L3.SHP', 'GSHHS_f_L4.SHP']
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
+});

@@ -51,7 +51,7 @@ export function shorelinePaths(files: string[]): string[] {
   for (const file of files) {
     if (/^GSHHS_[fhilc]_L[1-4]\.shp$/i.test(path.basename(file))) {
       for (let level = 1; level <= 4; level++) {
-        const sibling = file.replace(/_L[1-4]\.shp$/i, `_L${level}.shp`);
+        const sibling = file.replace(/_L[1-4](\.shp)$/i, `_L${level}$1`);
         if (!fs.existsSync(sibling))
           throw new Error(
             `Incomplete GSHHG hierarchy: missing ${sibling}; supply levels 1–4 or clear the coastline setting to download them`

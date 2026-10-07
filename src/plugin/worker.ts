@@ -37,7 +37,7 @@ import { OnDemandLand } from '../geo/landcache';
 import { PolarDiagram } from '../vessel/polar';
 import { HarmonicCurrentSource } from '../currents/harmonic';
 import { CurrentStack } from '../currents/stack';
-import { RtofsClient, RtofsCurrentSource } from '../currents/rtofs';
+import { RtofsClient, RtofsCurrentSource, rtofsForRegion } from '../currents/rtofs';
 import { SmocCurrentSource } from '../currents/smoc';
 import { TideSource } from '../tides/sealevel';
 import { type MainToWorker, type WorkerRole, type WorkerToMain } from './protocol';
@@ -304,7 +304,9 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
     case 'rtofs': {
       // Route / tiles worker: the data worker's RTOFS run (shared memory).
       if (st.role === 'data') return;
-      st.rtofs = msg.rtofs && requireInit(st).config.currents.rtofsEnabled ? RtofsCurrentSource.fromSerialized(msg.rtofs) : null;
+      const cur = requireInit(st).config.currents;
+      const run = rtofsForRegion(msg.rtofs, cur.rtofsEnabled, cur.rtofsRegion);
+      st.rtofs = run ? RtofsCurrentSource.fromSerialized(run) : null;
       rebuildStack(st);
       sendCurrents(st);
       return;

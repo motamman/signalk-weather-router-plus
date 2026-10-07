@@ -49,7 +49,7 @@ import type {
   WorkerToMain,
 } from './plugin/protocol';
 import type { SerializedSmoc } from './currents/smoc';
-import type { SerializedRtofs } from './currents/rtofs';
+import { rtofsForRegion, type SerializedRtofs } from './currents/rtofs';
 import type { SerializedHarmonic } from './currents/harmonic';
 
 const PLUGIN_ID = 'signalk-weather-router-plus';
@@ -551,6 +551,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
         return;
       case 'rtofs':
         if (role === 'data') {
+          // A run loaded for a region the settings have since replaced is dropped here (and by the workers).
+          if (msg.rtofs && !(config && rtofsForRegion(msg.rtofs, config.currents.rtofsEnabled, config.currents.rtofsRegion))) return;
           rtofsShared = msg.rtofs;
           pool.post('route', { type: 'rtofs', rtofs: msg.rtofs });
           prebuilder?.broadcast({ type: 'rtofs', rtofs: msg.rtofs });

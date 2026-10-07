@@ -8,8 +8,9 @@
   processes that hand their memory back when they finish: building map
   tiles ahead of time, deleting old tiles after a new forecast, and
   decoding regional GRIB files. RTOFS currents are loaded once instead of
-  once per worker. On the test Pi, the tile builders handing back their
-  memory took Signal K from 1.4 GB to 820 MB.
+  once per worker. On the test Pi, when the tile builders finished and handed back
+  their memory, Signal K and the builders together went from 1.4 GB to
+  820 MB.
 - **Fresher forecasts.** The 06z and 18z ECMWF runs were being skipped
   with some forecast horizons; the plugin now picks up a new forecast
   four times a day.

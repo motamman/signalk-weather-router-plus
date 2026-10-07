@@ -1031,8 +1031,9 @@ started when the walk has a tile to build and exit when it is complete,
 so the memory they used goes back to the system (a thread's memory stays
 with Signal K until it restarts). While they run, each holds its own copy
 of the current, tide and RTOFS data. Folders of tiles made obsolete by a
-new forecast, currents run or tide run are deleted by a short-lived
-child process, not by Signal K's main thread. The boat's last position is kept in `last-position.json` in
+new forecast, currents run or tide run are normally deleted by a
+short-lived child process; if that process cannot run, the deletion
+falls back to Signal K's own process. The boat's last position is kept in `last-position.json` in
 the plugin data directory, so the boat's area is known after a restart
 before a fix arrives.
 

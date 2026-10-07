@@ -134,3 +134,12 @@ test('harmonic: one point at a new time equals the full-grid prediction', { skip
     }
   }
 });
+
+test('rtofs: a relayed run is used only for the configured region, and only when RTOFS is on', async () => {
+  const { rtofsForRegion } = await import('./rtofs');
+  const run = { name: 'RTOFS-west_atl', runMs: 0, bbox: { south: 0, west: 0, north: 1, east: 1 }, steps: [] };
+  assert.equal(rtofsForRegion(run, true, 'west_atl'), run);
+  assert.equal(rtofsForRegion(run, true, 'alaska'), null, 'a run loaded before a region change is dropped');
+  assert.equal(rtofsForRegion(run, false, 'west_atl'), null);
+  assert.equal(rtofsForRegion(null, true, 'west_atl'), null);
+});

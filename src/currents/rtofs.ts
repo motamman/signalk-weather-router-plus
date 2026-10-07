@@ -244,6 +244,15 @@ export function shareRtofsSteps(steps: RtofsStep[]): RtofsStep[] {
   return steps.map(s => ({ validMs: s.validMs, u: share(s.u), v: share(s.v) }));
 }
 
+/**
+ * The relayed run when it is the configured product's, else null: a run
+ * loaded before a currents settings change (another region) can still
+ * arrive after it and must not be used.
+ */
+export function rtofsForRegion(s: SerializedRtofs | null, enabled: boolean, region: string): SerializedRtofs | null {
+  return s && enabled && s.name === `RTOFS-${region}` ? s : null;
+}
+
 export interface SerializedRtofs {
   name: string;
   runMs: number;

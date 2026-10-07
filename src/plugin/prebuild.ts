@@ -65,6 +65,10 @@ export const PREBUILD_LAYERS: readonly TileLayer[] = [
 ];
 
 const QUERY_TIMEOUT_MS = 120_000;
+/** A builder that has not reported ready within this long is stopped (its start-up failed). */
+const READY_TIMEOUT_MS = 60_000;
+/** After a builder failed to start, no new one is started for this long (a lasting error does not respawn in a loop). */
+const START_RETRY_MS = 5 * 60_000;
 /** A view is the deepest zoom the page asked for within this long. */
 const VIEW_WINDOW_MS = 5_000;
 /** Consecutive errors after which a layer is left out until the walk restarts. */
@@ -204,6 +208,8 @@ export class TilePrebuilder {
   private timer: NodeJS.Timeout | null = null;
   /** The walk's next tile, taken before a builder was free to build it. */
   private peeked: { t: TileId; area: Area } | null = null;
+  /** No new builder before this time (a builder failed to start). */
+  private noStartUntil = 0;
   private boat: VesselPosition | null = null;
   private readonly recent: { z: number; x: number; y: number; at: number }[] = [];
   private areas: Area[] = [];
@@ -298,6 +304,17 @@ export class TilePrebuilder {
     });
     const h: TilesWorker = { proc, ready: false, retiring: false, pending: null };
     this.workers.push(h);
+    // Start-up failed (e.g. its init threw): it would hold its slot for good and no replacement would start.
+    const readyTimer = setTimeout(() => {
+      if (h.ready || h.retiring) return;
+      this.deps.error(
+        `tiles builder did not start within ${READY_TIMEOUT_MS / 1000} s; stopped, next attempt in ${START_RETRY_MS / 60_000} min`
+      );
+      this.noStartUntil = Date.now() + START_RETRY_MS;
+      this.retire(h, 'did not start');
+      this.schedule(START_RETRY_MS);
+    }, READY_TIMEOUT_MS);
+    proc.on('exit', () => clearTimeout(readyTimer));
     proc.on('message', (m: WorkerToMain) => this.onMessage(h, m));
     proc.on('error', err => this.deps.error(`tiles builder error: ${err.message}`));
     proc.on('exit', (code, signal) => {
@@ -514,7 +531,7 @@ export class TilePrebuilder {
         if (!h) {
           // No free builder: keep the tile, start a builder if fewer than the setting are running.
           this.peeked = item;
-          if (this.workers.length < this.settings.workers) this.spawn();
+          if (this.workers.length < this.settings.workers && Date.now() >= this.noStartUntil) this.spawn();
           break;
         }
         void this.build(h, item);
