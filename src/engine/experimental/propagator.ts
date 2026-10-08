@@ -38,7 +38,7 @@ import type { PolarDiagram } from '../../vessel/polar';
 import type { VesselParams } from '../../vessel/vessel';
 import { NoCurrent, NoWind, type CurrentSource, type WindSource } from '../environment';
 import { RouteError } from '../errors';
-import { simulateLegTime, type SimOptions } from '../legsim';
+import { simulateLegTime, type LegSimResult, type SimOptions } from '../legsim';
 import { enrichLegRanges, enrichWaypoints, OceanPropagator } from '../propagator';
 import { recomputePerWaypointMetadata, type Route, type Waypoint } from '../route';
 import type { ComputeRouteArgs, PropagatorOptions } from '../search/types';
@@ -187,16 +187,18 @@ export class ExperimentalPropagator {
     const stepTo = (h: number, d: number, tack: boolean): Waypoint | null => {
       const [tLon, tLat] = projectAlongBearing(at.lon, at.lat, h, d);
       if (this.land.legCrossesLandExact(at.lon, at.lat, tLon, tLat)) return null;
-      const s = this.sailable(at, tLon, tLat, env);
-      if (s === null) return null;
+      const r = this.sailable(at, tLon, tLat, env);
+      if (r === null) return null;
+      // Mode and mixed-mode split as tryTimeLeg records them, so the totals book motored time as motoring.
       const p: Waypoint = {
         lon: tLon,
         lat: tLat,
-        time: new Date(at.time.getTime() + (s + (tack ? TACK_PENALTY_S : 0)) * 1000),
+        time: new Date(at.time.getTime() + (r.seconds + (tack ? TACK_PENALTY_S : 0)) * 1000),
         sogMs: 0,
         cogDeg: 0,
-        mode: 'sailing',
+        mode: r.dominantMode === 'sailing' ? 'sailing' : 'motoring',
       };
+      if (r.sailingSeconds > 0 && r.motoringSeconds > 0) p.arrivingSplit = [r.sailingSeconds, r.motoringSeconds];
       if (tack) p.tack = true;
       return p;
     };
@@ -266,9 +268,9 @@ export class ExperimentalPropagator {
     );
   }
 
-  /** Seconds to sail a straight sub-leg from a waypoint (at its time) with the real polar, or null when it cannot be sailed. */
-  private sailable(from: Waypoint, toLon: number, toLat: number, env: Env): number | null {
+  /** The real polar's timing of a straight sub-leg from a waypoint (at its time), or null when it cannot be sailed. */
+  private sailable(from: Waypoint, toLon: number, toLat: number, env: Env): LegSimResult | null {
     const r = simulateLegTime(from.lon, from.lat, from.time, toLon, toLat, env.vessel, env.polar, env.wind, env.current, env.sim);
-    return Number.isFinite(r.seconds) && r.seconds > 0 ? r.seconds : null;
+    return Number.isFinite(r.seconds) && r.seconds > 0 ? r : null;
   }
 }
