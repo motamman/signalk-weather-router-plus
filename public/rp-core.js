@@ -1158,6 +1158,20 @@ function _noteWaiting(s) {
     window.dispatchEvent(new Event('rp:forecast-ready'));
   }
 }
+// ─────────── One section open at a time ───────────
+// The <details> sections directly inside `container` behave as an
+// accordion: opening one closes the others. `toggle` does not bubble, so
+// it is caught in the capture phase on the container (works for sections
+// rendered later too).
+export function oneOpenAtATime(container) {
+  if (!container) return;
+  container.addEventListener('toggle', e => {
+    const d = e.target;
+    if (!d || d.tagName !== 'DETAILS' || !d.open || d.parentElement !== container) return;
+    for (const other of container.querySelectorAll(':scope > details[open]')) if (other !== d) other.open = false;
+  }, true);
+}
+
 // ─────────── Plugin status (header line + Forecast data section) ───────────
 export function loadPluginStatus() {
   const el = document.getElementById('dataStatus');

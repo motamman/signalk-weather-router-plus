@@ -9,7 +9,7 @@
 // Inputs show values in the Signal K user's unit preferences;
 // conversion happens here, the server only ever sees SI.
 
-import { API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSING, unitTextHtml } from './rp-core.js';
+import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSING, unitTextHtml } from './rp-core.js';
 (function () {
   const form = document.getElementById('srvSettingsForm');
   const saveBtn = document.getElementById('srvSettingsSave');
@@ -17,6 +17,7 @@ import { API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSING, unitTextHtml
   const dirtyEl = document.getElementById('srvSettingsDirty');
   const statusEl = document.getElementById('srvSettingsStatus');
   if (!form || !saveBtn || !revertBtn || !statusEl) return;
+  oneOpenAtATime(form); // one group open at a time (the groups are rendered into the form later; the listener is on the form)
 
   let schema = null;      // {groups, settings}
   let values = null;      // last saved values (SI), nested
@@ -114,7 +115,7 @@ import { API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSING, unitTextHtml
     for (const g of schema.groups) {
       const specs = byGroup[g.id] || [];
       if (!specs.length) continue;
-      html += '<details class="subsection" open><summary>' + esc(g.label) + '</summary><div class="subsection-body">';
+      html += '<details class="subsection"><summary>' + esc(g.label) + '</summary><div class="subsection-body">';
       if (g.help) html += '<div class="ctl-hint">' + unitTextHtml(g.help) + '</div>';
       for (const s of specs) {
         const id = 'st_' + s.key.replace(/\./g, '_');

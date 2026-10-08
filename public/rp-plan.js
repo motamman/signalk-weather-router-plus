@@ -4,7 +4,7 @@
 // result strip, itinerary, route library, waypoint and conditions popups,
 // Live mode with the Signal K vessel.
 
-import { _apiErrorText, _fmt, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, KT_MS, loadPluginStatus, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
+import { oneOpenAtATime, _apiErrorText, _fmt, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, KT_MS, loadPluginStatus, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { _overlayTimeIso, centreOnVesselOnce, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats } from './rp-layers.js';
 
@@ -1411,6 +1411,8 @@ const modalLog = document.getElementById('modalLog');
 const modalItinerary = document.getElementById('modalItinerary');
 const modalStatus = document.getElementById('modalStatus');
 const cancelBtn = document.getElementById('cancelRoute');
+// Which Route sub-tab is showing (set by the sub-tab code below; read by showTab to redraw the polar on Options).
+let _routeGroup = 'plan';
 const TAB_IDS = ['routeSection', 'layersSection', 'savedSection', 'logSection', 'itinerarySection', 'srvSettingsSection'];
 function showTab(id) {
   if (!TAB_IDS.includes(id)) return;
@@ -1438,7 +1440,6 @@ document.querySelectorAll('#tabBar button').forEach(b => {
 
 // Route sub-tabs: Plan (the request and its result) or Options (this
 // browser's choices for every route it asks for). Remembered per browser.
-let _routeGroup = 'plan';
 (function () {
   const row = document.getElementById('routeSubTabs');
   if (!row) return;
@@ -1450,6 +1451,10 @@ let _routeGroup = 'plan';
     try { localStorage.setItem('rp:routeTab', id); } catch (_) {}
     if (id === 'options') drawPolarDiagram();
   }
+  // The polar diagram draws into a canvas that has no size while Vessel is closed: draw when it opens.
+  document.getElementById('vesselSection')?.addEventListener('toggle', e => { if (e.target.open) drawPolarDiagram(); });
+  // One Options section open at a time.
+  oneOpenAtATime(document.querySelector('#routeSection .route-group[data-group="options"]'));
   row.querySelectorAll('button').forEach(b => b.addEventListener('click', () => show(b.dataset.group)));
   let saved = null;
   try { saved = localStorage.getItem('rp:routeTab'); } catch (_) {}
