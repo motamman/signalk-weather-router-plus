@@ -404,7 +404,8 @@ export async function route(
     };
     let legCounter = 0;
     const router = request.router ?? cfg.routing.router;
-    if (router !== 'isochrone') progress(0, 0, `router: ${router} (the experimental open-water pathway)`);
+    if (router !== 'standard')
+      progress(0, 0, `router: ${router} (the search on the convexified polar, legs laid out afterwards, cross-track polish)`);
     const pipeline: LegPipelineInputs = {
       waterGrid: st.waterGrid,
       router,

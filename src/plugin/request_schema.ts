@@ -51,13 +51,13 @@ export const ROUTE_REQUEST_FIELDS: Record<string, RouteFieldSpec> = {
     values: SEARCH_PRESETS,
     default: 'normal',
     description:
-      'Search accuracy: normal (the routing settings as they are, seconds), wide (a better route; about 2 minutes on a long passage), finer (the best route; about 6 minutes). An explicit stages still wins over the preset',
+      'Search method: normal (the routing settings as they are, seconds), moderate (a better route; about 2 minutes on a long passage), maximum (the best route; about 6 minutes). An explicit stages still wins over the preset',
   },
   router: {
     type: 'enum',
     values: ROUTER_KINDS,
     description:
-      'Open-water router: isochrone (the standard search) or experimental (engine/experimental, the method changes under test); default from the routing.router setting',
+      'Open-water router: standard (the isochrone search) or refined (the search on the convexified polar, legs laid out afterwards, cross-track polish; engine/experimental); default from the routing.router setting',
   },
   sail_thresh_ms: { type: 'number', min: 0, description: 'Overrides the routing.sailThreshold setting (m/s)' },
   max_wind_ms: {

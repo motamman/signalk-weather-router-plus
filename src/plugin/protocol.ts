@@ -67,9 +67,9 @@ export interface RouteRequest {
   no_currents?: boolean;
   /** auto (default): regional wind layered over ECMWF where available; ecmwf: ECMWF only. */
   wind_model?: 'auto' | 'ecmwf';
-  /** Open-water router: the isochrone search, or the experimental pathway (engine/experimental); default from the routing.router setting. */
+  /** Open-water router: standard (the isochrone search) or refined (engine/experimental); default from the routing.router setting. */
   router?: RouterKind;
-  /** Search accuracy: normal (the routing settings), wide or finer (engine/search/presets.ts); an explicit `stages` still wins. */
+  /** Search method: normal (the routing settings), moderate or maximum (engine/search/presets.ts); an explicit `stages` still wins. */
   search?: SearchPreset;
   /** Treat the areas marked on Signal K notes (properties.avoid.radius_m) as land (default true). */
   avoid_areas?: boolean;
@@ -125,7 +125,7 @@ export interface RouteSummary {
   mesh?: true;
   /** The open-water router that ran. */
   router?: RouterKind;
-  /** The search-accuracy preset the route ran with. */
+  /** The search method the route ran with. */
   search?: SearchPreset;
 }
 

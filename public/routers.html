@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- The routers explained: opened from the (i) beside the Router choice on the Route tab (index.html, rp-plan.js). -->
-<title>Isochrone vs Experimental</title>
+<title>Standard vs Refined</title>
 <style>
 /* Layout: one reading column; each method gets a diagram beside its explanation, then one comparison chart. */
 :root {
@@ -52,13 +52,13 @@ body { margin: 0; }
 <body>
 
 <div class="wrap">
-<h1>Isochrone vs Experimental</h1>
-<p class="lede">The two open-water routers in Weather Router Plus, what each does with the wind and the polar, and what they measured on the same requests on a Raspberry Pi 5 (8 October 2026, one forecast run, fixed departures).</p>
+<h1>Standard vs Refined</h1>
+<p class="lede">The two open-water routers on the Route tab, what each does with the wind and the polar, and what they measured on the same requests on a Raspberry Pi 5 (8 October 2026, one forecast run, fixed departures).</p>
 
-<h2>Isochrone <span class="tag iso">standard</span></h2>
+<h2>Standard <span class="tag iso">isochrone search</span></h2>
 <div class="row">
   <div class="fig">
-    <svg viewBox="0 0 520 300" id="isoSvg" role="img" aria-label="Isochrone search: fans of headings from each parent, pruned into cross-track bins, stage by stage along a corridor">
+    <svg viewBox="0 0 520 300" id="isoSvg" role="img" aria-label="Standard router: fans of headings from each parent, pruned into cross-track bins, stage by stage along a corridor">
       <rect x="0" y="0" width="520" height="300" fill="var(--sea)"/>
       <path d="M0,230 C60,200 90,260 160,240 S260,290 330,270 S440,300 520,280 L520,300 L0,300 Z" fill="var(--land)"/>
       <!-- corridor skeleton -->
@@ -100,10 +100,10 @@ body { margin: 0; }
   </ol>
 </div>
 
-<h2>Experimental <span class="tag exp">toggle</span></h2>
+<h2>Refined <span class="tag exp">the same search, worked over</span></h2>
 <div class="row">
   <div class="fig">
-    <svg viewBox="0 0 520 330" role="img" aria-label="Experimental router: convex hull of the polar, tacks laid forward in time, waypoints nudged sideways">
+    <svg viewBox="0 0 520 330" role="img" aria-label="Refined router: convex hull of the polar, tacks laid forward in time, waypoints nudged sideways">
       <!-- panel A: polar and hull -->
       <text x="10" y="18" font-weight="600">1 · the polar and its convex hull</text>
       <g transform="translate(90,120)">
@@ -149,11 +149,11 @@ body { margin: 0; }
       <g fill="var(--wind)" opacity=".9"><text class="m" x="300" y="206" fill="var(--wind)">more wind up here</text></g>
       <text class="m mu" x="206" y="314">each inner point tried ±2 km … ±250 m across the track; kept when the whole route then arrives earlier</text>
     </svg>
-    <div class="cap">The same isochrone search runs underneath; these three steps change what it sees (the hull) and what happens to its answer (tacks, polish).</div>
+    <div class="cap">The Standard search runs underneath; these three steps change what it sees (the hull) and what happens to its answer (legs laid out, polish).</div>
   </div>
   <ol class="steps">
     <li><b>Convex polar.</b> Per wind speed, the polar curve is replaced by its convex hull. Into the wind the hull has speed, the beat's VMG, so a leg straight upwind is a valid, fast leg and the search needs no beat tricks. The same across a dead run: the hull says "gybe".</li>
-    <li><b>Search on the hull.</b> The isochrone search runs unchanged on that hull polar, corridor and bins included.</li>
+    <li><b>Search on the hull.</b> The Standard search runs unchanged on that hull polar, corridor and bins included.</li>
     <li><b>Legs laid forward in time.</b> Every sailed leg is walked in steps of at most 5 nm. At each step the wind there and then decides: if the course to the leg's end is a mix of two polar headings, a tack is placed (alternating sides, the last landing on the end); if the polar sails it directly, one straight step. So a wind that veers along a long leg is met where it veers. A tack that crosses land or that the real polar can't sail is tried the other way, then shorter; if nothing works the route fails and says so. No leg ever gets an invented time.</li>
     <li><b>Cross-track polish.</b> Each inner waypoint is tried a little to either side; a move stays when the route, re-timed from there with the real polar, arrives earlier and both legs stay clear of land. Up to five passes.</li>
   </ol>
@@ -161,7 +161,7 @@ body { margin: 0; }
 
 <h2>Where they differ</h2>
 <table>
-  <tr><th style="width:26%"></th><th>Isochrone</th><th>Experimental</th></tr>
+  <tr><th style="width:26%"></th><th>Standard</th><th>Refined</th></tr>
   <tr><td>Polar seen by the search</td><td>as written, with the no-go angle</td><td>its convex hull (no no-go angle; VMG straight upwind)</td></tr>
   <tr><td>How a beat appears</td><td>found by the sweep widening, plus two-tack trials at fixed angles on the final leg</td><td>a straight leg in the search; real tacks laid out afterwards in the wind of the moment</td></tr>
   <tr><td>Dead downwind</td><td>sailed straight at the polar's 180° speed</td><td>gybes where the hull says they pay</td></tr>
@@ -171,25 +171,25 @@ body { margin: 0; }
 </table>
 
 <h2>What was measured</h2>
-<p>Minutes saved against the isochrone router at its standard settings, same forecast run and departure for all bars. The two "wide" bars use a wider search (stages 40, 100 cross-track bins, headings ±60°), now the <i>Wide</i> choice on the Route tab; "finer" is 150 bins at 0.5°.</p>
-<div class="legend"><span class="a">isochrone, wide search</span><span class="b">isochrone, finer search</span><span class="c">experimental, standard search</span><span class="d">experimental, wide search</span></div>
+<p>Minutes saved against the Standard router with the Normal method, same forecast run and departure for all bars. <i>Moderate</i> is the wider search (stages 40, 100 cross-track bins, headings ±60°); <i>Maximum</i> is 150 bins at 0.5°.</p>
+<div class="legend"><span class="a">Standard router, Moderate method</span><span class="b">Standard router, Maximum method</span><span class="c">Refined router, Normal method</span><span class="d">Refined router, Moderate method</span></div>
 <div class="fig">
   <svg viewBox="0 0 900 330" id="barSvg" role="img" aria-label="Bar chart of minutes saved per request and method"></svg>
   <div class="cap">Newport → Great Salt Pond is a 5-hour beat; the offshore reach 128 km at 10 hours; Newport → Bermuda 1,240 km at 106 hours. Every route was checked leg by leg for impossible speeds before being counted.</div>
 </div>
 <table style="margin-top:14px">
-  <tr><th>Request</th><th class="n">isochrone standard</th><th class="n">iso. wide</th><th class="n">iso. finer</th><th class="n">experimental</th><th class="n">exp. + wide</th></tr>
+  <tr><th>Request</th><th class="n">Standard · Normal</th><th class="n">Standard · Moderate</th><th class="n">Standard · Maximum</th><th class="n">Refined · Normal</th><th class="n">Refined · Moderate</th></tr>
   <tr><td>Newport → Great Salt Pond (beat)</td><td class="n">0d 05h 11m</td><td class="n">0d 04h 42m</td><td class="n">0d 04h 39m</td><td class="n">0d 04h 47m</td><td class="n">0d 04h 47m</td></tr>
   <tr><td>Offshore reach</td><td class="n">0d 10h 08m</td><td class="n">0d 10h 06m</td><td class="n">0d 10h 05m</td><td class="n">0d 10h 04m</td><td class="n">0d 10h 04m</td></tr>
   <tr><td>Newport → Bermuda</td><td class="n">4d 10h 34m</td><td class="n">4d 09h 13m</td><td class="n">4d 09h 00m</td><td class="n">4d 10h 07m</td><td class="n">4d 08h 59m</td></tr>
   <tr><td>Bermuda wall time (Pi 5)</td><td class="n">17s</td><td class="n">2m 08s</td><td class="n">6m 03s</td><td class="n">35s</td><td class="n">3m 12s</td></tr>
 </table>
-<p class="note" style="margin-top:14px">Reading it: on the beat, a wider search alone finds more than the experimental router does, and the two don't add up. On the reach only the experimental router's polish moves the number, by a few minutes. On the passage they stack: experimental with the wide search equals the finer search in half the time. The standard search's pruning is the larger loss on long passages; the Search choice on the Route tab is the direct remedy.</p>
+<p class="note" style="margin-top:14px">Reading it: on the beat, the Moderate method alone finds more than the Refined router does, and the two don't add up. On the reach only the Refined router's polish moves the number, by a few minutes. On the passage they stack: Refined with Moderate equals Standard with Maximum in half the time. The Normal method's pruning is the larger loss on long passages; the Method choice is the direct remedy.</p>
 </div>
 
 <script>
 (function () {
-  // Isochrone fan: three parents, 61 headings each (drawn every 3° for legibility), one stage ahead, aimed along the corridor.
+  // Standard router fan: three parents, 61 headings each (drawn every 3° for legibility), one stage ahead, aimed along the corridor.
   var g = document.getElementById('isoFan');
   var parents = [[50, 150, -12], [150, 140, -8], [250, 150, -6]];
   var ns = 'http://www.w3.org/2000/svg';

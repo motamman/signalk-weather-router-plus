@@ -705,13 +705,13 @@ The mesh files are built outside the plugin (binary tiles plus an
 The job log says what the mesh did ("chart mesh: …") and the summary's
 `mesh` is true when any leg used it.
 
-### Open-water router: isochrone or experimental
+### Open-water router: Standard or Refined
 
 The open-water search is selectable: the request's `router`, else the
-`routing.router` setting, else `isochrone` (the search above). The
-**experimental** router (`src/engine/experimental/`) is the same search
-with three changes, kept behind this toggle so the same request can be
-run both ways and compared:
+`routing.router` setting, else `standard` (the search above). The
+**refined** router (`src/engine/experimental/`) is the same search with
+three changes, kept behind this toggle so the same request can be run
+both ways and compared (the Route tab's *Router*: Standard / Refined):
 
 1. **Convex polar.** The search runs on the convex hull of the polar
    (per wind speed), so a leg into the wind is a straight line at the
@@ -739,8 +739,8 @@ The same passage run with a much wider isochrone beam (`routing.stages`
 40, `routing.subsectors` 150, `routing.headings` 120 at 0.5°) arrived
 377,985 s, 94 minutes earlier than the standard beam, at 21 × the wall
 time: the standard pruning is the larger loss on long passages. That
-beam and a middle one are the **Search** choice on the Route tab
-(request `search`: `normal`, `wide`, `finer`; `src/engine/search/presets.ts`),
+beam and a middle one are the **Method** choice on the Route tab
+(request `search`: `normal`, `moderate`, `maximum`; `src/engine/search/presets.ts`),
 beside the **Router** choice.
 
 ### Comfort (rough water)
@@ -1465,8 +1465,8 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `vessel.polar` | string | | the configured `polarFile` | a token from `GET /api/polars`, at most 200 characters; see below |
 | `vessel.draught_m` | number | m | Signal K `design.draft.maximum` | 0.1..30; with `air_draft_m`, lets the [chart mesh](#chart-mesh-charted-depths-and-obstructions) route the leg |
 | `vessel.air_draft_m` | number | m | Signal K `design.airHeight` | 0.5..100 |
-| `router` | `"isochrone"` or `"experimental"` | | setting `routing.router` (`isochrone`) | the [open-water router](#open-water-router-isochrone-or-experimental) |
-| `search` | `"normal"`, `"wide"` or `"finer"` | | `normal` | search accuracy: `normal` = the routing settings as they are; `wide` = stages 40, 100 cross-track bins, headings ±60° at 1° (a better route; about 2 min on a 600 nm passage on a Raspberry Pi 5); `finer` = stages 40, 150 bins, ±60° at 0.5° (the best; about 6 min). An explicit `stages` still wins |
+| `router` | `"standard"` or `"refined"` | | setting `routing.router` (`standard`) | the [open-water router](#open-water-router-standard-or-refined) |
+| `search` | `"normal"`, `"moderate"` or `"maximum"` | | `normal` | search method (the Route tab's *Method*): `normal` = the routing settings as they are; `moderate` = stages 40, 100 cross-track bins, headings ±60° at 1° (a better route; about 2 min on a 600 nm passage on a Raspberry Pi 5); `maximum` = stages 40, 150 bins, ±60° at 0.5° (the best; about 6 min). An explicit `stages` still wins |
 
 `vessel.polar` is a token from `GET /api/polars`. A file name such as
 `a_boat.pol` resolves only inside the polar library (the configured
@@ -1567,8 +1567,8 @@ Progress entry:
 | `legs` | number | count | routes with waypoints only |
 | `precision` | string | | routes with waypoints only |
 | `mesh` | boolean | | `true` when at least one leg was routed on the [chart mesh](#chart-mesh-charted-depths-and-obstructions) |
-| `router` | string | | the open-water router that ran: `isochrone` or `experimental` |
-| `search` | string | | the search-accuracy preset the route ran with: `normal`, `wide` or `finer` |
+| `router` | string | | the open-water router that ran: `standard` or `refined` |
+| `search` | string | | the search method the route ran with: `normal`, `moderate` or `maximum` |
 
 #### GET /api/routes/{id}/events
 

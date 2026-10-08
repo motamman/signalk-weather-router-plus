@@ -10,13 +10,13 @@
   A route that starts in a harbour and ends far outside the mesh is routed
   on the charts out to open water and handed over there. Routes the mesh
   cannot take fall back to the coastline routing you had before.
-- **Search accuracy you can choose.** Route tab → *Search*: Normal
-  (seconds), Wide (a better route, about 2 minutes on a long passage) or
-  Finer (the best route, about 6 minutes). On the test boat Wide found a
-  passage 80 minutes shorter and a harbour beat half an hour shorter than
-  Normal; a harbour hop takes seconds whichever you pick.
-- **Two routers to compare.** Route tab → *Router*: the
-  standard isochrone search, or an experimental one that treats a beat as
+- **A search method you can choose.** Route tab → *Method*: Normal
+  (seconds), Moderate (a better route, about 2 minutes on a long passage)
+  or Maximum (the best route, about 6 minutes). On the test boat Moderate
+  found a passage 80 minutes shorter and a harbour beat half an hour
+  shorter than Normal; a harbour hop takes seconds whichever you pick.
+- **Two routers to compare.** Route tab → *Router*: Standard, the
+  isochrone search, or Refined, which treats a beat as
   a straight leg at its best VMG, lays the tacks out afterwards in the wind
   of the moment, and nudges waypoints sideways where that arrives earlier.
   On the test boat it was 24 minutes faster on a 5-hour harbour beat and

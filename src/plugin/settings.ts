@@ -80,7 +80,7 @@ export interface AppSettings {
     smoother: boolean;
     /** Smoother time tolerance, ratio (0.05 = a shortcut may be 5% slower). */
     smootherTolerance: number;
-    /** Open-water router by default: the isochrone search, or the experimental pathway. */
+    /** Open-water router by default: standard (the isochrone search) or refined. */
     router: RouterKind;
     keepJobs: number;
   };
@@ -593,7 +593,7 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     type: 'enum',
     enum: ROUTER_KINDS,
     default: DEFAULT_ROUTER,
-    help: 'isochrone: the standard search. experimental: the second pathway where method changes are tried: the search runs on the convexified polar (a beat is a straight line at the exact VMG), each mixed sailing leg is then laid out as tacks, and a cross-track polish moves waypoints sideways where the route arrives earlier; under motor it is identical to isochrone. A route request can choose either (router).',
+    help: 'standard: the isochrone search. refined: the same search on the convexified polar (a beat is a straight line at the exact VMG), each mixed sailing leg is then laid out as tacks, and a cross-track polish moves waypoints sideways where the route arrives earlier; under motor it is identical to standard. A route request can choose either (router).',
     reload: 'next_job',
   },
   {

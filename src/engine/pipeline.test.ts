@@ -113,7 +113,7 @@ test('pipeline: simplification keeps the route land-free and reports it; the cur
   assert.ok(messages.some(m => /^simplified: /.test(m)) || r.smootherDrops === undefined);
 });
 
-test('the experimental router under motor is an exact duplicate of the isochrone search', async () => {
+test('the refined router under motor is an exact duplicate of the standard search', async () => {
   const land = LandMask.fromPolygons([rect(1, 0.3, -0.3, 0.7, 1.3)], BBOX, 0.005);
   const [plan] = planLegs(
     [
@@ -124,7 +124,7 @@ test('the experimental router under motor is an exact duplicate of the isochrone
     300
   );
   const a = await runLegPipeline(inputs(land).inp, plan, 0, [0, 0.5], T0);
-  const b = await runLegPipeline(inputs(land, { router: 'experimental' }).inp, plan, 0, [0, 0.5], T0);
+  const b = await runLegPipeline(inputs(land, { router: 'refined' }).inp, plan, 0, [0, 0.5], T0);
   assert.deepEqual(
     b.waypoints.map(w => [w.lon, w.lat, w.time.getTime(), w.mode]),
     a.waypoints.map(w => [w.lon, w.lat, w.time.getTime(), w.mode])
@@ -142,7 +142,7 @@ const POLAR_CSV = `twa/tws,4,6,8,10,12,14,16,20,25
 150,2.4,3.6,4.6,5.4,6.0,6.4,6.7,7.0,7.3
 180,2.0,3.0,4.0,4.8,5.5,6.0,6.4,6.8,7.1`;
 
-test('experimental router, convex polar: a dead-upwind leg comes out as tacks the real polar can sail, no later than the isochrone beat', async () => {
+test('refined router, convex polar: a dead-upwind leg comes out as tacks the real polar can sail, no later than the isochrone beat', async () => {
   // Open water (the land is far off the track), wind from due east at 12 kt, destination due east: a pure beat.
   const land = LandMask.fromPolygons([rect(1, 0.3, 1.5, 0.7, 2)], BBOX, 0.005);
   const polar = PolarDiagram.parse(POLAR_CSV, ',');
@@ -165,7 +165,7 @@ test('experimental router, convex polar: a dead-upwind leg comes out as tacks th
     loadAreas: async () => wind,
   };
   const iso = await runLegPipeline(inputs(land, over).inp, plan, 0, [0, 0.5], T0);
-  const { inp, messages } = inputs(land, { ...over, router: 'experimental' });
+  const { inp, messages } = inputs(land, { ...over, router: 'refined' });
   const exp = await runLegPipeline(inp, plan, 0, [0, 0.5], T0);
   assert.ok(
     messages.some(m => /^experimental: convex polar: \d+ leg\(s\) laid out as tacks/.test(m)),
@@ -184,7 +184,7 @@ test('experimental router, convex polar: a dead-upwind leg comes out as tacks th
   assert.ok(Math.abs(exp.waypoints[exp.waypoints.length - 1].lon - 1) < 1e-6);
 });
 
-test('experimental router: a beat up a channel too narrow for two tacks is sailed as short tacks clear of both shores', async () => {
+test('refined router: a beat up a channel too narrow for two tacks is sailed as short tacks clear of both shores', async () => {
   // A channel 0.04° (4.4 km) wide between two shores, running east; wind from the east; the leg is dead upwind along it.
   const land = LandMask.fromPolygons([rect(1, -0.1, 0.52, 0.5, 0.7), rect(2, -0.1, 0.3, 0.5, 0.48)], BBOX, 0.002);
   const polar = PolarDiagram.parse(POLAR_CSV, ',');
@@ -201,7 +201,7 @@ test('experimental router: a beat up a channel too narrow for two tacks is saile
   );
   // Two stages: 15 km legs, whose two-tack split would swing 6 km off the line, into the shores.
   const { inp, messages } = inputs(land, {
-    router: 'experimental',
+    router: 'refined',
     stages: 2,
     polar,
     vessel: makeVessel({ motorSpeedMs: 1 }),
@@ -220,7 +220,7 @@ test('experimental router: a beat up a channel too narrow for two tacks is saile
     assert.ok(!land.legCrossesLandExact(r.waypoints[i - 1].lon, r.waypoints[i - 1].lat, r.waypoints[i].lon, r.waypoints[i].lat));
 });
 
-test('experimental router: a wind that veers over a long beat moves the tacks with it; every leg sailable, no invented speeds', async () => {
+test('refined router: a wind that veers over a long beat moves the tacks with it; every leg sailable, no invented speeds', async () => {
   // Open water; wind 12 kt from due east at departure, veering 3° per hour (to the south); destination due east, 111 km.
   const land = LandMask.fromPolygons([rect(1, 0.3, 1.5, 0.7, 2)], BBOX, 0.005);
   const polar = PolarDiagram.parse(POLAR_CSV, ',');
@@ -248,7 +248,7 @@ test('experimental router: a wind that veers over a long beat moves the tacks wi
     300
   );
   const { inp, messages } = inputs(land, {
-    router: 'experimental',
+    router: 'refined',
     stages: 4,
     polar,
     vessel: makeVessel({ motorSpeedMs: 1 }),
@@ -268,7 +268,7 @@ test('experimental router: a wind that veers over a long beat moves the tacks wi
   assert.ok(Math.abs(r.waypoints[r.waypoints.length - 1].lon - 1) < 1e-6);
 });
 
-test('experimental router: a straight course that veers into the no-go angle mid-leg is laid out step by step and tacked where it must', async () => {
+test('refined router: a straight course that veers into the no-go angle mid-leg is laid out step by step and tacked where it must', async () => {
   // Due east, 111 km, one stage leg. Wind 12 kt from 040° at departure (TWA 50°, sailable), veering 6°/h
   // (from 070° after 5 h: TWA 20°, inside the polar's 30° no-go). Checked only at its start the leg would
   // be "sailable" and then fail in the simulator; laid out in steps it is sailed, then tacked.
@@ -298,7 +298,7 @@ test('experimental router: a straight course that veers into the no-go angle mid
     300
   );
   const { inp, messages } = inputs(land, {
-    router: 'experimental',
+    router: 'refined',
     stages: 1,
     polar,
     vessel: makeVessel({ motorSpeedMs: 1 }),
