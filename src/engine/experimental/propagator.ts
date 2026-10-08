@@ -4,19 +4,23 @@
  * Step 1 (now): the convexified polar (vessel/convexpolar.ts). The
  * isochrone search runs unchanged but on the hull polar, so a leg into
  * the wind is a straight line at the beat's exact VMG and the search
- * needs no beat handling. Afterwards every sailed leg whose course is a
- * time-share of two polar headings is laid out as tacks, forward in
- * time: each tack's heading is the hull's beat angle in the wind at that
- * tack's own start (a wind that veers over a long leg moves the tacks
- * with it), no tack longer than TACK_MAX_M, alternating sides, the last
- * tack landing on the leg's end; a tack that would cross land or that the
- * real polar cannot sail is tried on the other side, then shorter, down
- * to TACK_MIN_M. Every leg is timed with the real polar and each tack
- * costs TACK_PENALTY_S. Anything that still cannot be sailed fails the
- * route (a RouteError naming the leg): no leg ever gets an invented
- * duration (2026-10-08: a sub-leg in irons was given the search's
- * duration for a tack point, nothing, and showed as 43.9 nm in one
- * minute).
+ * needs no beat handling. Afterwards every sailed leg is laid out
+ * forward in time in steps of at most TACK_MAX_M: at each step the wind
+ * there and then decides whether the course to the leg's end is a mix of
+ * two polar headings (then a tack is placed, alternating sides, the last
+ * one landing on the end) or a heading the polar sails directly (then
+ * one straight step). The hull's promise, "this course is a time-share
+ * of two headings", holds for one wind, not for a leg: a 75 km leg is
+ * hours of forecast, and a course sailable at its start can be in the
+ * no-go angle before its end (2026-10-08, a Bermuda run failed on such a
+ * leg when only the leg's start was checked). A tack that would cross
+ * land or that the real polar cannot sail is tried on the other side,
+ * then shorter, down to TACK_MIN_M. Every leg is timed with the real
+ * polar and each tack costs TACK_PENALTY_S. Anything that still cannot
+ * be sailed fails the route (a RouteError naming the leg): no leg ever
+ * gets an invented duration (2026-10-08: a sub-leg in irons was given
+ * the search's duration for a tack point, nothing, and showed as 43.9 nm
+ * in one minute).
  *
  * Step 2 (now): the cross-track polish (polish.ts), moving interior
  * waypoints sideways where the route then arrives earlier.
@@ -116,15 +120,12 @@ export class ExperimentalPropagator {
     let tacks = 0;
     for (let i = 1; i < old.length; i++) {
       const b: Waypoint = { ...old[i] };
-      const from = out[out.length - 1];
-      if (
-        b.mode === 'sailing' &&
-        this.mixAt(from.lon, from.lat, from.time, haversineBearing(from.lon, from.lat, b.lon, b.lat), cp, env.wind)
-      ) {
-        const pts = this.tacksFor(from, b, cp, env);
+      if (b.mode === 'sailing') {
+        const pts = this.layOut(out[out.length - 1], b, cp, env);
+        const n = pts.filter(p => p.tack).length;
+        if (n) split++;
+        tacks += n;
         for (const p of pts) out.push(p);
-        split++;
-        tacks += pts.length;
       }
       this.timeLeg(out[out.length - 1], b, env);
       out.push(b);
@@ -170,41 +171,63 @@ export class ExperimentalPropagator {
   }
 
   /**
-   * The tack points from a (at its time) to b: forward in time, each tack
-   * on the heading the hull gives in the wind at its start, no longer
-   * than TACK_MAX_M, alternating sides; the last tack lands on b. Each
-   * point carries its arrival time.
+   * The points laid out from a (at its time) to b, forward in time and
+   * never more than TACK_MAX_M apart: at each point the wind there and
+   * then decides between a tack (the course to b is a mix of two polar
+   * headings: one tack on the heading the hull gives, alternating sides,
+   * the last landing on b) and a straight step along the course. Each
+   * point carries its arrival time. The leg a → last point → b is what the
+   * caller times; the straight step points are collinear and the route's
+   * simplification thins them afterwards.
    */
-  private tacksFor(a: Waypoint, b: Waypoint, cp: ConvexPolar, env: Env): Waypoint[] {
+  private layOut(a: Waypoint, b: Waypoint, cp: ConvexPolar, env: Env): Waypoint[] {
     const pts: Waypoint[] = [];
     let at: Waypoint = a;
     let lastHeading = -1;
-    const tackTo = (h: number, d: number): Waypoint | null => {
+    const stepTo = (h: number, d: number, tack: boolean): Waypoint | null => {
       const [tLon, tLat] = projectAlongBearing(at.lon, at.lat, h, d);
       if (this.land.legCrossesLandExact(at.lon, at.lat, tLon, tLat)) return null;
       const s = this.sailable(at, tLon, tLat, env);
       if (s === null) return null;
-      return {
+      const p: Waypoint = {
         lon: tLon,
         lat: tLat,
-        time: new Date(at.time.getTime() + (s + TACK_PENALTY_S) * 1000),
+        time: new Date(at.time.getTime() + (s + (tack ? TACK_PENALTY_S : 0)) * 1000),
         sogMs: 0,
         cogDeg: 0,
         mode: 'sailing',
-        tack: true,
       };
+      if (tack) p.tack = true;
+      return p;
     };
+    const tackTo = (h: number, d: number): Waypoint | null => stepTo(h, d, true);
     for (let n = 0; n < MAX_TACKS_PER_LEG; n++) {
       const D = haversineDistanceM(at.lon, at.lat, b.lon, b.lat);
       const theta = haversineBearing(at.lon, at.lat, b.lon, b.lat);
       const mix = this.mixAt(at.lon, at.lat, at.time, theta, cp, env.wind);
-      if (!mix) return pts; // the rest is sailed straight
-      // The two headings' shares of the remaining distance (a 2 × 2 solve).
-      const det = Math.sin((mix.h1 - mix.h2) * DEG);
-      if (Math.abs(det) < 1e-9) return pts;
-      const d1 = (D * Math.sin((theta - mix.h2) * DEG)) / det;
-      const d2 = (D * Math.sin((mix.h1 - theta) * DEG)) / det;
-      if (!(d1 > 0 && d2 > 0)) return pts;
+      // The two headings' shares of the remaining distance (a 2 × 2 solve); a beat only when both are positive.
+      let d1 = 0;
+      let d2 = 0;
+      if (mix) {
+        const det = Math.sin((mix.h1 - mix.h2) * DEG);
+        if (Math.abs(det) >= 1e-9) {
+          d1 = (D * Math.sin((theta - mix.h2) * DEG)) / det;
+          d2 = (D * Math.sin((mix.h1 - theta) * DEG)) / det;
+        }
+      }
+      if (!mix || !(d1 > 0 && d2 > 0)) {
+        // A direct heading in this wind: the rest in one go when it fits a step, else one straight step and look again.
+        if (D <= TACK_MAX_M) return pts;
+        const p = stepTo(theta, TACK_MAX_M, false);
+        if (!p)
+          throw new RouteError(
+            `experimental router: the leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} to ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be sailed at ${at.lat.toFixed(4)}, ${at.lon.toFixed(4)} under the ${env.sim.modePolicy} policy; use the isochrone router, or a waypoint`
+          );
+        pts.push(p);
+        at = p;
+        lastHeading = -1;
+        continue;
+      }
       const share = (h: number): number => (h === mix.h1 ? d1 : d2);
       // Alternate sides; the first tack takes the larger share.
       const first = lastHeading === mix.h1 ? mix.h2 : lastHeading === mix.h2 ? mix.h1 : d1 >= d2 ? mix.h1 : mix.h2;

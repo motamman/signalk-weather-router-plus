@@ -1279,6 +1279,21 @@ window.addEventListener('rp:status', e => {
   if (el && !saved && st && st.router && [...el.options].some(o => o.value === st.router)) el.value = st.router;
 });
 
+// --- The routers explained: (i) beside the Router choice opens routers.html in a large popup ---
+(function () {
+  const overlay = document.getElementById('routerInfoOverlay');
+  const btn = document.getElementById('routerInfoBtn');
+  const close = document.getElementById('routerInfoClose');
+  const frame = document.getElementById('routerInfoFrame');
+  if (!overlay || !btn || !close || !frame) return;
+  const open = () => { if (!frame.getAttribute('src')) frame.setAttribute('src', 'routers.html'); overlay.style.display = 'flex'; };
+  const shut = () => { overlay.style.display = 'none'; };
+  btn.addEventListener('click', open);
+  close.addEventListener('click', shut);
+  overlay.addEventListener('click', e => { if (e.target === overlay) shut(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.style.display === 'flex') shut(); });
+})();
+
 // --- Reset ---
 document.getElementById('resetBtn').addEventListener('click', function() {
   _hideRecompute();

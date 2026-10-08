@@ -31,13 +31,15 @@ uses [Semantic Versioning](https://semver.org/).
   The summary carries `search`.
 - **Open-water router toggle**: request `router` (`isochrone` or
   `experimental`), setting `routing.router`, a selector on the Route tab
-  beside Search; the summary and `/api/status` say which runs.
+  beside Search; the summary and `/api/status` say which runs. An (i)
+  beside it opens `public/routers.html`: how each router works, where
+  they differ, and the measurements, with diagrams.
 - **Experimental router** (`src/engine/experimental/`): the isochrone
   search on a convexified polar (a beat is a straight leg at its exact
-  VMG), the tacks laid out afterwards forward in time (at most 5 nm each,
-  heading from the wind at each tack's start, 30 s per tack; a leg that
-  cannot be sailed fails the route rather than getting an invented
-  time), and a cross-track polish that moves waypoints sideways where the
+  VMG), every sailed leg laid out afterwards forward in time in steps of
+  at most 9,260 m (at each step the wind there decides between a tack,
+  30 s each, and a straight step; a leg that cannot be sailed fails the
+  route rather than getting an invented time), and a cross-track polish that moves waypoints sideways where the
   route then arrives earlier. GeoJSON points carry `tack: true` on tack
   points. Measured on a Raspberry Pi 5 against the isochrone router
   (same forecast run, fixed departures): harbour beat 17,234 s vs

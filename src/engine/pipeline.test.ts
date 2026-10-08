@@ -267,3 +267,53 @@ test('experimental router: a wind that veers over a long beat moves the tacks wi
   }
   assert.ok(Math.abs(r.waypoints[r.waypoints.length - 1].lon - 1) < 1e-6);
 });
+
+test('experimental router: a straight course that veers into the no-go angle mid-leg is laid out step by step and tacked where it must', async () => {
+  // Due east, 111 km, one stage leg. Wind 12 kt from 040° at departure (TWA 50°, sailable), veering 6°/h
+  // (from 070° after 5 h: TWA 20°, inside the polar's 30° no-go). Checked only at its start the leg would
+  // be "sailable" and then fail in the simulator; laid out in steps it is sailed, then tacked.
+  const land = LandMask.fromPolygons([rect(1, 0.3, 1.5, 0.7, 2)], BBOX, 0.005);
+  const polar = PolarDiagram.parse(POLAR_CSV, ',');
+  const dirAt = (t: Date): number => 40 + (6 * (t.getTime() - T0.getTime())) / 3600e3;
+  const wind = {
+    hasWaves: false,
+    at: (_lon: number, _lat: number, t: Date): [number, number] => [12 * 0.514444, dirAt(t)],
+    atMany: (lons: Float64Array) => ({
+      speed: new Float64Array(lons.length).fill(12 * 0.514444),
+      dir: new Float64Array(lons.length).fill(40),
+    }),
+    atManyAt: (lons: Float64Array, _lats: Float64Array, timesMs: Float64Array) => ({
+      speed: new Float64Array(lons.length).fill(12 * 0.514444),
+      dir: Float64Array.from(timesMs, ms => dirAt(new Date(ms))),
+    }),
+    wavesAt: () => null,
+    validRange: [T0, new Date(T0.getTime() + 72 * 3600e3)] as [Date, Date],
+  };
+  const [plan] = planLegs(
+    [
+      { lon: 0, lat: 0.5 },
+      { lon: 1, lat: 0.5 },
+    ],
+    'precise',
+    300
+  );
+  const { inp, messages } = inputs(land, {
+    router: 'experimental',
+    stages: 1,
+    polar,
+    vessel: makeVessel({ motorSpeedMs: 1 }),
+    sim: { modePolicy: 'sail_max', sailThreshMs: 1, simStepM: 200 },
+    loadAreas: async () => wind,
+  });
+  const r = await runLegPipeline(inp, plan, 0, [0, 0.5], T0);
+  assert.ok(r.waypoints.filter(w => w.tack).length >= 1, `tack points: ${messages.filter(m => /experimental/.test(m)).join('\n')}`);
+  for (let i = 1; i < r.waypoints.length; i++) {
+    const a = r.waypoints[i - 1];
+    const b = r.waypoints[i];
+    const dt = (b.time.getTime() - a.time.getTime()) / 1000;
+    const d = haversineDistanceM(a.lon, a.lat, b.lon, b.lat);
+    assert.ok(dt > 0 && d / dt < 4, `leg ${i}: ${d.toFixed(0)} m in ${dt.toFixed(0)} s`);
+    assert.ok(!land.legCrossesLandExact(a.lon, a.lat, b.lon, b.lat));
+  }
+  assert.ok(Math.abs(r.waypoints[r.waypoints.length - 1].lon - 1) < 1e-6);
+});
