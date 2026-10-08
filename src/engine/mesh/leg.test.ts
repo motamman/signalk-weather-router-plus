@@ -12,8 +12,9 @@ import { LandMask } from '../../geo/landmask';
 import type { ShapePolygon } from '../../geo/shapefile';
 import { haversineDistanceM } from '../../geo/geodesy';
 import { makeVessel } from '../../vessel/vessel';
-import { NoCurrent, NoWind, type CurrentSource } from '../environment';
+import { ConstantWind, NoCurrent, NoWind, type CurrentSource } from '../environment';
 import { planLegs } from '../multileg';
+import { PolarDiagram } from '../../vessel/polar';
 import { runLegPipeline, type LegPipelineInputs } from '../pipeline';
 import { classifySegments, type MeshLegRouter, meshRulesFor, routeFromMeshPath } from './leg';
 import type { MeshRouteResult } from './route';
@@ -235,6 +236,109 @@ test('pipeline: a sailing leg motors the narrow part of the mesh route and sails
   assert.ok(Math.abs(last.lon - 1) < 1e-6 && Math.abs(last.lat - 0.5) < 1e-6);
   for (let i = 1; i < r.waypoints.length; i++) assert.ok(r.waypoints[i].time >= r.waypoints[i - 1].time, 'time runs forward');
   assert.ok(r.totalDistanceM > 100000, `distance ${r.totalDistanceM}`);
+});
+
+const POLAR_CSV = `twa/tws,4,6,8,10,12,14,16,20,25
+0,0,0,0,0,0,0,0,0,0
+30,1.5,2.5,3.3,4.0,4.3,4.5,4.6,4.7,4.7
+45,2.5,3.6,4.5,5.1,5.5,5.7,5.8,5.9,5.9
+60,3.0,4.2,5.1,5.7,6.1,6.3,6.4,6.5,6.5
+90,3.2,4.5,5.5,6.1,6.5,6.7,6.8,6.9,6.9
+120,3.0,4.3,5.3,6.0,6.4,6.7,6.9,7.1,7.2
+150,2.4,3.6,4.6,5.4,6.0,6.4,6.7,7.0,7.3
+180,2.0,3.0,4.0,4.8,5.5,6.0,6.4,6.8,7.1`;
+
+test('pipeline: with a sail threshold of 0 the narrow passage is sailed along the mesh route (tacked where the wind needs it), nothing motored', async () => {
+  // The same six-point path: narrow over the first three, open water to the end. Wind 12 kt from the east, the path runs east: a beat.
+  const path: [number, number][] = [
+    [0, 0.5],
+    [0.05, 0.5],
+    [0.1, 0.5],
+    [0.15, 0.5],
+    [0.2, 0.5],
+    [1, 0.5],
+  ];
+  const widths: [number, number][] = [
+    [200, 200],
+    [200, 200],
+    [200, 200],
+    [4000, 4000],
+    [4000, 4000],
+    [4000, 4000],
+  ];
+  const wind = Object.assign(new ConstantWind(12 * 0.514444, 90), {
+    validRange: [T0, new Date(T0.getTime() + 48 * 3600e3)] as [Date, Date],
+  });
+  const { mesh } = fakeMeshOk(path, widths);
+  const { inp, messages } = inputs(mesh, {
+    polar: PolarDiagram.parse(POLAR_CSV, ','),
+    sim: { modePolicy: 'sail_max', sailThreshMs: 0, simStepM: 200 },
+    loadAreas: async () => wind,
+  });
+  const r = await runLegPipeline(inp, PLAN, 0, [0, 0.5], T0);
+  assert.ok(
+    messages.some(m => /chart mesh: 2 segment\(s\): 1 narrow \(sailed along the mesh route, the sail threshold being 0\)/.test(m)),
+    messages.join('\n')
+  );
+  assert.ok(
+    messages.some(m =>
+      /^chart mesh segment 1\/2: narrow passage, sailed along the mesh route: \{distance:\d+\}, \{time:[\d.]+\} \(sailing \{time:[\d.]+\}\)$/.test(
+        m
+      )
+    ),
+    messages.join('\n')
+  );
+  assert.ok(
+    messages.some(m =>
+      /^chart mesh segment 1\/2: experimental: convex polar: \d+ leg\(s\) laid out as tacks \([1-9]\d* tack point/.test(m)
+    ),
+    messages.join('\n')
+  );
+  assert.equal(r.motoringTimeS, 0, 'nothing motored');
+  assert.ok(r.sailingTimeS > 0);
+  for (const w of r.waypoints.slice(1)) assert.equal(w.mode, 'sailing', `${w.lat}, ${w.lon} at ${w.time.toISOString()}`);
+  for (let i = 1; i < r.waypoints.length; i++) assert.ok(r.waypoints[i].time > r.waypoints[i - 1].time, 'time runs forward');
+  // The passage's end (point 4) is reached before the open water is searched.
+  assert.ok(r.waypoints.some(w => Math.abs(w.lon - 0.2) < 1e-9 && Math.abs(w.lat - 0.5) < 1e-9));
+  const last = r.waypoints[r.waypoints.length - 1];
+  assert.ok(Math.abs(last.lon - 1) < 1e-6 && Math.abs(last.lat - 0.5) < 1e-6);
+});
+
+test('pipeline: an open stretch whose search fails is not motored under sail_max: the route fails naming the segment', async () => {
+  // Wind 10 m/s everywhere under a 5 m/s limit: every candidate of the search is over the limit, and so is every stretch of the mesh route itself.
+  const path: [number, number][] = [
+    [0, 0.5],
+    [0.5, 0.6],
+    [1, 0.5],
+  ];
+  const wind = Object.assign(new ConstantWind(10, 90), {
+    validRange: [T0, new Date(T0.getTime() + 48 * 3600e3)] as [Date, Date],
+  });
+  const { mesh } = fakeMeshOk(path);
+  const { inp, messages } = inputs(mesh, {
+    polar: PolarDiagram.parse(POLAR_CSV, ','),
+    sim: { modePolicy: 'sail_max', sailThreshMs: 0, simStepM: 200, maxWindMs: 5 },
+    loadAreas: async () => wind,
+  });
+  await assert.rejects(
+    () => runLegPipeline(inp, PLAN, 0, [0, 0.5], T0),
+    (err: Error) => {
+      assert.match(
+        err.message,
+        /^chart mesh segment 1\/1: the beat from 0\.5000, 0\.0000 towards 0\.6000, 0\.5000 cannot be tacked at 0\.5000, 0\.0000: every tack tried crossed land or could not be sailed under the sail_max policy; raise the sail threshold \(Route → Options\) so that stretch is motored, or route under motor$/
+      );
+      return true;
+    }
+  );
+  assert.ok(
+    messages.some(m =>
+      /^WARNING: chart mesh segment 1\/1: open water, but the isochrone search failed \(.*\); following the mesh route instead under sail_max$/.test(
+        m
+      )
+    ),
+    messages.join('\n')
+  );
+  assert.ok(!messages.some(m => /motor/.test(m) && !/route under motor/.test(m)), messages.join('\n'));
 });
 
 test('pipeline: the mesh falls through to the coastline search when it finds no route or does not cover the leg', async () => {

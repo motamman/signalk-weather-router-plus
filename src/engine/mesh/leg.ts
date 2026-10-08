@@ -1,8 +1,9 @@
 /**
  * A leg on the chart mesh, as the leg pipeline uses it: whether the mesh
  * takes the leg, the split of the mesh route into narrow and open-water
- * segments (the parent planner's hybrid rule), the Route for a stretch
- * motored along the mesh polyline, and the stitching of the segments.
+ * segments (the parent planner's hybrid rule; with a sail threshold of 0
+ * the narrow passages are sailed too), the Route for a stretch walked
+ * along the mesh polyline, and the stitching of the segments.
  *
  * The search itself runs wherever the host puts it (the plugin: a child
  * process, so the tile arrays go back to the operating system after the
@@ -129,10 +130,14 @@ export function pathLengthM(path: [number, number][]): number {
 }
 
 /**
- * The Route for a mesh polyline: waypoints timed segment by segment with
- * the leg simulator (motor, with the currents), then wind / wave /
- * current enrichment. Null when a segment cannot be made (the current
- * cancels the boat's speed): the caller falls back to the coastline search.
+ * The Route for a mesh polyline walked straight: waypoints timed segment
+ * by segment with the leg simulator under `sim` (motor for a narrow
+ * passage; the request's own policy for an open stretch the pipeline
+ * follows along the mesh), then wind / wave / current enrichment. Null
+ * when a segment cannot be made (stuck, or the current cancels the
+ * boat's speed): the caller falls back to the coastline search. A
+ * sail_max stretch is not walked here but laid out with tacks
+ * (experimental/propagator.ts sailPolyline).
  */
 export function routeFromMeshPath(
   path: [number, number][],

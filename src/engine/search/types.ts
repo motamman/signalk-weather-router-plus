@@ -52,7 +52,7 @@ export interface CorridorInput {
 
 /** Bins across a narrow passage. */
 export const NARROW_BINS = 6;
-/** Stages in a row without the front coming closer to the destination (after the planned stages) before the search is called boxed in. */
+/** Stages in a row without the front coming closer to the destination, straight or along the skeleton (after the planned stages), before the search is called boxed in. */
 export const STALL_STAGES = 3;
 /** Share of a stage's water candidates dead upwind from which the front counts as beating (stall detection waits for the hard stage ceiling). */
 export const BEATING_SHARE = 0.1;

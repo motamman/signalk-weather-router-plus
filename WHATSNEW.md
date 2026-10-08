@@ -10,6 +10,9 @@
   structures, using your boat's draft and height from Signal K's Vessel
   Base Data. Under power the whole leg runs on the charts; under sail the
   narrow bits are motored along the channel and the open water is sailed.
+  Set the sail threshold to 0 and nothing is motored: the narrow bits are
+  sailed along the channel too, and a stretch that cannot be sailed fails
+  the route and says so instead of quietly motoring it.
   A route that starts in a harbour and ends far outside the mesh is routed
   on the charts out to open water and handed over there. Routes the mesh
   cannot take fall back to the coastline routing you had before.

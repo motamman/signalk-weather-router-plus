@@ -32,6 +32,82 @@ function traceBack(stages: Candidate[][], stageIdx: number, cand: Candidate): [n
   return out.reverse();
 }
 
+/**
+ * The stall detector's measure of progress: the front's best distance to
+ * the deepest branch's own goal (the next via, or the destination once
+ * every via is crossed), not to the destination: a branch can sit a few
+ * km from the destination with a via still uncrossed (job 58b50b0d: east
+ * of Crete, the Kythira via behind it) and must not count as progress. A
+ * gain under a twentieth of the stage step is no gain.
+ *
+ * Progress is either the straight-line distance to the goal shrinking or
+ * the distance left along the skeleton shrinking (2026-10-08, job
+ * 1c1fda5b: rounding the outside of Cape Cod, the front advanced along
+ * the mesh route for 8 stages while its straight-line distance to the
+ * canal, across the Cape, stayed at 38 km; the search was called boxed in
+ * and the whole stretch was motored). The straight-line test alone stalls
+ * on any route that wraps a peninsula; the skeleton test alone could stall
+ * a branch passing an island on the other side from the skeleton, so
+ * either one counts.
+ */
+export class ProgressTracker {
+  /** Best straight-line distance to the current goal, metres. */
+  bestEver = Infinity;
+  /** Best distance left along the skeleton to the current goal, metres. */
+  bestEverAlong = Infinity;
+  stagesWithoutGain = 0;
+  private bestEverDeepest = -1;
+  /** Each goal's place on the skeleton, or null without one. */
+  private readonly goalSkIdx: number[] | null;
+
+  constructor(
+    private readonly guide: Pick<SkeletonGuide, 'skeleton' | 'skeletonCum' | 'nearestSkeleton'>,
+    private readonly goals: { lon: number; lat: number }[],
+    private readonly candStepM: number
+  ) {
+    this.goalSkIdx = guide.skeleton && guide.skeletonCum ? goals.map(g => guide.nearestSkeleton(g.lon, g.lat)) : null;
+  }
+
+  /** Distance left to goal `gi` along the skeleton from a candidate's nearest skeleton point; Infinity without a skeleton or past the goal's point. */
+  private alongSkeleton(c: { lon: number; lat: number }, gi: number): number {
+    const cum = this.guide.skeletonCum;
+    if (!this.goalSkIdx || !cum) return Infinity;
+    const i = this.guide.nearestSkeleton(c.lon, c.lat);
+    return i < this.goalSkIdx[gi] ? cum[this.goalSkIdx[gi]] - cum[i] : Infinity;
+  }
+
+  /** Fold in a stage's retained front; returns the deepest via count, the stages without gain, and the best straight-line distance. */
+  update(retained: { lon: number; lat: number; viaCount: number }[]): { deepest: number; stagesWithoutGain: number; bestEver: number } {
+    let deepest = 0;
+    for (const c of retained) deepest = Math.max(deepest, c.viaCount);
+    const goal = this.goals[deepest];
+    let goalRemaining = Infinity;
+    let alongRemaining = Infinity;
+    for (const c of retained) {
+      if (c.viaCount !== deepest) continue;
+      goalRemaining = Math.min(goalRemaining, haversineDistanceM(c.lon, c.lat, goal.lon, goal.lat));
+      alongRemaining = Math.min(alongRemaining, this.alongSkeleton(c, deepest));
+    }
+    if (deepest > this.bestEverDeepest) {
+      this.bestEverDeepest = deepest;
+      this.bestEver = Infinity;
+      this.bestEverAlong = Infinity;
+    }
+    let gained = false;
+    if (goalRemaining < this.bestEver - 0.05 * this.candStepM) {
+      this.bestEver = goalRemaining;
+      gained = true;
+    }
+    if (alongRemaining < this.bestEverAlong - 0.05 * this.candStepM) {
+      this.bestEverAlong = alongRemaining;
+      gained = true;
+    }
+    if (gained) this.stagesWithoutGain = 0;
+    else this.stagesWithoutGain++;
+    return { deepest, stagesWithoutGain: this.stagesWithoutGain, bestEver: this.bestEver };
+  }
+}
+
 /** Run the stages from the start; returns every stage's retained candidates (stage 0 = the start). */
 export function runStages(ctx: SearchContext, guide: SkeletonGuide): Candidate[][] {
   const { args, progress, checkCancel, sLon, sLat, eLon, eLat, goals, nVias, startViaCount, cruise, fronts, lastTry, limitNote } = ctx;
@@ -67,18 +143,7 @@ export function runStages(ctx: SearchContext, guide: SkeletonGuide): Candidate[]
     ],
   ];
 
-  let bestEver = Infinity;
-  let bestEverAlong = Infinity;
-  let stagesWithoutGain = 0;
-  let bestEverDeepest = -1;
-  // Each goal's place on the skeleton, for progress measured along it.
-  const goalSkIdx = guide.skeleton && guide.skeletonCum ? goals.map(g => guide.nearestSkeleton(g.lon, g.lat)) : null;
-  /** Distance left to goal `gi` along the skeleton from a candidate's nearest skeleton point, or Infinity without a skeleton or past the goal's point. */
-  const alongSkeleton = (c: Candidate, gi: number): number => {
-    if (!goalSkIdx || !guide.skeletonCum) return Infinity;
-    const i = guide.nearestSkeleton(c.lon, c.lat);
-    return i < goalSkIdx[gi] ? guide.skeletonCum[goalSkIdx[gi]] - guide.skeletonCum[i] : Infinity;
-  };
+  const tracker = new ProgressTracker(guide, goals, candStepM);
   for (let stage = 0; stage < maxStages; stage++) {
     checkCancel();
     const tStage = Date.now();
@@ -223,30 +288,8 @@ export function runStages(ctx: SearchContext, guide: SkeletonGuide): Candidate[]
     // has not come closer to the destination for a few stages in a row is
     // boxed in (by land, the wind/wave limit, or a forecast that no longer
     // changes); say so rather than running the budget out and failing on
-    // the terminal hop from far away.
-    // Progress is measured towards the deepest branch's own goal (the next
-    // via, or the destination once every via is crossed), not towards the
-    // destination: a branch can sit a few km from the destination with a
-    // via still uncrossed (job 58b50b0d: east of Crete, the Kythira via
-    // behind it) and must not count as progress. A gain under a twentieth
-    // of the stage step is no gain.
-    let deepest = 0;
-    for (const c of retained) deepest = Math.max(deepest, c.viaCount);
-    let goalRemaining = Infinity;
-    for (const c of retained) {
-      if (c.viaCount !== deepest) continue;
-      goalRemaining = Math.min(goalRemaining, haversineDistanceM(c.lon, c.lat, goals[deepest].lon, goals[deepest].lat));
-    }
-    if (deepest > bestEverDeepest) {
-      bestEverDeepest = deepest;
-      bestEver = Infinity;
-    }
-    if (goalRemaining < bestEver - 0.05 * candStepM) {
-      bestEver = goalRemaining;
-      stagesWithoutGain = 0;
-    } else {
-      stagesWithoutGain++;
-    }
+    // the terminal hop from far away. The measure is ProgressTracker's.
+    const { deepest, stagesWithoutGain, bestEver } = tracker.update(retained);
     // A front that is beating (a fair share of its water candidates dead
     // upwind) sails well over the planned distance, so it gets the stages
     // up to the hard ceiling before a stall counts; otherwise the planned

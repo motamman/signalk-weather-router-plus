@@ -689,7 +689,14 @@ and `vessel.air_draft_m`); the mesh is not used until both are set.
 - **Sailing modes:** the mesh route is the skeleton. Its narrow passages
   (both shores within 1 km of the track) are motored along it; each open
   stretch between them is sailed by the open-water router from the end of
-  one passage to the start of the next.
+  one passage to the start of the next. With a sail threshold of 0 (never
+  motor) the narrow passages are sailed along the mesh route too, tacked
+  where the wind needs it (the tacks are checked against the coastline,
+  not against the charted depths the mesh route keeps to). An open stretch
+  whose search fails is followed along the mesh route under the request's
+  own mode: sailed under sail_max (tacks where needed, motor only below a
+  positive threshold), walked under fastest; when it cannot be sailed the
+  route fails naming the segment rather than motoring it.
 - **One end outside the mesh:** the leg runs on the mesh as far as the
   first open-water point after the last narrow passage within 50 km of
   the covered end, and the coastline search takes it from there (the
@@ -904,7 +911,8 @@ remaining distance never increases from one stage to the next.
 
 A search that stops making progress once its planned stages are used
 (three stages in a row without any candidate coming closer to the
-destination; when the front is beating, a tenth or more of its water
+destination, in a straight line or along the skeleton, so a route
+wrapping a peninsula is progress; when the front is beating, a tenth or more of its water
 candidates dead upwind, the check waits for the hard ceiling of planned
 stages plus half the configured count; progress is measured towards the
 deepest branch's next via, or the destination once every via is crossed)

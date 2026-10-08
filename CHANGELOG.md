@@ -88,6 +88,28 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A mesh leg's open stretch whose search failed was motored whatever the
+  request asked (job 1c1fda5b, 2026-10-08: 106 km around the outside of
+  Cape Cod motored under sail_max with a sail threshold of 0). It now
+  follows the mesh route under the request's own mode: under sail_max it
+  is laid out as the refined router lays out its legs (tacks where the
+  wind there and then needs them, motor only below a positive threshold)
+  and fails the route naming the segment when a stretch cannot be sailed;
+  under fastest it is walked choosing per step. With a sail threshold of
+  0 the narrow passages are sailed along the mesh route the same way
+  instead of motored.
+- The mesh funnel could emit a corner vertex twice when the crossed edges
+  fan around it (a zero-length leg in the mesh route; the motored walk hid
+  it, the tack layout refused it). A point equal to the last one emitted is
+  skipped, as Recast's `appendVertex` does; the route's geometry is
+  unchanged, with one point fewer where the Python experiment's funnel
+  repeats one.
+- The search's stall detector measured progress as the straight-line
+  distance to the goal, so a front advancing around a peninsula (the same
+  job: 8 stages along the back of Cape Cod, the canal 38 km away across
+  it) was called boxed in. Progress now counts either that distance or the
+  distance left along the skeleton shrinking (`ProgressTracker` in
+  `src/engine/search/stages.ts`).
 - Apply the GSHHG L1/L2/L3/L4 land/water hierarchy to global water grids,
   route rasters, refined masks and exact polygon checks. The full global
   grid is rebuilt from all four levels; old overlay caches are invalidated.

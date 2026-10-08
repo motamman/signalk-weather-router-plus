@@ -61,6 +61,25 @@ interface Env {
   wind: WindSource;
   current: CurrentSource;
   sim: SimOptions;
+  /** Who the errors speak as ('experimental router', or a fixed polyline's caller). */
+  who: string;
+  /** What a failed leg's error suggests (the search's legs: another router or a waypoint; a fixed polyline: its caller's advice). */
+  advice: string;
+}
+
+const SEARCH_ADVICE = 'use the isochrone router, or put a waypoint outside the enclosed water';
+
+/** A polyline to lay out and time under a policy (sailMeshPath). */
+export interface PolylineArgs {
+  vessel: VesselParams;
+  polar: PolarDiagram;
+  wind?: WindSource;
+  current?: CurrentSource;
+  sim: SimOptions;
+  /** Who the errors speak as, and what they say to do when a stretch cannot be sailed. */
+  who: string;
+  advice: string;
+  onProgress?: ComputeRouteArgs['onProgress'];
 }
 
 export class ExperimentalPropagator {
@@ -97,8 +116,48 @@ export class ExperimentalPropagator {
     enrichLegRanges(route, env.wind);
   }
 
+  /**
+   * A fixed polyline (a mesh route) sailed under the policy: every leg
+   * laid out forward in time as the search's legs are (tacks where the
+   * wind there and then needs them, each checked against the land mask
+   * and timed with the real polar), no search and no polish. Fails with a
+   * RouteError carrying `advice` when a stretch cannot be sailed.
+   */
+  sailPolyline(points: [number, number][], departure: Date, args: PolylineArgs): Route {
+    const waypoints: Waypoint[] = points.map(([lon, lat], i) => ({
+      lon,
+      lat,
+      time: departure,
+      sogMs: 0,
+      cogDeg: 0,
+      mode: i ? 'sailing' : 'motoring',
+    }));
+    const route: Route = { waypoints, totalTimeS: 0, totalDistanceM: 0, motoringTimeS: 0, sailingTimeS: 0, validated: true };
+    this.layTacks(
+      route,
+      new ConvexPolar(args.polar),
+      {
+        vessel: args.vessel,
+        polar: args.polar,
+        wind: args.wind,
+        current: args.current,
+        ...args.sim,
+        onProgress: args.onProgress,
+      },
+      args.who,
+      args.advice
+    );
+    return route;
+  }
+
   /** Replace each mixed sailing leg by its tacks, timing every leg with the real polar as the polyline is built. */
-  private layTacks(route: Route, cp: ConvexPolar, args: ComputeRouteArgs): Env {
+  private layTacks(
+    route: Route,
+    cp: ConvexPolar,
+    args: Omit<ComputeRouteArgs, 'start' | 'end' | 'departureTime'>,
+    who = 'experimental router',
+    advice = SEARCH_ADVICE
+  ): Env {
     const env: Env = {
       vessel: args.vessel,
       polar: args.polar!,
@@ -113,6 +172,8 @@ export class ExperimentalPropagator {
         maxSwhM: args.maxSwhM,
         comfortWeight: args.comfortWeight,
       },
+      who,
+      advice,
     };
     const old = route.waypoints;
     const out: Waypoint[] = [{ ...old[0] }];
@@ -145,7 +206,7 @@ export class ExperimentalPropagator {
     if (this.tryTimeLeg(a, b, env)) return;
     const r = simulateLegTime(a.lon, a.lat, a.time, b.lon, b.lat, env.vessel, env.polar, env.wind, env.current, env.sim);
     throw new RouteError(
-      `experimental router: the leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} to ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be sailed under the ${env.sim.modePolicy} policy (${r.reason ?? 'no speed'}); use the isochrone router, or a waypoint`
+      `${env.who}: the leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} to ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be sailed under the ${env.sim.modePolicy} policy (${r.reason ?? 'no speed'}); ${env.advice}`
     );
   }
 
@@ -223,7 +284,7 @@ export class ExperimentalPropagator {
         const p = stepTo(theta, TACK_MAX_M, false);
         if (!p)
           throw new RouteError(
-            `experimental router: the leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} to ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be sailed at ${at.lat.toFixed(4)}, ${at.lon.toFixed(4)} under the ${env.sim.modePolicy} policy; use the isochrone router, or a waypoint`
+            `${env.who}: the leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} to ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be sailed at ${at.lat.toFixed(4)}, ${at.lon.toFixed(4)} under the ${env.sim.modePolicy} policy; ${env.advice}`
           );
         pts.push(p);
         at = p;
@@ -258,14 +319,12 @@ export class ExperimentalPropagator {
       }
       if (!placed)
         throw new RouteError(
-          `experimental router: the beat from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} towards ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be tacked clear of land at ${at.lat.toFixed(4)}, ${at.lon.toFixed(4)}; put a waypoint outside the enclosed water, or use the isochrone router`
+          `${env.who}: the beat from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} towards ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be tacked at ${at.lat.toFixed(4)}, ${at.lon.toFixed(4)}: every tack tried crossed land or could not be sailed under the ${env.sim.modePolicy} policy; ${env.advice}`
         );
       pts.push(placed);
       at = placed;
     }
-    throw new RouteError(
-      `experimental router: more than ${MAX_TACKS_PER_LEG} tacks on one leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}`
-    );
+    throw new RouteError(`${env.who}: more than ${MAX_TACKS_PER_LEG} tacks on one leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}`);
   }
 
   /** The real polar's timing of a straight sub-leg from a waypoint (at its time), or null when it cannot be sailed. */

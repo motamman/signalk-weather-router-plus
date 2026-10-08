@@ -21,6 +21,7 @@ import type { PolarDiagram } from '../vessel/polar';
 import type { VesselParams } from '../vessel/vessel';
 import { CorridorError, mergeVias, planCorridor, type ChainVia, type Corridor } from './corridor';
 import { NoWind, type CurrentSource, type WindSource } from './environment';
+import { ExperimentalPropagator } from './experimental/propagator';
 import type { ModePolicy } from './legsim';
 import { findHandover, sliceCorridor, stitchLegParts } from './mesh/handover';
 import {
@@ -155,6 +156,10 @@ async function meshLeg(
   // passage's end to the next one's start.
   const wind = legWind ?? new NoWind();
   const motor = inp.sim.modePolicy === 'motor';
+  // Sail only: sail_max with a threshold of 0 never motors (legsim.ts), so
+  // the narrow passages are sailed along the mesh route too (2026-10-08,
+  // the owner's decision); above 0 they are motored as the parent does.
+  const sailOnly = inp.sim.modePolicy === 'sail_max' && inp.sim.sailThreshMs <= 0 && inp.polar !== null;
   const segs: MeshSegment[] = motor
     ? [{ type: 'constrained', start: 0, end: res.path.length - 1 }]
     : classifySegments(res.path, res.widths);
@@ -162,9 +167,53 @@ async function meshLeg(
     progress(
       0,
       0,
-      `${tag}chart mesh: ${segs.length} segment(s): ${segs.filter(s => s.type === 'constrained').length} narrow (motored along the mesh route), ${segs.filter(s => s.type === 'open').length} open water (isochrone search)`
+      `${tag}chart mesh: ${segs.length} segment(s): ${segs.filter(s => s.type === 'constrained').length} narrow (${sailOnly ? 'sailed along the mesh route, the sail threshold being 0' : 'motored along the mesh route'}), ${segs.filter(s => s.type === 'open').length} open water (isochrone search)`
     );
-  const land = motor || !segs.some(s => s.type === 'open') ? null : inp.landFor(bbox);
+  let landCache: LandMask | null = null;
+  const landOnce = (): LandMask => (landCache ??= inp.landFor(bbox));
+  /**
+   * A segment along the mesh route itself, under the request's policy: a
+   * narrow passage, an open stretch too short to search, or one whose
+   * search failed. Under sail_max it is laid out as the refined router
+   * lays out its legs (tacks where the wind there and then needs them,
+   * motor only below a positive threshold); it fails the route when a
+   * stretch cannot be sailed, never motors instead (2026-10-08, job
+   * 1c1fda5b: a failed search motored 106 km under a sail threshold of 0).
+   * Under fastest the walk picks per step; narrow passages are motored
+   * unless the request is sail only. The tacks are checked against the
+   * coastline, not against the charted depths the mesh route keeps to.
+   */
+  const alongMesh = (seg: MeshSegment, pts: [number, number][], at: Date, label: string, lenM: number): Route | null => {
+    const sailed = seg.type === 'open' ? inp.sim.modePolicy === 'sail_max' && inp.polar !== null : sailOnly;
+    if (sailed) {
+      const lay = new ExperimentalPropagator(landOnce(), { ...inp.propagator, stages });
+      const part = lay.sailPolyline(pts, at, {
+        vessel: inp.vessel,
+        polar: inp.polar!,
+        wind: legWind ?? undefined,
+        current,
+        sim: inp.sim,
+        who: label,
+        advice: 'raise the sail threshold (Route → Options) so that stretch is motored, or route under motor',
+        onProgress: (s: number, tot: number, m: string) => progress(s, tot, `${label}: ${m}`),
+      });
+      progress(
+        0,
+        0,
+        `${label}: ${seg.type === 'open' ? 'open water' : 'narrow passage'}, sailed along the mesh route: {distance:${lenM.toFixed(0)}}, {time:${part.totalTimeS}} (sailing {time:${part.sailingTimeS}})`
+      );
+      return part;
+    }
+    const policy: ModePolicy = seg.type === 'open' && !motor ? inp.sim.modePolicy : 'motor';
+    const part = routeFromMeshPath(pts, at, inp.vessel, inp.polar, wind, current, { ...inp.sim, modePolicy: policy });
+    if (part && !motor)
+      progress(
+        0,
+        0,
+        `${label}: ${seg.type === 'open' ? `open water under ${policy},` : 'narrow passage, motored along the mesh route,'} {distance:${lenM.toFixed(0)}}, {time:${part.totalTimeS}}`
+      );
+    return part;
+  };
   const parts: Route[] = [];
   let at = legDeparture;
   for (let si = 0; si < segs.length; si++) {
@@ -173,9 +222,9 @@ async function meshLeg(
     const lenM = pathLengthM(pts);
     const label = `${tag}chart mesh segment ${si + 1}/${segs.length}`;
     let part: Route | null = null;
-    if (seg.type === 'open' && lenM >= MIN_OPEN_SEGMENT_M && land) {
+    if (seg.type === 'open' && lenM >= MIN_OPEN_SEGMENT_M && !motor) {
       const last = seg.end === res.path.length - 1;
-      const prop = makeRouter(inp.router ?? DEFAULT_ROUTER, land, { ...inp.propagator, stages });
+      const prop = makeRouter(inp.router ?? DEFAULT_ROUTER, landOnce(), { ...inp.propagator, stages });
       try {
         part = prop.computeRoute({
           start: pts[0],
@@ -208,24 +257,18 @@ async function meshLeg(
         progress(
           0,
           0,
-          `WARNING: ${label}: open water, but the isochrone search failed (${(err as Error).message}); motoring along the mesh route instead`
+          `WARNING: ${label}: open water, but the isochrone search failed (${(err as Error).message}); following the mesh route instead under ${inp.sim.modePolicy}`
         );
         part = null;
       }
     }
     if (!part) {
-      part = routeFromMeshPath(pts, at, inp.vessel, inp.polar, wind, current, { ...inp.sim, modePolicy: 'motor' });
+      part = alongMesh(seg, pts, at, label, lenM);
       if (!part) {
         progress(0, 0, `WARNING: ${label}: cannot be made against the current; using the coastline search for the leg instead`);
         inp.releaseAreas?.();
         return null;
       }
-      if (!motor)
-        progress(
-          0,
-          0,
-          `${label}: ${seg.type === 'open' ? 'open water under' : 'narrow passage, motored along the mesh route,'} {distance:${lenM.toFixed(0)}}, {time:${part.totalTimeS}}`
-        );
     }
     parts.push(part);
     at = part.waypoints[part.waypoints.length - 1].time;

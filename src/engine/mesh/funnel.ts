@@ -18,6 +18,14 @@ function same(a: XY, b: XY): boolean {
 
 export function funnel(portals: [XY, XY][], start: XY, goal: XY): XY[] {
   const pts: XY[] = [start];
+  // A point equal to the last one emitted is not a corner: when the edges
+  // fan around the apex, a portal's endpoint is the apex itself and the
+  // restart branch below would emit it a second time (2026-10-08, a mesh
+  // route with a zero-length leg; the Python experiment's funnel does the
+  // same). Recast's appendVertex skips such a point; so does this.
+  const emit = (p: XY): void => {
+    if (!same(pts[pts.length - 1], p)) pts.push(p);
+  };
   const P: [XY, XY][] = [[start, start], ...portals, [goal, goal]];
   let apex = start;
   let left = P[0][0];
@@ -33,7 +41,7 @@ export function funnel(portals: [XY, XY][], start: XY, goal: XY): XY[] {
         right = pr;
         ri = i;
       } else {
-        pts.push(left);
+        emit(left);
         apex = left;
         ai = li;
         left = apex;
@@ -49,7 +57,7 @@ export function funnel(portals: [XY, XY][], start: XY, goal: XY): XY[] {
         left = pl;
         li = i;
       } else {
-        pts.push(right);
+        emit(right);
         apex = right;
         ai = ri;
         left = apex;
@@ -62,6 +70,6 @@ export function funnel(portals: [XY, XY][], start: XY, goal: XY): XY[] {
     }
     i++;
   }
-  if (!same(pts[pts.length - 1], goal)) pts.push(goal);
+  emit(goal);
   return pts;
 }
