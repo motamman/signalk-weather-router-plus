@@ -1271,12 +1271,25 @@ function _initRouteChoices() {
     el.addEventListener('change', () => { try { localStorage.setItem(key, el.value); } catch (_) {} });
   }
 }
+// Smoothing is built into the Refined router (its cross-track polish; the
+// shortcut smoother would take its tacks back): the control is disabled then.
+function _syncSmoothing() {
+  const router = document.getElementById('router');
+  const sm = document.getElementById('smootherSel');
+  const note = document.getElementById('smootherNote');
+  if (!router || !sm) return;
+  const refined = router.value === 'refined';
+  sm.disabled = refined;
+  if (note) note.hidden = !refined;
+}
+document.getElementById('router')?.addEventListener('change', _syncSmoothing);
 window.addEventListener('rp:status', e => {
   const el = document.getElementById('router');
   const st = e.detail;
   let saved = null;
   try { saved = localStorage.getItem('rp:router'); } catch (_) {}
   if (el && !saved && st && st.router && [...el.options].some(o => o.value === st.router)) el.value = st.router;
+  _syncSmoothing();
 });
 
 // --- The routers explained: (i) beside the Router choice opens routers.html in a large popup ---
@@ -1388,6 +1401,7 @@ function _restorePlan() {
 }
 _restorePlan();
 _initRouteChoices();
+_syncSmoothing();
 document.getElementById('departure').addEventListener('change', _savePlan);
 
 // --- Tabs ---
@@ -1397,7 +1411,7 @@ const modalLog = document.getElementById('modalLog');
 const modalItinerary = document.getElementById('modalItinerary');
 const modalStatus = document.getElementById('modalStatus');
 const cancelBtn = document.getElementById('cancelRoute');
-const TAB_IDS = ['routeSection', 'settingsSection', 'layersSection', 'savedSection', 'logSection', 'itinerarySection', 'srvSettingsSection'];
+const TAB_IDS = ['routeSection', 'layersSection', 'savedSection', 'logSection', 'itinerarySection', 'srvSettingsSection'];
 function showTab(id) {
   if (!TAB_IDS.includes(id)) return;
   for (const t of TAB_IDS) {
@@ -1410,7 +1424,7 @@ function showTab(id) {
     b.setAttribute('aria-selected', String(on));
   });
   try { localStorage.setItem('rp:tab', id); } catch (_) {}
-  if (id === 'settingsSection') drawPolarDiagram();
+  if (id === 'routeSection' && _routeGroup === 'options') drawPolarDiagram();
   window.dispatchEvent(new CustomEvent('rp:tab', { detail: id }));
 }
 document.querySelectorAll('#tabBar button').forEach(b => {
@@ -1420,6 +1434,26 @@ document.querySelectorAll('#tabBar button').forEach(b => {
   let saved = null;
   try { saved = localStorage.getItem('rp:tab'); } catch (_) {}
   showTab(TAB_IDS.includes(saved) ? saved : 'routeSection');
+})();
+
+// Route sub-tabs: Plan (the request and its result) or Options (this
+// browser's choices for every route it asks for). Remembered per browser.
+let _routeGroup = 'plan';
+(function () {
+  const row = document.getElementById('routeSubTabs');
+  if (!row) return;
+  const groups = Array.from(document.querySelectorAll('#routeSection .route-group'));
+  function show(id) {
+    _routeGroup = id;
+    groups.forEach(g => g.classList.toggle('active', g.dataset.group === id));
+    row.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.group === id));
+    try { localStorage.setItem('rp:routeTab', id); } catch (_) {}
+    if (id === 'options') drawPolarDiagram();
+  }
+  row.querySelectorAll('button').forEach(b => b.addEventListener('click', () => show(b.dataset.group)));
+  let saved = null;
+  try { saved = localStorage.getItem('rp:routeTab'); } catch (_) {}
+  show(groups.some(g => g.dataset.group === saved) ? saved : 'plan');
 })();
 
 // Layers sub-tabs: one group of toggles visible at a time.
@@ -2062,12 +2096,13 @@ function buildRoutePayload(overrides) {
   if (maxSwhM !== null) body.max_swh_m = maxSwhM;
   if (overrides.departure !== undefined) body.departure = overrides.departure;
   else if (fromClockInput(depVal)) body.departure = fromClockInput(depVal).toISOString();
-  const stages = parseInt(document.getElementById('stages').value, 10);
-  if (stages > 0) body.stages = Math.max(4, Math.min(200, stages));
   const name = (document.getElementById('routeName').value || '').trim();
   if (name) body.name = name;
   const pub = document.getElementById('publishSel').value;
   if (pub === 'true') body.publish = true; else if (pub === 'false') body.publish = false;
+  const sm = document.getElementById('smootherSel');
+  if (body.router === 'refined') body.smoother = false;
+  else if (sm && sm.value === 'true') body.smoother = true; else if (sm && sm.value === 'false') body.smoother = false;
   if (document.getElementById('noCurrents').checked) body.no_currents = true;
   const rw = document.getElementById('regionalWind');
   if (rw && !rw.checked) body.wind_model = 'ecmwf';

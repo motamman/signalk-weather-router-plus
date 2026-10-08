@@ -143,6 +143,8 @@
   .subtab-row button.active { background: var(--go); border-color: var(--go); color: #fff; }
   .layer-group { display: none; }
   .layer-group.active { display: block; }
+  .route-group { display: none; }
+  .route-group.active { display: block; }
   /* Legend box: one row per active water/weather overlay. */
   #legendBox {
     position: absolute; left: 10px; bottom: 28px; z-index: 90;
@@ -566,7 +568,7 @@
     padding: 0 6px; background: transparent; color: #c88; border: 1px solid #644;
     border-radius: 3px; cursor: pointer; font-size: 14px; line-height: 1;
   }
-  /* Polar diagram (Setup → Vessel) */
+  /* Polar diagram (Route → Options → Vessel) */
   .ol-zoom .rp-locate.rp-locate-none { color: #c62828; }
   #polarDiagram { display: block; width: 100%; height: auto; margin-top: var(--s-1); border: 1px solid var(--border); border-radius: var(--r-sm); background: #fff; }
   #polarInfo { font-size: var(--f-xs); color: var(--text-2); margin-top: 2px; min-height: 14px; }
@@ -602,12 +604,11 @@
 
   <div id="tabBar" role="tablist">
     <button type="button" data-tab="routeSection" role="tab">Route</button>
-    <button type="button" data-tab="settingsSection" role="tab">Setup</button>
     <button type="button" data-tab="layersSection" role="tab">Layers</button>
     <button type="button" data-tab="savedSection" role="tab">Saved</button>
     <button type="button" data-tab="logSection" role="tab">Log</button>
     <button type="button" data-tab="itinerarySection" role="tab">Itinerary</button>
-    <button type="button" data-tab="srvSettingsSection" role="tab">Settings</button>
+    <button type="button" data-tab="srvSettingsSection" role="tab">Defaults</button>
   </div>
   </div><!-- /panelHead -->
   <div id="tabBody">
@@ -617,6 +618,9 @@
        rest of the panel is not pushed down by it. -->
   <section class="tab-pane" id="routeSection">
   <div class="section-body">
+  <!-- Two sub-tabs: Plan (the request and its result) and Options (this browser's choices for every route it asks for). -->
+  <div class="subtab-row" id="routeSubTabs"><button type="button" data-group="plan">Plan</button><button type="button" data-group="options">Options</button></div>
+  <div class="route-group" data-group="plan">
   <!-- Plan strip: start, end, vias, departure, Find Route. -->
   <div id="planStrip">
 
@@ -689,6 +693,14 @@
     </div>
   </div>
 
+  <label for="smootherSel" title="Replaces runs of waypoints with straight shortcuts when they are clear of land and not much slower (the tolerance is on the Defaults tab). Your own waypoints are always kept. With the Refined router it can take back a tack where a straight line is within the tolerance.">Smoothing</label>
+  <select id="smootherSel" aria-label="Shortcut smoothing">
+    <option value="">Default</option>
+    <option value="true">On</option>
+    <option value="false">Off</option>
+  </select>
+  <div id="smootherNote" class="ctl-hint" hidden>Built into the Refined router.</div>
+
   <button id="findRoute" disabled>Find Route</button>
   <label style="display:block;font-size:11px;cursor:pointer;margin-top:var(--s-1);" title="Draw the router's search on the map while a route computes: the front of each stage and the best path so far. Off by default; the same switch is in Layers → Base."><input type="checkbox" id="frontToggleRoute" style="width:auto;margin-right:4px;">Show decision lines (the router's search)</label>
   <button id="resetBtn" style="width:100%;padding:7px;margin-top:var(--s-1);background:var(--surface-2);color:var(--text);border:1px solid var(--border-hard);border-radius:var(--r-sm);cursor:pointer;font-size:var(--f-sm);transition:background var(--t-quick);">Clear all</button>
@@ -708,22 +720,10 @@
 
   <!-- Result strip: what the route is. Hidden while empty. -->
   <div id="routeInfo"></div>
+  </div><!-- /plan -->
 
-  </div>
-  </section>
-
-  <section class="tab-pane" id="settingsSection">
-  <div class="section-body">
-
-  <!-- Display units: taken from the Signal K user's unit preferences. -->
-  <details class="subsection" open>
-  <summary>Display</summary>
-  <div class="subsection-body">
-  <div class="ctl-hint" id="unitSource">Loading your Signal K unit preferences…</div>
-  <div class="ctl-hint">Units are set in your Signal K unit preferences.</div>
-  </div>
-  </details>
-
+  <div class="route-group" data-group="options">
+  <!-- Options: this browser's choices for the routes it asks for (remembered here); the server's defaults are on the Defaults tab. -->
   <!-- Vessel: type toggle + power-boat specs + polar picker. -->
   <details class="subsection" open>
   <summary>Vessel</summary>
@@ -808,10 +808,6 @@
   <summary>Solver tuning</summary>
   <div class="subsection-body">
 
-  <label>Isochrone stages: <span id="stagesLabel">auto</span></label>
-  <div class="ctl-hint">Number of propagation stages between start and end. 0 = the plugin's configured default. More stages = finer route, slower solve.</div>
-  <input type="range" id="stages" min="0" max="200" step="4" value="0" aria-label="Isochrone stages (0 = default)">
-
   <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="noCurrents">Ignore currents</label>
   <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Finer wind from the signalk-grib-downloader plugin (AROME, ARPEGE, ICON-EU) where it covers the route and time, ECMWF elsewhere. Unticked: ECMWF only. No effect without the downloader."><input type="checkbox" id="regionalWind" checked>Regional wind where available</label>
   <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Areas marked &quot;avoid&quot; on Signal K notes (a circle around the note) are land to the router: no route goes through them. Unticked: the notes are ignored."><input type="checkbox" id="avoidAreas" checked>Avoid marked areas</label>
@@ -827,18 +823,6 @@
   </div>
   </details>
 
-  <!-- Forecast data: what is loaded, and a refresh. -->
-  <details class="subsection">
-  <summary>Forecast data</summary>
-  <div class="subsection-body">
-    <div id="forecastInfo" class="ctl-hint" style="margin-top:var(--s-1);">—</div>
-    <div style="display:flex;gap:var(--s-2);align-items:center;margin-top:var(--s-1);">
-      <button type="button" id="refreshForecast" class="sm-btn" title="Check ECMWF for a newer cycle">Refresh forecast</button>
-      <span id="refreshForecastStatus" class="ctl-hint" style="margin:0;"></span>
-    </div>
-  </div>
-  </details>
-
   <!-- Live mode re-plan triggers. -->
   <details class="subsection">
   <summary>Live re-plan triggers</summary>
@@ -848,7 +832,7 @@
   <div class="ctl-hint">Re-plan fires when the vessel comes within this distance of the next waypoint.</div>
   <input type="range" id="proximityRadiusM" min="50" max="1000" step="25" value="200" aria-label="Proximity re-plan radius">
 
-  <div class="ctl-hint">The off-course threshold is in the LIVE / SIMULATE box on the Route tab.</div>
+  <div class="ctl-hint">The off-course threshold is in the LIVE / SIMULATE box on the Plan sub-tab.</div>
 
   <label>Off-course sustain: <span id="xteSustainSecLabel">30</span> <span class="unitOf" data-for="xteSustainSecLabel"></span></label>
   <div class="ctl-hint">How long the vessel must stay off-course before triggering a re-plan.</div>
@@ -856,6 +840,8 @@
 
   </div>
   </details>
+
+  </div><!-- /options -->
 
   </div>
   </section>
@@ -913,6 +899,19 @@
 
   <section class="tab-pane data-pane" id="logSection">
   <div class="section-body">
+  <!-- Forecast data: what is loaded, and a refresh. -->
+  <details class="subsection">
+  <summary>Forecast data</summary>
+  <div class="subsection-body">
+    <div id="forecastInfo" class="ctl-hint" style="margin-top:var(--s-1);">—</div>
+    <div style="display:flex;gap:var(--s-2);align-items:center;margin-top:var(--s-1);">
+      <button type="button" id="refreshForecast" class="sm-btn" title="Check ECMWF for a newer cycle">Refresh forecast</button>
+      <span id="refreshForecastStatus" class="ctl-hint" style="margin:0;"></span>
+    </div>
+  </div>
+  </details>
+
+
     <details id="rawLog">
       <summary>Engine log (raw)</summary>
       <div id="modalLog"></div>
@@ -943,7 +942,7 @@
   <!-- Server-side settings shared by every client (GET/PUT /api/settings; rp-settings.js). -->
   <section class="tab-pane" id="srvSettingsSection">
   <div class="section-body">
-    <div class="ctl-hint">Saved on the Signal K server and shared by every client. Values show in your display units (Setup → Display). File paths, the download mirror and Weather API registration stay in the Signal K plugin configuration.</div>
+    <div class="ctl-hint">Saved on the Signal K server and shared by every client; what a route starts from unless Route → Options says otherwise. Values show in your display units: <span id="unitSource">loading your Signal K unit preferences…</span> File paths, the download mirror and Weather API registration stay in the Signal K plugin configuration.</div>
     <form id="srvSettingsForm" novalidate><div class="ctl-hint">Loading…</div></form>
     <div id="srvSettingsActions">
       <button type="button" id="srvSettingsSave" class="sm-btn" disabled>Save</button>

@@ -221,7 +221,7 @@ export async function route(
         progress(
           0,
           0,
-          `polar: rows closer than {angle:${cfg.routing.noGoMinAngleDeg * (Math.PI / 180)}} to the wind ignored (tightest sailable angle, Settings)`
+          `polar: rows closer than {angle:${cfg.routing.noGoMinAngleDeg * (Math.PI / 180)}} to the wind ignored (tightest sailable angle, Defaults)`
         );
       }
     }
@@ -430,7 +430,8 @@ export async function route(
         comfortWeight: request.comfort_weight ?? cfg.routing.comfortWeight,
       },
       simplifyM: request.simplify_m ?? cfg.routing.simplifyM,
-      smoother: request.smoother ?? cfg.routing.smoother,
+      // The refined router polishes its own polyline and lays out tacks the shortcut smoother would take back: never smoothed.
+      smoother: router === 'refined' ? false : (request.smoother ?? cfg.routing.smoother),
       smootherTolerance: request.smoother_tolerance ?? cfg.routing.smootherTolerance,
       loadAreas,
       releaseAreas,

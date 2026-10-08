@@ -50,6 +50,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Smoothing** on the Route tab's Plan (Default / On / Off): the
+  request's `smoother`, beside Method and Router, remembered per browser.
+  With the Refined router the shortcut smoother never runs (its polish
+  replaces it, and the smoother would take its tacks back); the control
+  is disabled then.
+- **Web app tabs.** The Setup tab is gone: its sections (vessel, sailing
+  strategy, waypoint behaviour, solver tuning, live re-plan triggers) are
+  the **Options** sub-tab of the Route tab, beside **Plan**; the stages
+  slider is dropped (the Method choice replaces it). The Settings tab is
+  **Defaults**. The forecast-data block (what is loaded, refresh) is on
+  the Log tab; the units note is in the Defaults header.
 - The open-water search is reached through one seam (`src/engine/router.ts`)
   for a plain leg and for each open stretch of a mesh leg.
 - `MinHeap.peekKey()` (engine/heap.ts).

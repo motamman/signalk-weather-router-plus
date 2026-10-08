@@ -6,7 +6,7 @@
  *    server / installation settings — file paths, the download mirror,
  *    Weather API registration and the map overlay cache;
  *  - the web-app settings (settings.ts, stored in the plugin data dir as
- *    settings.json, edited in the page's Settings tab): vessel, forecast
+ *    settings.json, edited in the page's Defaults tab): vessel, forecast
  *    horizon and extras, currents, routing engine and publishing.
  *
  * Older versions kept everything in the plugin config; those keys are
@@ -188,7 +188,7 @@ export const CONFIG_SCHEMA = {
   type: 'object',
   description:
     'Server and installation settings only. Vessel, forecast horizon, currents, routing and publishing are set in the ' +
-    'web app (Weather Router Plus → Settings tab) and shared by every client.',
+    'web app (Weather Router Plus → Defaults tab) and shared by every client.',
   properties: {
     landShapefiles: {
       type: 'string',

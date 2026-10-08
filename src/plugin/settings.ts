@@ -570,7 +570,7 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     label: 'Shortcut smoother',
     type: 'boolean',
     default: false,
-    help: 'Replace runs of waypoints with one straight leg when it is clear of land and not much slower. Your own waypoints are always kept.',
+    help: 'Replace runs of waypoints with one straight leg when it is clear of land and not much slower. Your own waypoints are always kept. The default; a route can choose On or Off (Route → Plan → Smoothing).',
     reload: 'next_job',
   },
   {

@@ -22,6 +22,10 @@
   On the test boat it was 24 minutes faster on a 5-hour harbour beat and
   26 minutes faster on a 4½-day passage; the same on a reach. Pick either
   per route; the log says which ran.
+- **Fewer tabs.** Route now has two sub-tabs: *Plan* (the request and its
+  result) and *Options* (what used to be the Setup tab). *Settings* is
+  *Defaults*: the server's starting values for every route. Forecast data
+  moved to the Log tab.
 - **Mixed legs count properly.** A leg that motors out of a harbour and
   then sails now counts its motoring hours in the totals.
 

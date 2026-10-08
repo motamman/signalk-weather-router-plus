@@ -377,7 +377,7 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 
   ![Planning: start, destination and waypoints on the map, with the click menu open](public/screenshots/02-planning.jpg)
 
-- **Waypoint behaviour** (Setup tab): **Precision** Precise (each leg
+- **Waypoint behaviour** (Route → Options): **Precision** Precise (each leg
   ends exactly at its waypoint) or Approximate (one search carries the
   route through the circle around each waypoint instead of stopping at
   it), and
@@ -487,7 +487,7 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   streamed and kept with the job; the switch only shows or hides them, so
   turning it on after a run shows the search that was made. The finished
   route's fronts stay, faintly, also for a past route opened from the log.
-- **Settings tab**: the web-app settings below, in the selected units.
+- **Defaults tab**: the web-app settings below (what every route starts from, shared by every client), in the selected units.
 - **While the server gets its forecast** (a first start, or after the
   forecast settings changed, when the forecast is decoded again): a notice
   under the header says what it is doing ("Loading the forecast: decoding
@@ -607,7 +607,7 @@ collection, which Freeboard creates.
 Not yet available in the panel: waypoints in the "from the boat" flow
 (draw a route on the chart for those), a departure time other than now,
 polar performance and the other web-app settings (they apply as set
-in the web app's Settings tab). A "weather route to here" entry in
+in the web app's Defaults tab). A "weather route to here" entry in
 Freeboard's map menu needs a change to Freeboard; see
 [docs/plans/freeboard-sk-integration.md](docs/plans/freeboard-sk-integration.md).
 
@@ -840,7 +840,7 @@ it: an amber badge in the result strip with the end time, the legs after
 it drawn dashed with a "forecast ends" marker on the map, a chip on the
 itinerary cards, and a note in the saved route's description. The
 Freeboard panel shows the same note. The **Forecast horizon** setting
-(Settings tab, Forecast group, 3 h to 360 h) decides how far the forecast
+(Defaults tab, Forecast group, 3 h to 360 h) decides how far the forecast
 reaches.
 
 **Regional wind (optional).** With the signalk-grib-downloader plugin
@@ -881,7 +881,7 @@ and the itinerary says "moved N m". With no water within 1,000 m the
 route fails naming the point.
 
 Polar rows closer to the wind than the **Tightest sailable angle**
-setting (Settings tab, Routing group, default 30°, 0 = off) are ignored
+setting (Defaults tab, Routing group, default 30°, 0 = off) are ignored
 for routing: many library polars carry small boat speeds at 5°–25° off
 the wind, which would send a route dead upwind at a crawl instead of
 tacking. The polar files themselves are not changed.
@@ -1450,7 +1450,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `max_swh_m` | number | m | setting `routing.maxSwh` (none) | 0..30; a leg is not allowed where the significant wave height is above this (needs wave data) |
 | `simplify_m` | number | m | setting `routing.simplify` | 0..5000; route simplification tolerance, 0 = off |
 | `smoother` | boolean | | setting `routing.smoother` | run the shortcut smoother |
-| `smoother_tolerance` | number | ratio | setting `routing.smootherTolerance` | 0..0.5; how much slower a shortcut may be (0.05 = 5%) |
+| `smoother_tolerance` | number | ratio | setting `routing.smootherTolerance` | 0..0.5; how much slower a shortcut may be (0.05 = 5%). The Route tab's *Smoothing* (Default / On / Off) sends `smoother`; with `router: refined` the smoother never runs (its polish replaces it) |
 | `comfort_weight` | number | | setting `routing.comfortWeight` (1) | 0..3; how much the search avoids rough water as the boat meets it (the encounter index). 0 = off, the fastest route. See [Comfort](#comfort-rough-water) |
 | `name` | string | | `<prefix> <lat>,<lon> → <lat>,<lon>` | name of the Signal K route record (trimmed). The default uses the `publish.routeNamePrefix` setting (`WRP`) and the start and end to two decimals |
 | `publish` | boolean | | setting `publish.toResources` (on) | save the finished route to the Resources API |

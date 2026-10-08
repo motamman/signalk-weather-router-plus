@@ -64,7 +64,7 @@ export function fmtUtc(ms: number): string {
 export function forecastNote(ctx: SearchContext): string {
   const { args, lastTry } = ctx;
   if (args.forecastEndMs === undefined || lastTry.latestMs <= args.forecastEndMs) return '';
-  return ` The forecast ends ${fmtUtc(args.forecastEndMs)} and the search is ${((lastTry.latestMs - args.forecastEndMs) / HOUR_MS).toFixed(0)} h past it, on conditions held at that last step: a longer forecast horizon (Settings) may open a way.`;
+  return ` The forecast ends ${fmtUtc(args.forecastEndMs)} and the search is ${((lastTry.latestMs - args.forecastEndMs) / HOUR_MS).toFixed(0)} h past it, on conditions held at that last step: a longer forecast horizon (Defaults) may open a way.`;
 }
 
 /**

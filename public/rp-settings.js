@@ -1,4 +1,4 @@
-// Weather Router Plus — Settings tab (server-side settings): entry module,
+// Weather Router Plus — Defaults tab (server-side settings): entry module,
 // imports UI_UNITS, API, escapeHtml and loadPluginStatus from rp-core.js.
 //
 // GET  /api/settings → {values, schema}: values are SI (m, m/s, s, deg);

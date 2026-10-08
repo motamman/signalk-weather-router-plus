@@ -96,7 +96,7 @@ function forecastHorizonNote(inp: LegPipelineInputs, plan: LegPlan, r: Route, le
     inp.progress(
       0,
       0,
-      `WARNING: ${inp.multi ? `${legLabel(plan)} ` : ''}arrival is {time:${((arrival - lastValid) / 1000).toFixed(0)}} after the last forecast step (${legWind.validRange[1].toISOString().slice(0, 16).replace('T', ' ')} UTC); the last ${beyond} leg${beyond === 1 ? '' : 's'} ran on conditions held at that step${limited ? ', and the wind/wave limit was checked against those held conditions' : ''}. A longer forecast horizon (Settings) covers more of the passage`
+      `WARNING: ${inp.multi ? `${legLabel(plan)} ` : ''}arrival is {time:${((arrival - lastValid) / 1000).toFixed(0)}} after the last forecast step (${legWind.validRange[1].toISOString().slice(0, 16).replace('T', ' ')} UTC); the last ${beyond} leg${beyond === 1 ? '' : 's'} ran on conditions held at that step${limited ? ', and the wind/wave limit was checked against those held conditions' : ''}. A longer forecast horizon (Defaults) covers more of the passage`
     );
   }
 }
