@@ -283,7 +283,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
         st.send({ type: 'error', id: msg.id, message: 'route sent to the data worker' });
         return;
       }
-      await route(st, msg.id, msg.request, msg.avoid ?? []);
+      await route(st, msg.id, msg.request, msg.avoid ?? [], msg.self);
       sendCurrents(st);
       return;
     case 'query':

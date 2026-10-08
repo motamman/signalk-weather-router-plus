@@ -148,6 +148,7 @@ export function waypointProperties(wp: Waypoint): Record<string, unknown> {
   if (finite(wp.swhMaxM)) d.leg_swh_max_m = round(wp.swhMaxM, 2);
   if (wp.leg !== undefined) d.leg = wp.leg;
   if (wp.role !== undefined) d.role = wp.role;
+  if (wp.tack) d.tack = true;
   return d;
 }
 

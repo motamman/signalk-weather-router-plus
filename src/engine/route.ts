@@ -41,6 +41,8 @@ export interface Waypoint {
   swhMaxM?: number;
   leg?: string;
   role?: 'via';
+  /** A tack or gybe point the router placed when it split a beat into its two legs (experimental router). */
+  tack?: true;
   /**
    * Sailing and motoring seconds of the leg arriving here, set when the
    * shortcut smoother merged several legs into one (mixed modes); totals
@@ -123,6 +125,8 @@ export interface Route {
   autoVias?: { lon: number; lat: number; radiusM: number; widthM: number; name: string }[];
   /** The corridor search failed and the leg ran on the per-route coarse skeleton instead (decision E: counted in the status). */
   corridorFallback?: true;
+  /** The leg (or at least one leg) was routed on the chart mesh (engine/mesh) instead of the coastline search. */
+  meshLeg?: true;
 }
 
 /** Recompute cog / twa / sog on every waypoint from the final geometry. */

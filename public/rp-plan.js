@@ -2017,6 +2017,8 @@ function buildRoutePayload(overrides) {
     mode: document.getElementById('mode').value,
     sail_thresh_ms: sailThreshMs,
   };
+  const routerSel = document.getElementById('router');
+  if (routerSel && routerSel.value !== 'default') body.router = routerSel.value;
   const maxWindMs = _limitSI('maxWind'), maxSwhM = _limitSI('maxSwh');
   if (maxWindMs !== null) body.max_wind_ms = maxWindMs;
   if (maxSwhM !== null) body.max_swh_m = maxSwhM;
@@ -2210,7 +2212,7 @@ function _jobOnDone(job, d) {
   const { id, statusEl } = job;
   const elapsed = ((Date.now() - job.t0) / 1000).toFixed(1);
   appendLog('Route complete! (' + elapsed + 's)', 'done');
-  if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : ''));
+  if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : '') + (d.summary.mesh ? ', on the chart mesh' : '') + (d.summary.router ? ', router ' + d.summary.router : ''));
   modalStatus.textContent = 'Done in ' + elapsed + 's';
   statusEl.textContent = '';
   RouteProgress.done(elapsed);

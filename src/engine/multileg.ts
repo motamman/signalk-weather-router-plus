@@ -188,6 +188,7 @@ export function stitchLegs(legs: Route[]): Route {
   let limitsBeyond = legs[0].limitsBeyondForecast ?? false;
   let drops = legs[0].smootherDrops ?? 0;
   let fallback = legs[0].corridorFallback ?? false;
+  let mesh = legs[0].meshLeg ?? false;
   for (let li = 1; li < legs.length; li++) {
     const leg = legs[li];
     // The previous leg's end is this waypoint's junction.
@@ -218,6 +219,7 @@ export function stitchLegs(legs: Route[]): Route {
       validTo = validTo === undefined ? leg.forecastValidToMs : Math.min(validTo, leg.forecastValidToMs);
     limitsBeyond = limitsBeyond || (leg.limitsBeyondForecast ?? false);
     fallback = fallback || (leg.corridorFallback ?? false);
+    mesh = mesh || (leg.meshLeg ?? false);
     drops += leg.smootherDrops ?? 0;
   }
   const route: Route = {
@@ -237,6 +239,7 @@ export function stitchLegs(legs: Route[]): Route {
   if (limitsBeyond) route.limitsBeyondForecast = true;
   if (drops) route.smootherDrops = drops;
   if (fallback) route.corridorFallback = true;
+  if (mesh) route.meshLeg = true;
   recomputePerWaypointMetadata(route);
   return route;
 }

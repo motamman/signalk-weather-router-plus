@@ -750,6 +750,14 @@
     <option value="motor">Motor Only</option>
   </select>
 
+  <label for="router">Open-water router</label>
+  <div class="ctl-hint">Isochrone is the standard search. Experimental is the second pathway where method changes are tried; run the same route both ways to compare.</div>
+  <select id="router" aria-label="Open-water router">
+    <option value="default">Settings default</option>
+    <option value="isochrone">Isochrone</option>
+    <option value="experimental">Experimental</option>
+  </select>
+
   <label>Min sail speed: <span id="sailThreshLabel">5.0</span> <span class="unitOf" data-for="sailThreshLabel"></span></label>
   <div class="ctl-hint">Below this speed, skip sailing and motor instead. Lower = more sailing segments.</div>
   <input type="range" id="sailThresh" min="0" max="5.2" step="0.1" value="2.6" aria-label="Minimum sailing speed">

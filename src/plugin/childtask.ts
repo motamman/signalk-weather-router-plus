@@ -10,7 +10,11 @@
  * Tasks:
  *  - rmtree:   count and delete one directory tree (a superseded tile
  *              generation: hundreds of thousands of files);
- *  - regional: decode one signalk-grib-downloader run (decodeRegionalRun).
+ *  - regional: decode one signalk-grib-downloader run (decodeRegionalRun);
+ *  - mesh:     route one leg on the chart mesh (engine/mesh): the tiles of
+ *              the leg's box are about 1 GB of typed arrays for 6 M
+ *              triangles (brain, 2026-10-08), which the route worker must
+ *              not keep.
  */
 
 import { fork } from 'node:child_process';
@@ -18,9 +22,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { RegionalSource } from '../data/regional';
 import type { RegionalDecodeResult } from '../data/regionaldecode';
+import type { MeshRouteResult, MeshRules } from '../engine/mesh/route';
 
 export type ChildTask =
-  { task: 'rmtree'; dir: string } | { task: 'regional'; src: RegionalSource; srcDir: string; dataDir: string; keepRuns: number };
+  | { task: 'rmtree'; dir: string }
+  | { task: 'regional'; src: RegionalSource; srcDir: string; dataDir: string; keepRuns: number }
+  | { task: 'mesh'; dir: string; start: [number, number]; end: [number, number]; rules: MeshRules };
 
 export interface RmtreeResult {
   /** Saved tiles (.gz) and their bytes that were in the tree. */
@@ -28,7 +35,11 @@ export interface RmtreeResult {
   bytes: number;
 }
 
-export type ChildTaskResult<T extends ChildTask> = T extends { task: 'rmtree' } ? RmtreeResult : RegionalDecodeResult;
+export type ChildTaskResult<T extends ChildTask> = T extends { task: 'rmtree' }
+  ? RmtreeResult
+  : T extends { task: 'mesh' }
+    ? MeshRouteResult
+    : RegionalDecodeResult;
 
 const isTs = __filename.endsWith('.ts');
 
@@ -117,6 +128,11 @@ async function runTask(t: ChildTask): Promise<unknown> {
     case 'regional': {
       const { decodeRegionalRun } = await import('../data/regionaldecode');
       return decodeRegionalRun(t.src, t.srcDir, t.dataDir, t.keepRuns);
+    }
+    case 'mesh': {
+      const { MeshStore } = await import('../engine/mesh/store');
+      const { meshRoute } = await import('../engine/mesh/route');
+      return meshRoute(MeshStore.open(t.dir), t.start, t.end, t.rules);
     }
   }
 }

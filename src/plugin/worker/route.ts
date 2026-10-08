@@ -29,7 +29,7 @@ import { routeToGeoJSON, routeToSignalKRoute, skeletonToGeoJSON } from '../route
 import { PolarDiagram } from '../../vessel/polar';
 import { loadPolarCached, resolvePolarPath } from '../polars';
 
-import { routeVessel } from '../config';
+import { routeVessel, type SelfDesign } from '../config';
 import { type RouteRequest, type RouteSummary } from '../protocol';
 import { requireInit } from './state';
 import { extraParams, readWindow, releaseWindow } from './forecast';
@@ -38,6 +38,30 @@ import { rebuildStack } from './currents';
 import { GLOBAL_DLON_DEG, isFinerThanGlobal } from './regional';
 import { avoidAt, type AvoidArea } from '../../geo/avoid';
 import type { WorkerState } from './state';
+import { MeshStore } from '../../engine/mesh/store';
+import { meshCovers } from '../../engine/mesh/route';
+import type { MeshLegRouter } from '../../engine/mesh/leg';
+import { runChildTask } from '../childtask';
+
+/**
+ * The chart mesh for this route, or undefined: the index (one small JSON)
+ * is read here; the search runs in a child process that exits with the
+ * leg, so its tile arrays never stay in this worker.
+ */
+function meshRouter(dir: string | null, progress: (m: string) => void): MeshLegRouter | undefined {
+  if (!dir) return undefined;
+  let store: MeshStore;
+  try {
+    store = MeshStore.open(dir);
+  } catch (err) {
+    progress(`WARNING: chart mesh not used: ${(err as Error).message}`);
+    return undefined;
+  }
+  return {
+    covers: points => meshCovers(store, points),
+    route: (start, end, rules) => runChildTask({ task: 'mesh', dir, start, end, rules }, 5 * 60_000),
+  };
+}
 
 /** The request as the API validated it; a job that slipped past (another caller) is refused the same way. */
 export function validateRequest(r: RouteRequest): void {
@@ -61,7 +85,13 @@ const ROUTE_PARAMS = ['10u', '10v', 'swh', 'mwp', 'mwd'];
  */
 const ROUTE_FORECAST_MARGIN_DEG = 5;
 
-export async function route(st: WorkerState, id: string, request: RouteRequest, avoidAreas: AvoidArea[] = []): Promise<void> {
+export async function route(
+  st: WorkerState,
+  id: string,
+  request: RouteRequest,
+  avoidAreas: AvoidArea[] = [],
+  self?: SelfDesign
+): Promise<void> {
   const { config: cfg, client: cl } = requireInit(st);
   Atomics.store(st.cancelFlag, 0, 0);
   const shouldCancel = (): boolean => Atomics.load(st.cancelFlag, 0) === 1;
@@ -150,7 +180,7 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
       }
     }
 
-    const vessel = routeVessel(cfg, request.vessel);
+    const vessel = routeVessel(cfg, request.vessel, self);
     // Per-route polar: a library token from GET /api/polars, else the configured default.
     let routePolar: PolarDiagram | null = st.polar;
     let polarLabel: string | null = cfg.polarFile ? path.basename(cfg.polarFile) : null;
@@ -358,8 +388,13 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
       }
     };
     let legCounter = 0;
+    const router = request.router ?? cfg.routing.router;
+    if (router !== 'isochrone') progress(0, 0, `router: ${router} (the experimental open-water pathway)`);
     const pipeline: LegPipelineInputs = {
       waterGrid: st.waterGrid,
+      router,
+      mesh: meshRouter(cfg.meshDir, m => progress(0, 0, m)),
+      avoidAreas: avoid.map(a => ({ lon: a.lon, lat: a.lat, radiusM: a.radiusM })),
       allowCanals: cfg.routing.allowCanals,
       landFor: b => landMaskFor(st, b, cfg.routing.landRasterMaxCells, cfg.landShapefiles).withAvoid(avoid),
       stages,
@@ -465,6 +500,8 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
       summary.legs = stops.length - 1;
       summary.precision = request.precision ?? DEFAULT_PRECISION;
     }
+    if (result.meshLeg) summary.mesh = true;
+    summary.router = router;
     if (result.corridorFallback) {
       summary.corridor_fallback = true;
       st.log('info', 'WARNING: corridor search failed on at least one leg; the route ran on the coarse per-route skeleton');

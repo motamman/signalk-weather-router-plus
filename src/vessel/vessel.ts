@@ -9,11 +9,17 @@ export interface VesselParams {
    * affected.
    */
   polarPerformance: number;
+  /** Draught, m; null = unknown (the chart mesh is then not used). */
+  draughtM: number | null;
+  /** Air draft (height above the waterline), m; null = unknown (the chart mesh is then not used). */
+  airDraftM: number | null;
 }
 
 export const DEFAULT_VESSEL: VesselParams = {
   motorSpeedMs: 3.09,
   polarPerformance: 1,
+  draughtM: null,
+  airDraftM: null,
 };
 
 /** Merge a partial override onto defaults, validating ranges. */
@@ -27,6 +33,8 @@ export function makeVessel(partial: Partial<VesselParams>): VesselParams {
   };
   check('motorSpeedMs', 0.01, 50);
   check('polarPerformance', 0.3, 1.2);
+  if (v.draughtM !== null) check('draughtM', 0.1, 30);
+  if (v.airDraftM !== null) check('airDraftM', 0.5, 100);
   return v;
 }
 

@@ -15,8 +15,9 @@
  */
 
 import type { AvoidArea } from '../geo/avoid';
-import type { ResolvedConfig } from './config';
+import type { ResolvedConfig, SelfDesign } from './config';
 import type { ModePolicy } from '../engine/legsim';
+import type { RouterKind } from '../engine/router';
 import type { BBox } from '../geo/geodesy';
 import type { DecodedIndex } from '../data/decoded';
 import type { SerializedSmoc, SmocStatus } from '../currents/smoc';
@@ -65,6 +66,8 @@ export interface RouteRequest {
   no_currents?: boolean;
   /** auto (default): regional wind layered over ECMWF where available; ecmwf: ECMWF only. */
   wind_model?: 'auto' | 'ecmwf';
+  /** Open-water router: the isochrone search, or the experimental pathway (engine/experimental); default from the routing.router setting. */
+  router?: RouterKind;
   /** Treat the areas marked on Signal K notes (properties.avoid.radius_m) as land (default true). */
   avoid_areas?: boolean;
   publish?: boolean;
@@ -75,6 +78,10 @@ export interface RouteRequest {
     polar_performance?: number;
     /** Polar token from GET /api/polars (`default` or a library file name). */
     polar?: string;
+    /** Draught, m (default: Signal K design.draft.maximum); with the air draft, enables the chart mesh for motoring legs. */
+    draught_m?: number;
+    /** Air draft, m (default: Signal K design.airHeight). */
+    air_draft_m?: number;
   };
 }
 
@@ -111,6 +118,10 @@ export interface RouteSummary {
   corridor_fallback?: true;
   /** Regional wind models used and the share of the search's wind samples each answered (0..1); absent when only ECMWF was used. */
   regional_wind?: { name: string; run: string; share: number }[];
+  /** At least one leg was routed on the chart mesh (charted depths and obstructions) instead of the coastline search. */
+  mesh?: true;
+  /** The open-water router that ran. */
+  router?: RouterKind;
 }
 
 export type QueryKind =
@@ -293,7 +304,7 @@ export type MainToWorker =
       position?: VesselPosition | null;
     }
   /** avoid: the areas to avoid marked on Signal K notes, read by the main thread (the workers have no Resources API). */
-  | { type: 'route'; id: string; request: RouteRequest; avoid?: AvoidArea[] }
+  | { type: 'route'; id: string; request: RouteRequest; avoid?: AvoidArea[]; self?: SelfDesign }
   | { type: 'query'; id: number; kind: QueryKind; args: QueryArgs[QueryKind] }
   /** tiles workers: the data worker's tide run (null: tides off or not loaded). */
   | { type: 'tides-run'; run: ArcoRun | null }

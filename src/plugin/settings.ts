@@ -21,6 +21,7 @@ import * as path from 'node:path';
 import { KTS_TO_MS } from '../geo/geodesy';
 import { RTOFS_REGIONS } from '../currents/rtofs';
 import type { LegacyPluginConfig } from './config';
+import { DEFAULT_ROUTER, ROUTER_KINDS, type RouterKind } from '../engine/router';
 
 export interface AppSettings {
   vessel: {
@@ -79,6 +80,8 @@ export interface AppSettings {
     smoother: boolean;
     /** Smoother time tolerance, ratio (0.05 = a shortcut may be 5% slower). */
     smootherTolerance: number;
+    /** Open-water router by default: the isochrone search, or the experimental pathway. */
+    router: RouterKind;
     keepJobs: number;
   };
   publish: {
@@ -186,7 +189,6 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     help: "Share of the polar's boat speeds the boat actually makes under sail (100% = the polar as written). Polars are usually race predictions (flat water, racing sails, full crew); a loaded cruising boat is slower. Motor speed is not affected.",
     reload: 'next_job',
   },
-
   {
     key: 'forecast.horizon',
     group: 'forecast',
@@ -582,6 +584,16 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     max: 0.5,
     default: 0.05,
     help: 'A straight shortcut is accepted when its simulated time is at most this much longer than the legs it replaces.',
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.router',
+    group: 'routing',
+    label: 'Open-water router',
+    type: 'enum',
+    enum: ROUTER_KINDS,
+    default: DEFAULT_ROUTER,
+    help: 'isochrone: the standard search. experimental: the second pathway where method changes are tried: the search runs on the convexified polar (a beat is a straight line at the exact VMG), each mixed sailing leg is then laid out as tacks, and a cross-track polish moves waypoints sideways where the route arrives earlier; under motor it is identical to isochrone. A route request can choose either (router).',
     reload: 'next_job',
   },
   {

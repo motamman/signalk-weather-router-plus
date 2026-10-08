@@ -17,7 +17,14 @@ import { avoidAreasFromNotes, type AvoidArea } from './geo/avoid';
 import { MINUTE_MS } from './geo/units';
 import * as path from 'node:path';
 import type { IRouter } from 'express';
-import { CONFIG_SCHEMA, resolveConfig, type LegacyPluginConfig, type PluginConfig, type ResolvedConfig } from './plugin/config';
+import {
+  CONFIG_SCHEMA,
+  resolveConfig,
+  type LegacyPluginConfig,
+  type PluginConfig,
+  type ResolvedConfig,
+  type SelfDesign,
+} from './plugin/config';
 import { mergeSettings, reloadsFor, settingsSchema, SettingsStore, SettingsValidationError } from './plugin/settings';
 import { checkDecodeResources } from './plugin/memguard';
 import { siText } from './plugin/unittext';
@@ -172,7 +179,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       }
     }
     if (!jobs || jobs.runningId !== job.id) return; // cancelled meanwhile
-    pool.post('route', { type: 'route', id: job.id, request: job.request, avoid });
+    pool.post('route', { type: 'route', id: job.id, request: job.request, avoid, self: selfDesign() });
   }
 
   /** Send a job waiting for the first forecast to the route worker. */
@@ -348,6 +355,25 @@ export = function plugin(app: SkApp): SignalKPlugin {
   function jobsSummary(): string {
     if (!jobs) return 'no jobs';
     return `${jobs.runningId ? 1 : 0} running, ${jobs.queueLength} queued`;
+  }
+
+  /**
+   * The vessel's draught and air draft from Signal K's vessel base data
+   * (design.draft.maximum, design.airHeight), null where unset. Like the
+   * name, not plugin settings; the chart mesh needs both.
+   */
+  function selfDesign(): SelfDesign {
+    const num = (path: string, key?: string): number | null => {
+      try {
+        const raw = app.getSelfPath?.(path) as unknown;
+        let v = raw && typeof raw === 'object' && 'value' in raw ? (raw as { value: unknown }).value : raw;
+        if (key && v && typeof v === 'object') v = (v as Record<string, unknown>)[key];
+        return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+      } catch {
+        return null;
+      }
+    };
+    return { draughtM: num('design.draft', 'maximum'), airDraftM: num('design.airHeight') };
   }
 
   /** The vessel's name from Signal K (vessels.self.name), or null when the server has none. */
@@ -908,9 +934,10 @@ export = function plugin(app: SkApp): SignalKPlugin {
         weather_provider_registered: weatherRegistered,
         regional: regionalStatus(),
         jobs: jobs ? { running: jobs.runningId, queued: jobs.queueLength, total: jobs.list(500).length } : null,
-        // The name is Signal K's (vessels.self.name), not a plugin setting.
-        vessel: config?.vessel ? { ...config.vessel, name: selfName() } : undefined,
+        // The name, draught and air draft are Signal K's (vessels.self.name, design.*), not plugin settings.
+        vessel: config?.vessel ? { ...config.vessel, ...selfDesign(), name: selfName() } : undefined,
         polar: config?.polarFile,
+        router: config?.routing.router,
         land: config?.landShapefiles,
         harmonic_dir: config?.currents.harmonicDir,
         extra_fields: config?.forecast.extraFields,

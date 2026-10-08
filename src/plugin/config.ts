@@ -15,6 +15,7 @@
  */
 
 import { makeVessel, type VesselParams } from '../vessel/vessel';
+import type { RouterKind } from '../engine/router';
 import { HOUR_S } from '../geo/units';
 import type { AppSettings } from './settings';
 import type { RouteRequest } from './protocol';
@@ -22,6 +23,8 @@ import type { RouteRequest } from './protocol';
 /** What the Signal K plugin config holds now. */
 export interface PluginConfig {
   landShapefiles?: string;
+  /** Folder of the chart navigation mesh (index.json and tiles); blank = no mesh. */
+  meshDir?: string;
   polarFile?: string;
   polarsDir?: string;
   forecast?: {
@@ -85,6 +88,8 @@ export interface LegacyPluginConfig {
 
 export interface ResolvedConfig {
   landShapefiles: string[];
+  /** Folder of the chart navigation mesh, or null (routes run on the coastline only). */
+  meshDir: string | null;
   polarFile: string | null;
   polarsDir: string | null;
   /** Where user polars are kept and generated ones written (see polars.ts PolarLibraryConfig.userDir). */
@@ -141,6 +146,8 @@ export interface ResolvedConfig {
     simplifyM: number;
     smoother: boolean;
     smootherTolerance: number;
+    /** Open-water router by default (engine/router.ts). */
+    router: RouterKind;
     keepJobs: number;
   };
   publish: {
@@ -189,6 +196,13 @@ export const CONFIG_SCHEMA = {
       description:
         'Absolute path(s) to polygon land shapefiles, comma-separated. Blank: GSHHG 2.3.7 full-resolution levels 1–4 are downloaded once ' +
         '(149 MB from www.soest.hawaii.edu) into the plugin data directory and used. A GSHHS layer path requires all four sibling levels. Add GSHHS_f_L6.shp for Antarctica.',
+    },
+    meshDir: {
+      type: 'string',
+      title: 'Chart mesh directory',
+      description:
+        'Folder holding a navigation mesh built from vector charts (index.json and its tiles). Where the mesh covers a motoring leg, and the vessel draught and air draft are set ' +
+        '(web app Settings → Vessel), the leg is routed on the mesh: charted depths, bridge clearances, rocks, wrecks, marks and structures avoided. Blank = off.',
     },
     polarFile: {
       type: 'string',
@@ -314,6 +328,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
   const p = settings.publish;
   return {
     landShapefiles: land,
+    meshDir: c.meshDir && c.meshDir.trim() ? c.meshDir.trim() : null,
     polarFile: c.polarFile && c.polarFile.trim() ? c.polarFile.trim() : null,
     polarsDir: c.polarsDir && c.polarsDir.trim() ? c.polarsDir.trim() : null,
     polarUserDir: null,
@@ -363,6 +378,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       simplifyM: r.simplify,
       smoother: r.smoother,
       smootherTolerance: r.smootherTolerance,
+      router: r.router,
       keepJobs: r.keepJobs,
     },
     publish: {
@@ -390,14 +406,24 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
   };
 }
 
+/** Draught and air draft as Signal K's vessel base data has them (design.draft.maximum, design.airHeight), null when unset. */
+export interface SelfDesign {
+  draughtM: number | null;
+  airDraftM: number | null;
+}
+
 /**
  * The vessel for one route: values in the request take precedence; the
- * rest come from the vessel settings (never the built-in defaults).
+ * rest come from the vessel settings (never the built-in defaults), and
+ * the draught and air draft from Signal K's vessel base data (like the
+ * name: not plugin settings).
  */
-export function routeVessel(cfg: ResolvedConfig, rv: RouteRequest['vessel']): VesselParams {
+export function routeVessel(cfg: ResolvedConfig, rv: RouteRequest['vessel'], self?: SelfDesign): VesselParams {
   return makeVessel({
     ...cfg.vessel,
     motorSpeedMs: rv?.motor_speed_ms ?? cfg.vessel.motorSpeedMs,
     polarPerformance: rv?.polar_performance ?? cfg.vessel.polarPerformance,
+    draughtM: rv?.draught_m ?? self?.draughtM ?? null,
+    airDraftM: rv?.air_draft_m ?? self?.airDraftM ?? null,
   });
 }
