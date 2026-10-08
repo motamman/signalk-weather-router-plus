@@ -6,6 +6,55 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Chart mesh routing** (`src/engine/mesh/`). With a navigation mesh
+  configured (`meshDir` in the plugin config), a leg inside it is routed
+  on the charts: triangles carry charted depth, vertical clearance,
+  rocks, wrecks and obstructions, marks, structures and fairways, and
+  are blocked against the vessel's draught and air draft (Signal K
+  `design.draft.maximum` and `design.airHeight`; `vessel.draught_m` and
+  `vessel.air_draft_m` in a request override them). Motor legs run as an
+  A* over the mesh with the funnel algorithm; sailing legs motor the
+  narrow passages (both shores within 1 km) and sail the open stretches
+  with the open-water router; a leg with one end outside the mesh is
+  routed on it to the first open water after the last narrow passage
+  within 50 km and handed to the coastline search there. The mesh search
+  runs in a child process that exits with the leg. Summary `mesh`.
+- **Open-water router toggle**: request `router` (`isochrone` or
+  `experimental`), setting `routing.router`, a selector on the plan
+  panel; the summary and `/api/status` say which runs.
+- **Experimental router** (`src/engine/experimental/`): the isochrone
+  search on a convexified polar (a beat is a straight leg at its exact
+  VMG), the tacks laid out afterwards forward in time (at most 5 nm each,
+  heading from the wind at each tack's start, 30 s per tack; a leg that
+  cannot be sailed fails the route rather than getting an invented
+  time), and a cross-track polish that moves waypoints sideways where the
+  route then arrives earlier. GeoJSON points carry `tack: true` on tack
+  points. Measured on a Raspberry Pi 5 against the isochrone router
+  (same forecast run, fixed departures): harbour beat 17,234 s vs
+  18,659 s; offshore reach 36,235 s vs 36,469 s; 1,240 km passage
+  382,041 s vs 383,615 s.
+- Mixed sail/motor legs carry their split, so the totals count the
+  motored part of a leg that starts under power and ends under sail.
+
+### Changed
+
+- The open-water search is reached through one seam (`src/engine/router.ts`)
+  for a plain leg and for each open stretch of a mesh leg.
+- `MinHeap.peekKey()` (engine/heap.ts).
+
+### Measured, not changed
+
+- A wider isochrone beam (`routing.stages` 40, `routing.subsectors`
+  150, `routing.headings` 120 at 0.5°) arrives 94 minutes earlier on a
+  1,240 km passage than the standard beam, at 21 × the wall time (363 s
+  vs 17 s on a Raspberry Pi 5), and 32 minutes earlier on a harbour beat.
+- Displacement (motion-compensated) interpolation of the forecast in
+  time, tested by rebuilding dropped frames of a decoded run: no gain
+  over the linear blend (speed RMSE 0.95 vs 0.88 m/s at 6 h gaps on a
+  slow-moving pattern). Not adopted.
+
 ### Fixed
 
 - Apply the GSHHG L1/L2/L3/L4 land/water hierarchy to global water grids,

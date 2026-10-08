@@ -1,5 +1,25 @@
 # What's new
 
+## Unreleased
+
+- **Routing on the charts.** With a chart mesh configured, routes inside
+  it follow charted depths, bridge clearances, rocks, wrecks, marks and
+  structures, using your boat's draft and height from Signal K's Vessel
+  Base Data. Under power the whole leg runs on the charts; under sail the
+  narrow bits are motored along the channel and the open water is sailed.
+  A route that starts in a harbour and ends far outside the mesh is routed
+  on the charts out to open water and handed over there. Routes the mesh
+  cannot take fall back to the coastline routing you had before.
+- **Two routers to compare.** Plan panel → *Open-water router*: the
+  standard isochrone search, or an experimental one that treats a beat as
+  a straight leg at its best VMG, lays the tacks out afterwards in the wind
+  of the moment, and nudges waypoints sideways where that arrives earlier.
+  On the test boat it was 24 minutes faster on a 5-hour harbour beat and
+  26 minutes faster on a 4½-day passage; the same on a reach. Pick either
+  per route; the log says which ran.
+- **Mixed legs count properly.** A leg that motors out of a harbour and
+  then sails now counts its motoring hours in the totals.
+
 ## 0.1.2-beta.1
 
 - **Less memory on a small computer.** On a Raspberry Pi, Signal K's
