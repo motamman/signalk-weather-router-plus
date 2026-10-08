@@ -14,7 +14,10 @@
  *  - mesh:     route one leg on the chart mesh (engine/mesh): the tiles of
  *              the leg's box are about 1 GB of typed arrays for 6 M
  *              triangles (brain, 2026-10-08), which the route worker must
- *              not keep.
+ *              not keep;
+ *  - mesh-download: mirror one published mesh folder (plugin/meshes.ts)
+ *              file by file into a folder, resumable, progress in
+ *              `.progress.json` there.
  */
 
 import { fork } from 'node:child_process';
@@ -27,7 +30,13 @@ import type { MeshRouteResult, MeshRules } from '../engine/mesh/route';
 export type ChildTask =
   | { task: 'rmtree'; dir: string }
   | { task: 'regional'; src: RegionalSource; srcDir: string; dataDir: string; keepRuns: number }
-  | { task: 'mesh'; dir: string; start: [number, number]; end: [number, number]; rules: MeshRules };
+  | { task: 'mesh'; dir: string; start: [number, number]; end: [number, number]; rules: MeshRules }
+  | { task: 'mesh-download'; base: string; dest: string };
+
+export interface MeshDownloadResult {
+  files: number;
+  bytes: number;
+}
 
 export interface RmtreeResult {
   /** Saved tiles (.gz) and their bytes that were in the tree. */
@@ -39,7 +48,9 @@ export type ChildTaskResult<T extends ChildTask> = T extends { task: 'rmtree' }
   ? RmtreeResult
   : T extends { task: 'mesh' }
     ? MeshRouteResult
-    : RegionalDecodeResult;
+    : T extends { task: 'mesh-download' }
+      ? MeshDownloadResult
+      : RegionalDecodeResult;
 
 const isTs = __filename.endsWith('.ts');
 
@@ -114,6 +125,78 @@ async function countTree(dir: string): Promise<RmtreeResult> {
   return c;
 }
 
+/**
+ * Mirror a published mesh folder: its `index.json` (one cluster) or
+ * `meshes.json` and each cluster's `index.json` list every tile file.
+ * A file already present with the server's size is kept (resume); the
+ * rest are fetched one at a time to a temporary name and renamed.
+ * Progress goes to `<dest>/.progress.json` every file.
+ */
+async function downloadMesh(base: string, dest: string): Promise<MeshDownloadResult> {
+  fs.mkdirSync(dest, { recursive: true });
+  const getJson = async (rel: string): Promise<unknown> => {
+    const res = await fetch(new URL(rel, base).toString(), { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) throw new Error(`${rel}: HTTP ${res.status}`);
+    const text = await res.text();
+    fs.writeFileSync(path.join(dest, rel), text);
+    return JSON.parse(text);
+  };
+  // The file list.
+  const files: string[] = [];
+  let clusters: string[] = [''];
+  try {
+    await getJson('index.json');
+  } catch {
+    const m = (await getJson('meshes.json')) as { meshes: { dir: string }[] };
+    clusters = m.meshes.map(c => c.dir.replace(/\/$/, '') + '/');
+    for (const c of clusters) {
+      fs.mkdirSync(path.join(dest, c), { recursive: true });
+      await getJson(c + 'index.json');
+    }
+  }
+  for (const c of clusters) {
+    const ix = JSON.parse(fs.readFileSync(path.join(dest, c + 'index.json'), 'utf8')) as { tiles: { file: string }[] };
+    for (const t of ix.tiles) files.push(c + t.file);
+  }
+  let bytes = 0;
+  let done = 0;
+  const progress = (): void => {
+    fs.writeFileSync(path.join(dest, '.progress.json'), JSON.stringify({ files: done, total: files.length, bytes }));
+  };
+  progress();
+  for (const rel of files) {
+    const target = path.join(dest, rel);
+    const url = new URL(rel, base).toString();
+    let have = -1;
+    try {
+      have = fs.statSync(target).size;
+    } catch {
+      // not there yet
+    }
+    if (have >= 0) {
+      const head = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(60_000) });
+      const len = Number(head.headers.get('content-length'));
+      if (head.ok && len === have) {
+        bytes += have;
+        done++;
+        progress();
+        continue;
+      }
+    }
+    const res = await fetch(url, { signal: AbortSignal.timeout(30 * 60_000) });
+    if (!res.ok || !res.body) throw new Error(`${rel}: HTTP ${res.status}`);
+    const tmp = `${target}.part`;
+    const { pipeline } = await import('node:stream/promises');
+    const { Readable } = await import('node:stream');
+    await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), fs.createWriteStream(tmp));
+    fs.renameSync(tmp, target);
+    bytes += fs.statSync(target).size;
+    done++;
+    progress();
+  }
+  return { files: done, bytes };
+}
+
 /** Count and delete a tree (also used in-process as the fallback when a child process cannot be started). */
 export async function rmtree(dir: string): Promise<RmtreeResult> {
   const c = await countTree(dir);
@@ -134,6 +217,8 @@ async function runTask(t: ChildTask): Promise<unknown> {
       const { meshRoute } = await import('../engine/mesh/route');
       return meshRoute(MeshStore.open(t.dir), t.start, t.end, t.rules);
     }
+    case 'mesh-download':
+      return downloadMesh(t.base, t.dest);
   }
 }
 

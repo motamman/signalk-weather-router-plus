@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Charts to download.** The plugin configuration lists the navigation
+  meshes published for each Coast Guard district; tick the ones you sail
+  and the plugin downloads them and keeps them current.
 - **Routing on the charts.** With a chart mesh configured, routes inside
   it follow charted depths, bridge clearances, rocks, wrecks, marks and
   structures, using your boat's draft and height from Signal K's Vessel

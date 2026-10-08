@@ -36,6 +36,7 @@ import { TilePrebuilder } from './plugin/prebuild';
 import { runLastMs, type ArcoRun } from './data/arco';
 import { gshhgInstalled, unreadableCoastlines } from './geo/gshhg';
 import { Coastline } from './plugin/coastline';
+import { MeshManager } from './plugin/meshes';
 import { ChartsProvider } from './plugin/charts';
 import { makePlotterExtension } from './plugin/plotterext';
 import { refreshPublicFileDates } from './plugin/webfiles';
@@ -205,6 +206,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
       c.polarUserDir = path.join(app.getDataDirPath(), 'polars', 'user');
     } else c.polarUserDir = path.join(c.polarsDir, 'user');
     if (!c.polarFile) c.polarFile = BUNDLED_DEFAULT_POLAR;
+    // Downloaded meshes live in the data directory (plugin/meshes.ts).
+    c.mesh.storeDir = path.join(app.getDataDirPath(), 'mesh');
     return c;
   }
 
@@ -215,6 +218,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
   const execArgv = isTs ? ['--import', 'tsx'] : [];
 
   const coast = new Coastline(app, log);
+  const meshes = new MeshManager(m => log(`meshes: ${m}`));
   const pool = new WorkerPool({
     workerPath,
     execArgv,
@@ -790,6 +794,9 @@ export = function plugin(app: SkApp): SignalKPlugin {
   /** Workers, jobs, tiles and timers, once the coastline is known. */
   function startServices(dataDir: string): void {
     if (!config) return;
+    // Managed chart meshes: read the catalogue, download the ticked ones, drop the rest; daily thereafter. Not awaited.
+    meshes.configure(config.mesh.catalogUrl, config.mesh.downloads, config.mesh.storeDir, config.mesh.disabled, config.meshDir);
+    meshes.run();
     tiles = new TileService(
       new TileStore({ root: path.join(dataDir, 'overlay-tiles'), capBytes: config.overlayCache.diskCapBytes, log }),
       (kind, args, signal) => pool.queryFull(kind, args, signal)
@@ -823,6 +830,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
     stopped = true;
     startGen++;
     coast.abort();
+    meshes.stop();
     if (refreshTimer) clearInterval(refreshTimer);
     if (failedRefreshTimer) clearTimeout(failedRefreshTimer);
     refreshTimer = failedRefreshTimer = null;
@@ -932,6 +940,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
           ...coast.state,
         },
         weather_provider_registered: weatherRegistered,
+        meshes: meshes.status(),
         regional: regionalStatus(),
         jobs: jobs ? { running: jobs.runningId, queued: jobs.queueLength, total: jobs.list(500).length } : null,
         // The name, draught and air draft are Signal K's (vessels.self.name, design.*), not plugin settings.
@@ -971,6 +980,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       query,
       tiles: () => tiles,
       downloadCoastline: () => coast.requestDownload(),
+      meshes: () => meshes.status(),
       noteTileRequest: (z, x, y) => prebuilder?.noteRequest(z, x, y),
       publicDir,
       polarLibrary: () => (config ? { polarFile: config.polarFile, polarsDir: config.polarsDir, userDir: config.polarUserDir } : null),

@@ -42,25 +42,56 @@ import { MeshStore } from '../../engine/mesh/store';
 import { meshCovers } from '../../engine/mesh/route';
 import type { MeshLegRouter } from '../../engine/mesh/leg';
 import { runChildTask } from '../childtask';
+import { localMeshes, readyMeshDirs } from '../meshes';
 import { beamFor, DEFAULT_SEARCH } from '../../engine/search/presets';
 
 /**
- * The chart mesh for this route, or undefined: the index (one small JSON)
- * is read here; the search runs in a child process that exits with the
- * leg, so its tile arrays never stay in this worker.
+ * The chart meshes for this route, or undefined when there are none: the
+ * downloaded ones with a complete marker under the store directory
+ * (plugin/meshes.ts; a multi-cluster mesh is one store per cluster) and
+ * the folder configured by hand. Only each mesh's index (one small JSON)
+ * is read here; a leg is covered when one mesh covers all its points,
+ * and that mesh's folder goes to the search, which runs in a child
+ * process that exits with the leg, so its tile arrays never stay in this
+ * worker.
  */
-function meshRouter(dir: string | null, progress: (m: string) => void): MeshLegRouter | undefined {
-  if (!dir) return undefined;
-  let store: MeshStore;
-  try {
-    store = MeshStore.open(dir);
-  } catch (err) {
-    progress(`WARNING: chart mesh not used: ${(err as Error).message}`);
-    return undefined;
+function meshRouter(
+  cfg: { meshDir: string | null; mesh: { storeDir: string; disabled: string[] } },
+  progress: (m: string) => void
+): MeshLegRouter | undefined {
+  const stores: { name: string; dir: string; store: MeshStore }[] = [];
+  const open = (name: string, dir: string): void => {
+    try {
+      stores.push({ name, dir, store: MeshStore.open(dir) });
+    } catch (err) {
+      progress(`WARNING: chart mesh ${name} not used: ${(err as Error).message}`);
+    }
+  };
+  if (cfg.mesh.storeDir)
+    for (const m of readyMeshDirs(cfg.mesh.storeDir)) {
+      if (cfg.mesh.disabled.includes(m.name)) continue; // downloaded but switched off in the config
+      for (const d of m.dirs) open(m.name, d);
+    }
+  // The folder managed by hand: one mesh, or a folder of them; the same Use switch applies.
+  for (const m of localMeshes(cfg.meshDir)) {
+    if (cfg.mesh.disabled.includes(m.name)) continue;
+    for (const d of m.dirs) open(m.name, d);
   }
+  if (!stores.length) return undefined;
+  const meshFor = (points: [number, number][]): (typeof stores)[number] | undefined => stores.find(s => meshCovers(s.store, points));
   return {
-    covers: points => meshCovers(store, points),
-    route: (start, end, rules) => runChildTask({ task: 'mesh', dir, start, end, rules }, 5 * 60_000),
+    covers: points => meshFor(points) !== undefined,
+    route: (start, end, rules) => {
+      const m = meshFor([start]) ?? meshFor([end]);
+      if (!m)
+        return Promise.resolve({
+          ok: false,
+          reason: 'no mesh covers the leg',
+          stats: { trianglesLoaded: 0, blocked: 0, expanded: 0, readMs: 0, prepMs: 0, searchMs: 0, funnelMs: 0 },
+        });
+      progress(`chart mesh: ${m.name}`);
+      return runChildTask({ task: 'mesh', dir: m.dir, start, end, rules }, 5 * 60_000);
+    },
   };
 }
 
@@ -409,7 +440,7 @@ export async function route(
     const pipeline: LegPipelineInputs = {
       waterGrid: st.waterGrid,
       router,
-      mesh: meshRouter(cfg.meshDir, m => progress(0, 0, m)),
+      mesh: meshRouter(cfg, m => progress(0, 0, m)),
       avoidAreas: avoid.map(a => ({ lon: a.lon, lat: a.lat, radiusM: a.radiusM })),
       allowCanals: cfg.routing.allowCanals,
       landFor: b => landMaskFor(st, b, cfg.routing.landRasterMaxCells, cfg.landShapefiles).withAvoid(avoid),

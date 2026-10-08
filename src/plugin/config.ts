@@ -16,6 +16,7 @@
 
 import { makeVessel, type VesselParams } from '../vessel/vessel';
 import type { RouterKind } from '../engine/router';
+import { DEFAULT_MESH_CATALOG_URL } from './meshes';
 import { HOUR_S } from '../geo/units';
 import type { AppSettings } from './settings';
 import type { RouteRequest } from './protocol';
@@ -23,8 +24,15 @@ import type { RouteRequest } from './protocol';
 /** What the Signal K plugin config holds now. */
 export interface PluginConfig {
   landShapefiles?: string;
-  /** Folder of the chart navigation mesh (index.json and tiles); blank = no mesh. */
+  /** A chart navigation mesh folder you manage yourself (index.json and tiles); blank = none. */
   meshDir?: string;
+  /** Managed meshes: the catalogue of published meshes and the names ticked for download (plugin/meshes.ts). */
+  mesh?: {
+    catalogUrl?: string;
+    downloads?: string[];
+    /** Downloaded meshes switched off for routing (kept on disk). */
+    disabled?: string[];
+  };
   polarFile?: string;
   polarsDir?: string;
   forecast?: {
@@ -88,8 +96,10 @@ export interface LegacyPluginConfig {
 
 export interface ResolvedConfig {
   landShapefiles: string[];
-  /** Folder of the chart navigation mesh, or null (routes run on the coastline only). */
+  /** A mesh folder managed by hand, or null. */
   meshDir: string | null;
+  /** Managed meshes: catalogue URL, the names ticked, and the store directory the copies live in. */
+  mesh: { catalogUrl: string; downloads: string[]; disabled: string[]; storeDir: string };
   polarFile: string | null;
   polarsDir: string | null;
   /** Where user polars are kept and generated ones written (see polars.ts PolarLibraryConfig.userDir). */
@@ -197,12 +207,37 @@ export const CONFIG_SCHEMA = {
         'Absolute path(s) to polygon land shapefiles, comma-separated. Blank: GSHHG 2.3.7 full-resolution levels 1–4 are downloaded once ' +
         '(149 MB from www.soest.hawaii.edu) into the plugin data directory and used. A GSHHS layer path requires all four sibling levels. Add GSHHS_f_L6.shp for Antarctica.',
     },
+    mesh: {
+      type: 'object',
+      title: 'Chart meshes',
+      properties: {
+        catalogUrl: {
+          type: 'string',
+          title: 'Mesh catalogue URL',
+          description:
+            'The index.json listing the published meshes (the s57Work build writes charts/mesh/index.json). Blank = the US-ENC catalogue on R2.',
+        },
+        downloads: {
+          type: 'array',
+          title: 'Meshes to download',
+          description:
+            'Names from the catalogue (01CGD, 07CGD, …); each is mirrored into the plugin data directory and kept current. An unticked mesh is deleted.',
+          items: { type: 'string' },
+        },
+        disabled: {
+          type: 'array',
+          title: 'Downloaded meshes not used for routing',
+          description: 'Names of downloaded meshes switched off (kept on disk, not opened by the router).',
+          items: { type: 'string' },
+        },
+      },
+    },
     meshDir: {
       type: 'string',
-      title: 'Chart mesh directory',
+      title: 'Chart mesh directory (your own)',
       description:
-        'Folder holding a navigation mesh built from vector charts (index.json and its tiles). Where the mesh covers a motoring leg, and the vessel draught and air draft are set ' +
-        '(web app Settings → Vessel), the leg is routed on the mesh: charted depths, bridge clearances, rocks, wrecks, marks and structures avoided. Blank = off.',
+        'A navigation mesh folder you manage yourself (index.json and its tiles), used beside the downloaded ones. Where a mesh covers a leg, and the vessel draught and air draft are set ' +
+        '(Signal K vessel base data), the leg is routed on the mesh: charted depths, bridge clearances, rocks, wrecks, marks and structures avoided. Blank = none.',
     },
     polarFile: {
       type: 'string',
@@ -329,6 +364,12 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
   return {
     landShapefiles: land,
     meshDir: c.meshDir && c.meshDir.trim() ? c.meshDir.trim() : null,
+    mesh: {
+      catalogUrl: c.mesh?.catalogUrl && c.mesh.catalogUrl.trim() ? c.mesh.catalogUrl.trim() : DEFAULT_MESH_CATALOG_URL,
+      downloads: Array.isArray(c.mesh?.downloads) ? c.mesh.downloads.map(s => String(s).trim()).filter(Boolean) : [],
+      disabled: Array.isArray(c.mesh?.disabled) ? c.mesh.disabled.map(s => String(s).trim()).filter(Boolean) : [],
+      storeDir: '', // set by the plugin (index.ts resolve) from its data directory
+    },
     polarFile: c.polarFile && c.polarFile.trim() ? c.polarFile.trim() : null,
     polarsDir: c.polarsDir && c.polarsDir.trim() ? c.polarsDir.trim() : null,
     polarUserDir: null,

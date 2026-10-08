@@ -700,8 +700,12 @@ and `vessel.air_draft_m`); the mesh is not used until both are set.
   before. The mesh search runs in a child process that exits with the
   leg, so its tile arrays never stay in Signal K's memory.
 
-The mesh files are built outside the plugin (binary tiles plus an
-`index.json`; the format is documented in `src/engine/mesh/store.ts`).
+The mesh files are built outside the plugin by the s57Work chart build
+(binary tiles plus an `index.json`; the format is documented in
+`src/engine/mesh/store.ts`). The plugin panel lists the published meshes
+from a catalogue and downloads the ticked ones (`mesh.catalogUrl`,
+`mesh.downloads`); a leg is covered when one downloaded mesh (or the
+`meshDir` folder) holds its points, and that mesh is used.
 The job log says what the mesh did ("chart mesh: …") and the summary's
 `mesh` is true when any leg used it.
 
@@ -1073,7 +1077,10 @@ React and needs no build step for it.
 | Field | Notes |
 |---|---|
 | `landShapefiles` | comma-separated absolute paths; blank = download GSHHG 2.3.7 full-resolution levels 1–4 once (see [Install](#install)) |
-| `meshDir` | folder of a chart navigation mesh (`index.json` and its tiles); blank = off. See [Chart mesh](#chart-mesh-charted-depths-and-obstructions) |
+| `mesh.catalogUrl` | the `index.json` listing the published meshes (the s57Work build's `charts/mesh/index.json`); blank = the US-ENC catalogue on R2 |
+| `mesh.downloads` | names from the catalogue (`01CGD`, `07CGD`, …) ticked in the plugin panel; each is mirrored into `<data dir>/mesh/<name>/` and kept current (the catalogue is read daily; a newer `build_date` is downloaded again and swapped in); an unticked mesh is deleted. `/api/meshes` and `/api/status` `meshes` list every mesh with its state |
+| `mesh.disabled` | downloaded meshes switched off for routing (kept on disk); the panel's *Use* tick |
+| `meshDir` | a mesh folder you manage yourself — one mesh (`index.json` and its tiles, or `meshes.json` with cluster sub-folders) or a folder of such mesh folders — used beside the downloaded ones and listed in the panel as *local* with its own *Use* tick; blank = none. See [Chart mesh](#chart-mesh-charted-depths-and-obstructions) |
 | `polarFile` | `.csv` (`twa/tws,4,6,…`) or `.pol` (tab-delimited); the default polar (token `default`). Blank = the bundled Catalina 36 |
 | `polarsDir` | directory of `.pol`/`.csv` polars listed by `/api/polars`. Blank = the library bundled with the plugin (`data/polars/`: the ~700 polars of the OpenCPN [weather_routing_pi](https://github.com/seandepagnier/weather_routing_pi) library, GPL-3.0), with user polars (generated ones included) kept in `polars/user/` in the plugin data directory, so an update never removes them. Set, user polars are in `<polarsDir>/user/` |
 | `currents.harmonicDir` | directory of tidal-harmonic `.npz` files |

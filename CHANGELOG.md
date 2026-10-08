@@ -8,6 +8,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Managed chart meshes** (`src/plugin/meshes.ts`): the plugin panel
+  lists the meshes a catalogue publishes (`mesh.catalogUrl`, default the
+  US-ENC catalogue on R2) with a description built from the catalogue
+  (area, chart and mesh dates, size, triangles) and a tick box each;
+  ticked meshes are mirrored file by file into `<data dir>/mesh/<name>/`
+  by a child process, swapped in when complete, re-downloaded when the
+  catalogue's build is newer (checked daily), deleted when unticked.
+  `GET /api/meshes` and `/api/status` `meshes` report each mesh's state.
+  The route worker uses whichever ready mesh covers a leg (multi-cluster
+  meshes as one store per cluster), beside the `meshDir` folder.
 - **Chart mesh routing** (`src/engine/mesh/`). With a navigation mesh
   configured (`meshDir` in the plugin config), a leg inside it is routed
   on the charts: triangles carry charted depth, vertical clearance,

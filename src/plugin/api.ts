@@ -78,6 +78,8 @@ export interface ApiDeps {
   forecastWait?: () => { error: string; loading: unknown } | null;
   /** Start (or retry now) the GSHHG coastline download; progress in /api/status `coastline`. */
   downloadCoastline: () => void;
+  /** The managed chart meshes: catalogue rows and their state on disk (plugin/meshes.ts). */
+  meshes: () => unknown;
   /** The page asked for this tile (the prebuilder follows the view). */
   noteTileRequest: (z: number, x: number, y: number) => void;
   publicDir: string;
@@ -260,6 +262,10 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   });
 
   // The config panel's Download coastline button (works before the plugin has a coastline).
+  ro.get('/api/meshes', (_req: Request, res: Response) => {
+    json(res, 200, deps.meshes());
+  });
+
   rw.post('/api/coastline/download', (_req: Request, res: Response) => {
     deps.downloadCoastline();
     json(res, 202, { status: 'download requested; see /api/status coastline' });
