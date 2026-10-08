@@ -1168,6 +1168,7 @@ export function loadPluginStatus() {
     .then(r => r.json())
     .then(s => {
       _lastStatus = s;
+      window.dispatchEvent(new CustomEvent('rp:status', { detail: s }));
       if (el) el.innerHTML = _statusLine(s);
       _noteWaiting(s);
       // First start (coastline, first forecast): check again soon, not in 30 s.

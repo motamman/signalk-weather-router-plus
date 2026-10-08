@@ -18,6 +18,7 @@ import type { AvoidArea } from '../geo/avoid';
 import type { ResolvedConfig, SelfDesign } from './config';
 import type { ModePolicy } from '../engine/legsim';
 import type { RouterKind } from '../engine/router';
+import type { SearchPreset } from '../engine/search/presets';
 import type { BBox } from '../geo/geodesy';
 import type { DecodedIndex } from '../data/decoded';
 import type { SerializedSmoc, SmocStatus } from '../currents/smoc';
@@ -68,6 +69,8 @@ export interface RouteRequest {
   wind_model?: 'auto' | 'ecmwf';
   /** Open-water router: the isochrone search, or the experimental pathway (engine/experimental); default from the routing.router setting. */
   router?: RouterKind;
+  /** Search accuracy: normal (the routing settings), wide or finer (engine/search/presets.ts); an explicit `stages` still wins. */
+  search?: SearchPreset;
   /** Treat the areas marked on Signal K notes (properties.avoid.radius_m) as land (default true). */
   avoid_areas?: boolean;
   publish?: boolean;
@@ -122,6 +125,8 @@ export interface RouteSummary {
   mesh?: true;
   /** The open-water router that ran. */
   router?: RouterKind;
+  /** The search-accuracy preset the route ran with. */
+  search?: SearchPreset;
 }
 
 export type QueryKind =

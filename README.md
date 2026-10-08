@@ -736,7 +736,10 @@ reach 36,235 s vs 36,469 s, a 1,240 km passage 382,041 s vs 383,615 s.
 The same passage run with a much wider isochrone beam (`routing.stages`
 40, `routing.subsectors` 150, `routing.headings` 120 at 0.5°) arrived
 377,985 s, 94 minutes earlier than the standard beam, at 21 × the wall
-time: the standard pruning is the larger loss on long passages.
+time: the standard pruning is the larger loss on long passages. That
+beam and a middle one are the **Search** choice on the Route tab
+(request `search`: `normal`, `wide`, `finer`; `src/engine/search/presets.ts`),
+beside the **Router** choice.
 
 ### Comfort (rough water)
 
@@ -1461,6 +1464,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `vessel.draught_m` | number | m | Signal K `design.draft.maximum` | 0.1..30; with `air_draft_m`, lets the [chart mesh](#chart-mesh-charted-depths-and-obstructions) route the leg |
 | `vessel.air_draft_m` | number | m | Signal K `design.airHeight` | 0.5..100 |
 | `router` | `"isochrone"` or `"experimental"` | | setting `routing.router` (`isochrone`) | the [open-water router](#open-water-router-isochrone-or-experimental) |
+| `search` | `"normal"`, `"wide"` or `"finer"` | | `normal` | search accuracy: `normal` = the routing settings as they are; `wide` = stages 40, 100 cross-track bins, headings ±60° at 1° (a better route; about 2 min on a 600 nm passage on a Raspberry Pi 5); `finer` = stages 40, 150 bins, ±60° at 0.5° (the best; about 6 min). An explicit `stages` still wins |
 
 `vessel.polar` is a token from `GET /api/polars`. A file name such as
 `a_boat.pol` resolves only inside the polar library (the configured
@@ -1562,6 +1566,7 @@ Progress entry:
 | `precision` | string | | routes with waypoints only |
 | `mesh` | boolean | | `true` when at least one leg was routed on the [chart mesh](#chart-mesh-charted-depths-and-obstructions) |
 | `router` | string | | the open-water router that ran: `isochrone` or `experimental` |
+| `search` | string | | the search-accuracy preset the route ran with: `normal`, `wide` or `finer` |
 
 #### GET /api/routes/{id}/events
 

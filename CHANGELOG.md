@@ -21,9 +21,17 @@ uses [Semantic Versioning](https://semver.org/).
   routed on it to the first open water after the last narrow passage
   within 50 km and handed to the coastline search there. The mesh search
   runs in a child process that exits with the leg. Summary `mesh`.
+- **Search accuracy** on the Route tab (request `search`: `normal`,
+  `wide`, `finer`; `src/engine/search/presets.ts`): `wide` is stages 40,
+  100 cross-track bins and headings ±60° at 1°, `finer` 150 bins at 0.5°;
+  `normal` is the routing settings untouched. Measured on a Raspberry
+  Pi 5: on a 1,240 km passage `wide` arrives 80 minutes earlier than the
+  standard beam in 128 s (17 s standard), `finer` 94 minutes earlier in
+  363 s; on a 5 h harbour beat 29 and 32 minutes earlier in about 5 s.
+  The summary carries `search`.
 - **Open-water router toggle**: request `router` (`isochrone` or
-  `experimental`), setting `routing.router`, a selector on the plan
-  panel; the summary and `/api/status` say which runs.
+  `experimental`), setting `routing.router`, a selector on the Route tab
+  beside Search; the summary and `/api/status` say which runs.
 - **Experimental router** (`src/engine/experimental/`): the isochrone
   search on a convexified polar (a beat is a straight leg at its exact
   VMG), the tacks laid out afterwards forward in time (at most 5 nm each,

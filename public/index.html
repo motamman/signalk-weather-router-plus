@@ -671,6 +671,24 @@
     <div style="flex:1;"><label>Route name</label><input type="text" id="routeName" placeholder="(optional)" maxlength="200"></div>
   </div>
 
+  <div style="display:flex;gap:var(--s-2);">
+    <div style="flex:1;">
+      <label for="search" title="How wide the router's search is. Wider finds better routes and takes longer; the minutes are for a passage of 600+ nautical miles on a Raspberry Pi 5, a harbour hop takes seconds whichever you pick.">Search</label>
+      <select id="search" aria-label="Search accuracy">
+        <option value="normal">Normal (seconds; the routing settings as they are)</option>
+        <option value="wide">Wide (a better route; about 2 minutes on a long passage)</option>
+        <option value="finer">Finer (the best route; about 6 minutes on a long passage)</option>
+      </select>
+    </div>
+    <div style="flex:1;">
+      <label for="router" title="Which open-water router computes the route. Run the same route with each to compare; the log says which ran.">Router</label>
+      <select id="router" aria-label="Open-water router">
+        <option value="isochrone">Isochrone (the standard search)</option>
+        <option value="experimental">Experimental (straight beats, tacks laid in the wind of the moment, waypoints nudged; minutes gained on reaches and passages)</option>
+      </select>
+    </div>
+  </div>
+
   <button id="findRoute" disabled>Find Route</button>
   <label style="display:block;font-size:11px;cursor:pointer;margin-top:var(--s-1);" title="Draw the router's search on the map while a route computes: the front of each stage and the best path so far. Off by default; the same switch is in Layers → Base."><input type="checkbox" id="frontToggleRoute" style="width:auto;margin-right:4px;">Show decision lines (the router's search)</label>
   <button id="resetBtn" style="width:100%;padding:7px;margin-top:var(--s-1);background:var(--surface-2);color:var(--text);border:1px solid var(--border-hard);border-radius:var(--r-sm);cursor:pointer;font-size:var(--f-sm);transition:background var(--t-quick);">Clear all</button>
@@ -748,14 +766,6 @@
     <option value="sail_max">Sail Max (prefer sailing)</option>
     <option value="fastest">Fastest (motor when faster)</option>
     <option value="motor">Motor Only</option>
-  </select>
-
-  <label for="router">Open-water router</label>
-  <div class="ctl-hint">Isochrone is the standard search. Experimental is the second pathway where method changes are tried; run the same route both ways to compare.</div>
-  <select id="router" aria-label="Open-water router">
-    <option value="default">Settings default</option>
-    <option value="isochrone">Isochrone</option>
-    <option value="experimental">Experimental</option>
   </select>
 
   <label>Min sail speed: <span id="sailThreshLabel">5.0</span> <span class="unitOf" data-for="sailThreshLabel"></span></label>

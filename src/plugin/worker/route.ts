@@ -42,6 +42,7 @@ import { MeshStore } from '../../engine/mesh/store';
 import { meshCovers } from '../../engine/mesh/route';
 import type { MeshLegRouter } from '../../engine/mesh/leg';
 import { runChildTask } from '../childtask';
+import { beamFor, DEFAULT_SEARCH } from '../../engine/search/presets';
 
 /**
  * The chart mesh for this route, or undefined: the index (one small JSON)
@@ -107,7 +108,21 @@ export async function route(
       { lon: end[0], lat: end[1] },
     ];
     const multi = stops.length > 2;
-    const stages = request.stages ?? cfg.routing.stages;
+    // Search accuracy: the preset's beam, or the routing settings; an explicit stages in the request still wins.
+    const search = request.search ?? DEFAULT_SEARCH;
+    const beam = beamFor(search, {
+      stages: cfg.routing.stages,
+      subsectors: cfg.routing.subsectors,
+      headings: cfg.routing.headings,
+      headingIncrementDeg: cfg.routing.headingIncrementDeg,
+    });
+    const stages = request.stages ?? beam.stages;
+    if (search !== 'normal')
+      progress(
+        0,
+        0,
+        `search: ${search} (stages ${stages}, ${beam.subsectors} cross-track bins, ${2 * beam.headings + 1} headings at {angle:${beam.headingIncrementDeg * (Math.PI / 180)}})`
+      );
     // Areas to avoid marked on Signal K notes: land to the search. A route
     // point inside one cannot be reached, so it is an error that names both.
     const avoid = request.avoid_areas === false ? [] : avoidAreas;
@@ -399,9 +414,9 @@ export async function route(
       landFor: b => landMaskFor(st, b, cfg.routing.landRasterMaxCells, cfg.landShapefiles).withAvoid(avoid),
       stages,
       propagator: {
-        subsectors: cfg.routing.subsectors,
-        headings: cfg.routing.headings,
-        headingIncrementDeg: cfg.routing.headingIncrementDeg,
+        subsectors: beam.subsectors,
+        headings: beam.headings,
+        headingIncrementDeg: beam.headingIncrementDeg,
       },
       vessel,
       polar: routePolar,
@@ -502,6 +517,7 @@ export async function route(
     }
     if (result.meshLeg) summary.mesh = true;
     summary.router = router;
+    summary.search = search;
     if (result.corridorFallback) {
       summary.corridor_fallback = true;
       st.log('info', 'WARNING: corridor search failed on at least one leg; the route ran on the coarse per-route skeleton');

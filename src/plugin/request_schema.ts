@@ -7,6 +7,7 @@
 
 import { DEFAULT_ARRIVAL_RADIUS_M, MAX_ARRIVAL_RADIUS_M, validateLegOptions } from '../engine/multileg';
 import { ROUTER_KINDS } from '../engine/router';
+import { SEARCH_PRESETS } from '../engine/search/presets';
 import type { RouteRequest } from './protocol';
 import { SETTINGS_SPEC } from './settings';
 
@@ -45,6 +46,13 @@ export const ROUTE_REQUEST_FIELDS: Record<string, RouteFieldSpec> = {
   },
   departure: { type: 'date-time', description: 'Empty or absent = now' },
   mode: { type: 'enum', values: MODES, default: 'sail_max' },
+  search: {
+    type: 'enum',
+    values: SEARCH_PRESETS,
+    default: 'normal',
+    description:
+      'Search accuracy: normal (the routing settings as they are, seconds), wide (a better route; about 2 minutes on a long passage), finer (the best route; about 6 minutes). An explicit stages still wins over the preset',
+  },
   router: {
     type: 'enum',
     values: ROUTER_KINDS,

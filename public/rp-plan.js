@@ -1259,6 +1259,26 @@ function _savePlan() {
   try { localStorage.setItem('rp:plan', JSON.stringify(plan)); } catch (_) {}
 }
 
+// --- Search accuracy and router selects (Route tab): remembered per browser;
+// the router's first value is the plugin's routing.router setting (status).
+function _initRouteChoices() {
+  for (const [id, key] of [['search', 'rp:search'], ['router', 'rp:router']]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    let saved = null;
+    try { saved = localStorage.getItem(key); } catch (_) {}
+    if (saved && [...el.options].some(o => o.value === saved)) el.value = saved;
+    el.addEventListener('change', () => { try { localStorage.setItem(key, el.value); } catch (_) {} });
+  }
+}
+window.addEventListener('rp:status', e => {
+  const el = document.getElementById('router');
+  const st = e.detail;
+  let saved = null;
+  try { saved = localStorage.getItem('rp:router'); } catch (_) {}
+  if (el && !saved && st && st.router && [...el.options].some(o => o.value === st.router)) el.value = st.router;
+});
+
 // --- Reset ---
 document.getElementById('resetBtn').addEventListener('click', function() {
   _hideRecompute();
@@ -1352,6 +1372,7 @@ function _restorePlan() {
   updateButton();
 }
 _restorePlan();
+_initRouteChoices();
 document.getElementById('departure').addEventListener('change', _savePlan);
 
 // --- Tabs ---
@@ -2018,7 +2039,9 @@ function buildRoutePayload(overrides) {
     sail_thresh_ms: sailThreshMs,
   };
   const routerSel = document.getElementById('router');
-  if (routerSel && routerSel.value !== 'default') body.router = routerSel.value;
+  if (routerSel && routerSel.value) body.router = routerSel.value;
+  const searchSel = document.getElementById('search');
+  if (searchSel && searchSel.value && searchSel.value !== 'normal') body.search = searchSel.value;
   const maxWindMs = _limitSI('maxWind'), maxSwhM = _limitSI('maxSwh');
   if (maxWindMs !== null) body.max_wind_ms = maxWindMs;
   if (maxSwhM !== null) body.max_swh_m = maxSwhM;
@@ -2212,7 +2235,7 @@ function _jobOnDone(job, d) {
   const { id, statusEl } = job;
   const elapsed = ((Date.now() - job.t0) / 1000).toFixed(1);
   appendLog('Route complete! (' + elapsed + 's)', 'done');
-  if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : '') + (d.summary.mesh ? ', on the chart mesh' : '') + (d.summary.router ? ', router ' + d.summary.router : ''));
+  if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : '') + (d.summary.mesh ? ', on the chart mesh' : '') + (d.summary.router ? ', router ' + d.summary.router : '') + (d.summary.search && d.summary.search !== 'normal' ? ', search ' + d.summary.search : ''));
   modalStatus.textContent = 'Done in ' + elapsed + 's';
   statusEl.textContent = '';
   RouteProgress.done(elapsed);
