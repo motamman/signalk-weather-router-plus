@@ -1262,11 +1262,14 @@ function _savePlan() {
 // --- Search accuracy and router selects (Route tab): remembered per browser;
 // the router's first value is the plugin's routing.router setting (status).
 function _initRouteChoices() {
+  // Values an earlier panel saved under the old names.
+  const renamed = { search: { wide: 'moderate', finer: 'maximum' }, router: { experimental: 'refined' } };
   for (const [id, key] of [['search', 'rp:search'], ['router', 'rp:router']]) {
     const el = document.getElementById(id);
     if (!el) continue;
     let saved = null;
     try { saved = localStorage.getItem(key); } catch (_) {}
+    if (saved && renamed[id][saved]) saved = renamed[id][saved];
     if (saved && [...el.options].some(o => o.value === saved)) el.value = saved;
     el.addEventListener('change', () => { try { localStorage.setItem(key, el.value); } catch (_) {} });
   }

@@ -54,9 +54,17 @@ export type ChildTaskResult<T extends ChildTask> = T extends { task: 'rmtree' }
 
 const isTs = __filename.endsWith('.ts');
 
-/** Run one task in a fresh child process; resolves with its answer, rejects on its error, exit or timeout. */
-export function runChildTask<T extends ChildTask>(task: T, timeoutMs = 30 * 60_000): Promise<ChildTaskResult<T>> {
+/**
+ * Run one task in a fresh child process; resolves with its answer, rejects
+ * on its error, exit or timeout. An aborted `signal` kills the child and
+ * rejects.
+ */
+export function runChildTask<T extends ChildTask>(task: T, timeoutMs = 30 * 60_000, signal?: AbortSignal): Promise<ChildTaskResult<T>> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(`${task.task} child process cancelled`));
+      return;
+    }
     const child = fork(path.join(__dirname, isTs ? 'childtask.ts' : 'childtask.js'), [], {
       execArgv: isTs ? ['--import', 'tsx'] : [],
       serialization: 'advanced',
@@ -68,8 +76,15 @@ export function runChildTask<T extends ChildTask>(task: T, timeoutMs = 30 * 60_0
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       fn();
     };
+    const onAbort = (): void =>
+      finish(() => {
+        child.kill('SIGKILL');
+        reject(new Error(`${task.task} child process cancelled`));
+      });
+    signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(
       () =>
         finish(() => {
@@ -133,12 +148,20 @@ async function countTree(dir: string): Promise<RmtreeResult> {
  * Progress goes to `<dest>/.progress.json` every file.
  */
 async function downloadMesh(base: string, dest: string): Promise<MeshDownloadResult> {
+  dest = path.resolve(dest);
   fs.mkdirSync(dest, { recursive: true });
+  /** The local path of a file the server's lists name; a name that leaves `dest` is refused. */
+  const inside = (rel: string): string => {
+    const p = path.resolve(dest, rel);
+    if (p !== dest && !p.startsWith(dest + path.sep)) throw new Error(`${rel}: outside the mesh folder`);
+    return p;
+  };
   const getJson = async (rel: string): Promise<unknown> => {
+    const target = inside(rel);
     const res = await fetch(new URL(rel, base).toString(), { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) throw new Error(`${rel}: HTTP ${res.status}`);
     const text = await res.text();
-    fs.writeFileSync(path.join(dest, rel), text);
+    fs.writeFileSync(target, text);
     return JSON.parse(text);
   };
   // The file list.
@@ -150,12 +173,12 @@ async function downloadMesh(base: string, dest: string): Promise<MeshDownloadRes
     const m = (await getJson('meshes.json')) as { meshes: { dir: string }[] };
     clusters = m.meshes.map(c => c.dir.replace(/\/$/, '') + '/');
     for (const c of clusters) {
-      fs.mkdirSync(path.join(dest, c), { recursive: true });
+      fs.mkdirSync(inside(c), { recursive: true });
       await getJson(c + 'index.json');
     }
   }
   for (const c of clusters) {
-    const ix = JSON.parse(fs.readFileSync(path.join(dest, c + 'index.json'), 'utf8')) as { tiles: { file: string }[] };
+    const ix = JSON.parse(fs.readFileSync(inside(c + 'index.json'), 'utf8')) as { tiles: { file: string }[] };
     for (const t of ix.tiles) files.push(c + t.file);
   }
   let bytes = 0;
@@ -165,7 +188,7 @@ async function downloadMesh(base: string, dest: string): Promise<MeshDownloadRes
   };
   progress();
   for (const rel of files) {
-    const target = path.join(dest, rel);
+    const target = inside(rel);
     const url = new URL(rel, base).toString();
     let have = -1;
     try {

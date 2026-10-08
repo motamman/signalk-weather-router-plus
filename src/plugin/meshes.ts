@@ -259,7 +259,8 @@ export class MeshManager {
   private removing = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private ctrl: AbortController | null = null;
-  private reconciling: Promise<void> | null = null;
+  /** The pass running now (or queued): its signal and its promise. */
+  private reconciling: { signal: AbortSignal; done: Promise<void> } | null = null;
 
   constructor(private readonly log: (m: string) => void) {}
 
@@ -296,13 +297,23 @@ export class MeshManager {
     this.timer = null;
   }
 
-  /** One pass now (start, or a saved configuration). Serialised: a pass already running is awaited first. */
+  /**
+   * One pass now (start, or a saved configuration). Serialised: a caller
+   * with the pass's own signal shares it; any other caller (a new `run`
+   * after `stop`, whose signal is fresh while the old pass winds down on
+   * its aborted one) waits for it and then gets a pass of its own.
+   */
   reconcile(signal?: AbortSignal): Promise<void> {
-    if (this.reconciling) return this.reconciling;
-    this.reconciling = this.reconcileOnce(signal ?? new AbortController().signal).finally(() => {
-      this.reconciling = null;
-    });
-    return this.reconciling;
+    const s = signal ?? new AbortController().signal;
+    const active = this.reconciling;
+    if (active && active.signal === s) return active.done;
+    const done = (active ? active.done.catch(() => undefined) : Promise.resolve())
+      .then(() => this.reconcileOnce(s))
+      .finally(() => {
+        if (this.reconciling?.done === done) this.reconciling = null;
+      });
+    this.reconciling = { signal: s, done };
+    return done;
   }
 
   private async reconcileOnce(signal: AbortSignal): Promise<void> {
@@ -360,7 +371,7 @@ export class MeshManager {
     const t0 = Date.now();
     try {
       this.log(`mesh ${entry.name}: downloading ${(entry.bytes / 1e9).toFixed(1)} GB from ${meshBaseUrl(this.catalogUrl, entry)}`);
-      const r = await runChildTask({ task: 'mesh-download', base: meshBaseUrl(this.catalogUrl, entry), dest: tmp }, 6 * 3600_000);
+      const r = await runChildTask({ task: 'mesh-download', base: meshBaseUrl(this.catalogUrl, entry), dest: tmp }, 6 * 3600_000, signal);
       if (signal.aborted) return;
       const marker: MeshMarker = {
         name: entry.name,
@@ -382,6 +393,8 @@ export class MeshManager {
         `mesh ${entry.name}: ready, ${r.files} files, ${(r.bytes / 1e9).toFixed(2)} GB in ${((Date.now() - t0) / 1000).toFixed(0)} s`
       );
     } catch (err) {
+      // Stopped (the child was killed): not an error; the next run resumes the copy.
+      if (signal.aborted) return;
       this.errors.set(entry.name, (err as Error).message);
       this.log(`mesh ${entry.name}: download failed: ${(err as Error).message}`);
     } finally {

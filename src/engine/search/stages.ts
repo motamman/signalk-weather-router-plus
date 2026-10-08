@@ -68,8 +68,17 @@ export function runStages(ctx: SearchContext, guide: SkeletonGuide): Candidate[]
   ];
 
   let bestEver = Infinity;
+  let bestEverAlong = Infinity;
   let stagesWithoutGain = 0;
   let bestEverDeepest = -1;
+  // Each goal's place on the skeleton, for progress measured along it.
+  const goalSkIdx = guide.skeleton && guide.skeletonCum ? goals.map(g => guide.nearestSkeleton(g.lon, g.lat)) : null;
+  /** Distance left to goal `gi` along the skeleton from a candidate's nearest skeleton point, or Infinity without a skeleton or past the goal's point. */
+  const alongSkeleton = (c: Candidate, gi: number): number => {
+    if (!goalSkIdx || !guide.skeletonCum) return Infinity;
+    const i = guide.nearestSkeleton(c.lon, c.lat);
+    return i < goalSkIdx[gi] ? guide.skeletonCum[goalSkIdx[gi]] - guide.skeletonCum[i] : Infinity;
+  };
   for (let stage = 0; stage < maxStages; stage++) {
     checkCancel();
     const tStage = Date.now();
