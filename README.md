@@ -1700,7 +1700,7 @@ Point `properties` (one feature per route point, in order):
 | `time` | string | ISO 8601 | time at the point |
 | `sog_ms` | number | m/s | speed over ground into the point (0 at the start) |
 | `cog_deg` | number | degrees true | course over ground into the point |
-| `depth_m` | m | | charted depth under the waypoint from the chart mesh, on mesh legs; null elsewhere |
+| `depth_m` | number or null | m | charted depth under the waypoint from the chart mesh, on mesh legs; null elsewhere |
 | `mode` | string | | `"sailing"` or `"motoring"` on the leg into the point |
 | `twa_deg` | integer | degrees | true wind angle, 0..180; when wind was sampled |
 | `wind_ms` | number | m/s | wind speed |

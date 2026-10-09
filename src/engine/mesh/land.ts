@@ -241,7 +241,8 @@ export class MeshLand implements LandTest {
   }
 
   isLand(lon: number, lat: number): boolean {
-    const t = this.triangleAt(lon, lat);
+    // A point on a shared edge or corner belongs to the usable triangle, as legCrossesLandExact locates its start.
+    const t = this.triangleAt(lon, lat, true);
     return t < 0 || this.blocked[t] === 1;
   }
 

@@ -267,8 +267,17 @@ export function runMeshLeg(inp: MeshLegInputs): Route | null {
   if (inp.drawbridges !== 'avoid') {
     const wps = route.waypoints;
     const found: { lon: number; lat: number; clearM: number | null; legIndex: number }[] = [];
-    for (let i = 1; i < wps.length; i++)
-      for (const b of land.openingBridgesAlong(wps[i - 1].lon, wps[i - 1].lat, wps[i].lon, wps[i].lat)) found.push({ ...b, legIndex: i });
+    for (let i = 1; i < wps.length; i++) {
+      const bridges = land.openingBridgesAlong(wps[i - 1].lon, wps[i - 1].lat, wps[i].lon, wps[i].lat);
+      // A run of bridge triangles under the shared waypoint continues from
+      // the previous leg, which reported it: a zero-length move finds the
+      // bridge under the waypoint, and the leg's first entry is that run.
+      if (i > 1 && bridges.length && found.length && found[found.length - 1].legIndex === i - 1) {
+        const under = land.openingBridgesAlong(wps[i - 1].lon, wps[i - 1].lat, wps[i - 1].lon, wps[i - 1].lat);
+        if (under.length && under[0].lon === bridges[0].lon && under[0].lat === bridges[0].lat) bridges.shift();
+      }
+      for (const b of bridges) found.push({ ...b, legIndex: i });
+    }
     if (found.length) {
       route.drawbridges = found;
       if (inp.bridgeWaitS > 0) {

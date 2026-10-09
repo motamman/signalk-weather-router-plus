@@ -14,7 +14,7 @@
  */
 
 import { HOUR_S, NM_M } from '../geo/units';
-import { bboxFromLonLat, bboxHeight, bboxWidth, type BBox } from '../geo/geodesy';
+import { bboxFromLonLat, bboxHeight, bboxWidth, haversineDistanceM, type BBox } from '../geo/geodesy';
 import type { LandMask } from '../geo/landmask';
 import type { WaterGrid } from '../geo/watergrid';
 import type { PolarDiagram } from '../vessel/polar';
@@ -306,7 +306,17 @@ function corridorFor(inp: LegPipelineInputs, chain: [number, number][], tag: str
           if (corridor.widthM[i] < 2 * inp.landBufferM && (narrowest < 0 || corridor.widthM[i] < corridor.widthM[narrowest])) narrowest = i;
         if (narrowest >= 0) {
           const p = corridor.skeleton[narrowest];
-          const via = corridor.autoVias.find(v => v.widthM < 2 * inp.landBufferM!);
+          // The qualifying auto via nearest the narrowest point names the passage (within a few km of it; else its position).
+          let via: (typeof corridor.autoVias)[number] | undefined;
+          let viaD = 5000;
+          for (const v of corridor.autoVias) {
+            if (!(v.widthM < 2 * inp.landBufferM)) continue;
+            const d = haversineDistanceM(v.lon, v.lat, p.lon, p.lat);
+            if (d < viaD) {
+              viaD = d;
+              via = v;
+            }
+          }
           throw new RouteError(
             `the passage ${via ? `at ${via.name}` : `at ${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}`} is {length:${corridor.widthM[narrowest].toFixed(0)}} wide, narrower than twice the land buffer ({length:${inp.landBufferM}}); lower the buffer (Defaults) or route round it with a waypoint`
           );

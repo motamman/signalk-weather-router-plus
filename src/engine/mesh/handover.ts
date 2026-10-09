@@ -30,7 +30,7 @@
 
 import { haversineDistanceM } from '../../geo/geodesy';
 import type { Corridor } from '../corridor';
-import { recomputePerWaypointMetadata, type Route, type RouteWarning, type Waypoint } from '../route';
+import { recomputePerWaypointMetadata, type Route, type RouteDrawbridge, type RouteWarning, type Waypoint } from '../route';
 import { recomputeTotals } from '../smoother';
 import type { MeshLegRunner } from './leg';
 
@@ -123,6 +123,8 @@ export function stitchLegParts(a: Route, b: Route): Route {
   else offset = waypoints.length;
   for (const w of wps) waypoints.push({ ...w });
   for (const w of b.warnings ?? []) warnings.push({ ...w, leg_index: w.leg_index + offset });
+  const drawbridges: RouteDrawbridge[] = (a.drawbridges ?? []).map(d => ({ ...d }));
+  for (const d of b.drawbridges ?? []) drawbridges.push({ ...d, legIndex: d.legIndex + offset });
   const route: Route = {
     waypoints,
     totalTimeS: 0,
@@ -133,6 +135,7 @@ export function stitchLegParts(a: Route, b: Route): Route {
     meshLeg: true,
   };
   if (warnings.length) route.warnings = warnings;
+  if (drawbridges.length) route.drawbridges = drawbridges;
   const fronts = [...(a.fronts ?? []), ...(b.fronts ?? [])];
   if (fronts.length) route.fronts = fronts;
   const skeleton = [...(a.skeleton ?? []), ...(b.skeleton ?? [])];

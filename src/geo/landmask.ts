@@ -265,12 +265,26 @@ export class LandMask implements LandTest {
     for (const p of this.patches) {
       if (p.resolutionDeg <= res * 1.0001 && bboxCovers(p.bbox, pb)) return null;
     }
-    const shapes = this.shapes.filter(s => s.maxLat >= pb.south && s.minLat <= pb.north);
-    const m = LandMask.rasterStreamed(pb, res, add => shapes.forEach(add), { nx, ny });
-    let praster = m.raster;
+    let praster: Uint8Array;
     if (this.bufferM > 0) {
+      // Land just outside the patch grows into it too: rasterise a margin of
+      // the buffer around the patch, grow that, and keep the patch's cells.
       const [kx, ky] = this.cellsFor(this.bufferM, res);
-      praster = dilate(praster, nx, ny, kx, ky);
+      const ex = nx + 2 * kx;
+      const ey = ny + 2 * ky;
+      const eb: BBox = {
+        west: wrapLon(west - kx * res),
+        south: south - ky * res,
+        east: wrapLon(west + (x1 - x0) * res0 + kx * res),
+        north: south + (y1 - y0) * res0 + ky * res,
+      };
+      const shapes = this.shapes.filter(s => s.maxLat >= eb.south && s.minLat <= eb.north);
+      const grown = dilate(LandMask.rasterStreamed(eb, res, add => shapes.forEach(add), { nx: ex, ny: ey }).raster, ex, ey, kx, ky);
+      praster = new Uint8Array(nx * ny);
+      for (let j = 0; j < ny; j++) praster.set(grown.subarray((j + ky) * ex + kx, (j + ky) * ex + kx + nx), j * nx);
+    } else {
+      const shapes = this.shapes.filter(s => s.maxLat >= pb.south && s.minLat <= pb.north);
+      praster = LandMask.rasterStreamed(pb, res, add => shapes.forEach(add), { nx, ny }).raster;
     }
     const patch: LandPatch = { bbox: pb, resolutionDeg: res, nx, ny, raster: praster };
     // Finest first, so lookups hit the finest patch covering a point.

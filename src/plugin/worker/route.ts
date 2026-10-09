@@ -91,6 +91,15 @@ function meshLegRunner(
   return {
     covers: points => meshFor(points) !== undefined,
     leg: async (a: MeshLegArgs) => {
+      // The child reads the forecast from the decoded run's files; without one it would plan the leg with no wind.
+      if (useForecast && !st.run) {
+        a.progress(
+          0,
+          0,
+          `WARNING: ${a.tag}chart mesh: no decoded forecast run yet for the mesh process to read; using the coastline search instead`
+        );
+        return null;
+      }
       const m = meshFor([a.legStart]) ?? meshFor([a.plan.end]);
       if (!m) {
         a.progress(0, 0, `WARNING: ${a.tag}chart mesh: no mesh covers the leg; using the coastline search instead`);
@@ -119,8 +128,7 @@ function meshLegRunner(
         smootherTolerance: a.smootherTolerance,
         drawbridges: a.drawbridges,
         bridgeWaitS: a.bridgeWaitS,
-        forecast:
-          useForecast && st.run ? { runDir: st.run.dir, area: expandBBox(bbox, ROUTE_FORECAST_MARGIN_DEG), params: ROUTE_PARAMS } : null,
+        forecast: useForecast ? { runDir: st.run!.dir, area: expandBBox(bbox, ROUTE_FORECAST_MARGIN_DEG), params: ROUTE_PARAMS } : null,
         regional:
           useForecast && request.wind_model !== 'ecmwf'
             ? { root: path.join(st.cacheRoot, REGIONAL_DIR), globalDLon: st.run?.index.grid.dLon ?? GLOBAL_DLON_DEG }
