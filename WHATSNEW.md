@@ -1,6 +1,6 @@
 # What's new
 
-## Unreleased
+## 0.2.0-beta.1
 
 - **Charts to download.** The plugin configuration lists the navigation
   meshes published for each Coast Guard district; tick the ones you sail
@@ -19,7 +19,35 @@
   A route that starts in a harbour and ends far outside the mesh is routed
   on the charts out to open water and handed over there. Routes the mesh
   cannot take fall back to the coastline routing you had before.
-- **A search method you can choose.** Route tab → *Method*: Normal
+- **Charts you can refresh.** The plugin configuration's Chart meshes
+  card has a *Read the catalogue now* button, so a mesh published after
+  Signal K started shows up at once instead of at the next daily check.
+- **Drawbridges.** Opening bridges on the charts are planned as open by
+  default; when a route passes under one you are told which, with its
+  open clearance, and offered a re-plan that avoids them. Defaults →
+  Routing → Drawbridges (ask, open or avoid) and a wait time per bridge.
+- **Keep your distance.** Defaults → Routing has two new buffers: a
+  distance from land that coastline routes keep, and a distance from
+  unusable water (too shallow, too low, a rock) that chart routes keep.
+  Both start at 0, as before.
+- **Tacking costs time.** Defaults → Routing → Tacking penalty, 30 s per
+  tack or gybe unless you change it, charged by both routers; a beat is
+  now laid out as long tacks, split only where the wind or the land
+  forces it.
+- **The Plan tab has what you set per route.** Min sail speed, Smoothing,
+  Effort and Router sit together on Route → Plan. *Method* is now
+  *Effort*. Smoothing applies to both routers.
+- **Sliders on the Defaults tab.** Every number is a slider with its value
+  and unit beside it; max wind and max wave height have a "no limit" box.
+- **Follow the boat.** In LIVE and SIMULATE the map keeps the boat centred
+  while the new *Follow the boat* box is ticked; drag the map and it stops,
+  tick it again and it follows.
+- **The log fills while a route runs.** Until now the Log tab stayed empty
+  until a route finished and then showed everything at once.
+- **Currents on chart routes.** A chart route planned while the Copernicus
+  current data was mid-update had no ocean currents while the rest of the
+  route did; it now reads the same currents everywhere.
+- **An effort you can choose.** Route tab → *Effort*: Normal
   (seconds), Moderate (a better route, about 2 minutes on a long passage)
   or Maximum (the best route, about 6 minutes). On the test boat Moderate
   found a passage 80 minutes shorter and a harbour beat half an hour
