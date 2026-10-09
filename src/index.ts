@@ -981,6 +981,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       tiles: () => tiles,
       downloadCoastline: () => coast.requestDownload(),
       meshes: () => meshes.status(),
+      refreshMeshes: () => meshes.refresh(),
       noteTileRequest: (z, x, y) => prebuilder?.noteRequest(z, x, y),
       publicDir,
       polarLibrary: () => (config ? { polarFile: config.polarFile, polarsDir: config.polarsDir, userDir: config.polarUserDir } : null),

@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Read the catalogue now** (plugin panel, Chart meshes → Where meshes
+  come from): `POST /api/meshes/refresh` (read-write) reads the mesh
+  catalogue at once, answers with the mesh list as `GET /api/meshes` does,
+  and then runs the usual pass (download ticked meshes that are missing or
+  have a newer build, delete unticked ones). Until now the catalogue was
+  read only at start and once a day, so a catalogue published after the
+  plugin started was not seen for up to a day.
+
 - **Managed chart meshes** (`src/plugin/meshes.ts`): the plugin panel
   lists the meshes a catalogue publishes (`mesh.catalogUrl`, default the
   US-ENC catalogue on R2) with a description built from the catalogue

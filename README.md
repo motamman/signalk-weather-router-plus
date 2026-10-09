@@ -740,7 +740,9 @@ The mesh files are built outside the plugin by the s57Work chart build
 (binary tiles plus an `index.json`; the format is documented in
 `src/engine/mesh/store.ts`). The plugin panel lists the published meshes
 from a catalogue and downloads the ticked ones (`mesh.catalogUrl`,
-`mesh.downloads`); a leg is covered when one downloaded mesh (or the
+`mesh.downloads`); the catalogue is read at start and once a day, or at
+once with the panel's "Read the catalogue now" button
+(`POST /api/meshes/refresh`). A leg is covered when one downloaded mesh (or the
 `meshDir` folder) holds its points, and that mesh is used.
 The job log says what the mesh did ("chart mesh: …") and the summary's
 `mesh` is true when any leg used it.
@@ -1114,7 +1116,7 @@ React and needs no build step for it.
 |---|---|
 | `landShapefiles` | comma-separated absolute paths; blank = download GSHHG 2.3.7 full-resolution levels 1–4 once (see [Install](#install)) |
 | `mesh.catalogUrl` | the `index.json` listing the published meshes (the s57Work build's `charts/mesh/index.json`); blank = the US-ENC catalogue on R2 |
-| `mesh.downloads` | names from the catalogue (`01CGD`, `07CGD`, …) ticked in the plugin panel; each is mirrored into `<data dir>/mesh/<name>/` and kept current (the catalogue is read daily; a newer `build_date` is downloaded again and swapped in); an unticked mesh is deleted. `/api/meshes` and `/api/status` `meshes` list every mesh with its state |
+| `mesh.downloads` | names from the catalogue (`01CGD`, `07CGD`, …) ticked in the plugin panel; each is mirrored into `<data dir>/mesh/<name>/` and kept current (the catalogue is read at start, daily, and on the panel's "Read the catalogue now" button; a newer `build_date` is downloaded again and swapped in); an unticked mesh is deleted. `/api/meshes` and `/api/status` `meshes` list every mesh with its state |
 | `mesh.disabled` | downloaded meshes switched off for routing (kept on disk); the panel's *Use* tick |
 | `meshDir` | a mesh folder you manage yourself — one mesh (`index.json` and its tiles, or `meshes.json` with cluster sub-folders) or a folder of such mesh folders — used beside the downloaded ones and listed in the panel as *local* with its own *Use* tick; blank = none. See [Chart mesh](#chart-mesh-charted-depths-and-obstructions) |
 | `polarFile` | `.csv` (`twa/tws,4,6,…`) or `.pol` (tab-delimited); the default polar (token `default`). Blank = the bundled Catalina 36 |

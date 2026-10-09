@@ -197,3 +197,31 @@ test('localMeshes: a mesh folder, or a folder of mesh folders, each described fr
   assert.deepEqual(localMeshes(null), []);
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test('MeshManager.refresh: a catalogue that appears after start is listed on refresh, and the pass downloads what is ticked', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-meshsrv-'));
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-meshstore-'));
+  const { url, close } = await serve(root);
+  const mgr = new MeshManager(() => {});
+  try {
+    mgr.configure(url + 'charts/mesh/index.json', ['01CGD'], store);
+    await mgr.reconcile();
+    assert.equal(mgr.status().catalog_error, 'HTTP 404');
+    assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'absent'); // ticked, no catalogue to fetch it from
+    publish(root, '2026-10-09T06:43:40Z', 500);
+    await mgr.refresh();
+    const st = mgr.status();
+    assert.equal(st.catalog_error, null);
+    assert.equal(st.catalog_updated, '2026-10-09T06:43:40Z');
+    const row = st.meshes.find(r => r.name === '01CGD')!;
+    assert.ok(row.catalog_build_date === '2026-10-09T06:43:40Z', JSON.stringify(row));
+    // The pass started by refresh runs on; wait for it through reconcile (shared, not doubled).
+    await mgr.reconcile();
+    assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'ready');
+  } finally {
+    mgr.stop();
+    close();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(store, { recursive: true, force: true });
+  }
+});

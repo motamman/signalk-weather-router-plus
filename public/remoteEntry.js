@@ -130,6 +130,8 @@ var signalk_weather_router_plus = (function () {
     var msg = ms[0], setMsg = ms[1];
     var mshs = React.useState(null);
     var meshes = mshs[0], setMeshes = mshs[1];
+    var rdg = React.useState(false);
+    var catalogReading = rdg[0], setCatalogReading = rdg[1];
 
     React.useEffect(function () {
       Promise.all([fetchUnit('distance'), fetchUnit('time')]).then(function (u) { setUnits({ loaded: true, distance: u[0], time: u[1] }); });
@@ -190,6 +192,21 @@ var signalk_weather_router_plus = (function () {
           setCoast(function (c) { return Object.assign({}, c, { downloading: true, message: 'starting download…' }); });
         })
         .catch(function (e) { setMsg('Download could not start: ' + e.message); });
+    }
+
+    // "Read the catalogue now": the plugin reads it before answering, so the
+    // answer is the fresh mesh list (or the catalogue's error).
+    function refreshCatalog() {
+      setMsg(null);
+      setCatalogReading(true);
+      fetch(API + '/meshes/refresh', { method: 'POST', credentials: 'include' })
+        .then(function (r) {
+          if (!r.ok) return r.text().then(function (t) { throw new Error('HTTP ' + r.status + ' ' + t); });
+          return r.json();
+        })
+        .then(function (m) { if (m) setMeshes(m); })
+        .catch(function (e) { setMsg('The catalogue could not be read: ' + e.message); })
+        .then(function () { setCatalogReading(false); });
     }
 
     // Inputs -----------------------------------------------------------------
@@ -299,7 +316,7 @@ var signalk_weather_router_plus = (function () {
           h('small', null, p ? 'downloading, ' + p.files + ' of ' + p.total + ' files' : 'downloading…'));
       }
       if (r.state === 'ready') return statusDot('ok', 'ready');
-      if (r.state === 'update') return statusDot('warn', 'newer build published; updates at the next daily check');
+      if (r.state === 'update') return statusDot('warn', 'newer build published; updates at the next daily check or on Read the catalogue now');
       if (r.state === 'error') return statusDot('bad', r.error || 'failed');
       if (r.state === 'removing') return statusDot('warn', 'removing…');
       return statusDot('off', on ? 'not on this server yet; downloads after Save' : 'not on this server');
@@ -342,6 +359,10 @@ var signalk_weather_router_plus = (function () {
       fold('Where meshes come from',
         row('Catalogue', text(['mesh', 'catalogUrl'], 'blank = the US-ENC catalogue on R2'),
           'List of published meshes. ' + catalogNote),
+        h('div', { className: 'mb-3' },
+          h('button', { type: 'button', className: 'btn btn-outline-secondary btn-sm', disabled: catalogReading, onClick: refreshCatalog },
+            catalogReading ? 'Reading…' : 'Read the catalogue now'),
+          h('small', { className: 'form-text text-muted d-block' }, 'Reads the catalogue at the saved address, lists what it says, then downloads ticked meshes that are missing or have a newer build. Otherwise it is read at start and once a day.')),
         row('Local mesh folder', text(['meshDir'], 'blank = none'),
           'List of local files.')));
 

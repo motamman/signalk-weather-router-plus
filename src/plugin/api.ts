@@ -80,6 +80,8 @@ export interface ApiDeps {
   downloadCoastline: () => void;
   /** The managed chart meshes: catalogue rows and their state on disk (plugin/meshes.ts). */
   meshes: () => unknown;
+  /** Read the mesh catalogue now and reconcile the store (the panel's button); resolves when the catalogue is read. */
+  refreshMeshes: () => Promise<void>;
   /** The page asked for this tile (the prebuilder follows the view). */
   noteTileRequest: (z: number, x: number, y: number) => void;
   publicDir: string;
@@ -261,11 +263,17 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     }
   });
 
-  // The config panel's Download coastline button (works before the plugin has a coastline).
   ro.get('/api/meshes', (_req: Request, res: Response) => {
     json(res, 200, deps.meshes());
   });
+  // The config panel's "Read the catalogue now" button: the catalogue is read
+  // before the answer, so the body already lists what it says (or its error).
+  rw.post('/api/meshes/refresh', async (_req: Request, res: Response) => {
+    await deps.refreshMeshes();
+    json(res, 200, deps.meshes());
+  });
 
+  // The config panel's Download coastline button (works before the plugin has a coastline).
   rw.post('/api/coastline/download', (_req: Request, res: Response) => {
     deps.downloadCoastline();
     json(res, 202, { status: 'download requested; see /api/status coastline' });

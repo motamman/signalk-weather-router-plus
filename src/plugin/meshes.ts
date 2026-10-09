@@ -290,6 +290,20 @@ export class MeshManager {
     void loop();
   }
 
+  /**
+   * The panel's "Read the catalogue now" button: read the catalogue at once
+   * (awaited, the same timeout as at start) and then run the usual pass in
+   * the background (download what is ticked and missing or stale, delete
+   * what is unticked). Not awaited past the read: a pass may download
+   * gigabytes. A pass already running is shared, not doubled.
+   */
+  async refresh(): Promise<void> {
+    const signal = this.ctrl?.signal ?? new AbortController().signal;
+    if (this.reconciling) return this.reconciling.done.catch(() => undefined);
+    await this.fetchCatalog(signal);
+    void this.reconcile(signal).catch(() => undefined);
+  }
+
   stop(): void {
     this.ctrl?.abort();
     this.ctrl = null;
