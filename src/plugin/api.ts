@@ -636,7 +636,11 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     withJob(req, res, (jobs, job) => {
       res.status(200);
       res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
+      // no-transform: Signal K's compression layer leaves the stream alone.
+      // Gzipped, the lines sat in its buffer and reached the browser only
+      // when the job ended (2026-10-08: the Log tab empty for every running
+      // job, the whole log arriving at once on done or failed).
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders?.();

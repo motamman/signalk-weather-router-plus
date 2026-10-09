@@ -93,6 +93,15 @@ uses [Semantic Versioning](https://semver.org/).
   blocked). `routing.bridgeWait` (seconds, default 0) is added at each
   bridge passed under; the GeoJSON carries `drawbridges`. Older meshes
   have no bit 7 and behave as before.
+- **Tacks as long as the wind and the land allow** (the refined router's
+  layout): a beat is laid as two legs, one tack, and a leg is split only
+  when the real polar cannot sail it all the way under sail (the forecast
+  wind veering into the no-go angle) or it crosses land or the mesh; then
+  the longest piece that can be sailed is taken and the layout looks
+  again from there. Until this evening tacks were chopped at a fixed 5 nm
+  whatever they cost, so the tacking penalty added time but could never
+  lengthen a tack (measured 2026-10-08: 22 tacks with the penalty, 16
+  without, on a test beat).
 - **Tacking penalty** (Defaults → `routing.tackPenalty`, seconds, default
   30): the time lost on every tack or gybe, charged by both routers. The
   standard search charges it on a move that puts the wind on the other
@@ -131,6 +140,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The job's event stream (`/api/routes/:id/events`) reached the browser
+  only when the job ended: Signal K gzips responses the browser accepts
+  compressed, and gzip buffers the stream to its end, so the web app's
+  Log tab stayed empty for every running job and filled in one lump on
+  done or failed. The stream is now sent with `Cache-Control: no-cache,
+  no-transform`, which the compression layer honours; lines and
+  keepalives arrive as written. Live re-plans use the same stream.
 - On a chart-mesh leg the simplification and the shortcut smoother did
   not run at all (they ran only after the coastline search, and the mesh
   leg's planner, moved into the mesh process on 2026-10-08, had neither),

@@ -258,7 +258,8 @@ test('refined router: a wind that veers over a long beat moves the tacks with it
     loadAreas: async () => wind,
   });
   const r = await runLegPipeline(inp, plan, 0, [0, 0.5], T0);
-  assert.ok(r.waypoints.filter(w => w.tack).length >= 4, messages.filter(m => /experimental/.test(m)).join('\n'));
+  // Tacks are laid as long as the wind allows (2026-10-08): the veer forces more than one, how many is the wind's.
+  assert.ok(r.waypoints.filter(w => w.tack).length >= 2, messages.filter(m => /experimental/.test(m)).join('\n'));
   for (let i = 1; i < r.waypoints.length; i++) {
     const a = r.waypoints[i - 1];
     const b = r.waypoints[i];

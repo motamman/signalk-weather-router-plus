@@ -5,17 +5,20 @@
  * isochrone search runs unchanged but on the hull polar, so a leg into
  * the wind is a straight line at the beat's exact VMG and the search
  * needs no beat handling. Afterwards every sailed leg is laid out
- * forward in time in steps of at most TACK_MAX_M: at each step the wind
- * there and then decides whether the course to the leg's end is a mix of
- * two polar headings (then a tack is placed, alternating sides, the last
- * one landing on the end) or a heading the polar sails directly (then
- * one straight step). The hull's promise, "this course is a time-share
- * of two headings", holds for one wind, not for a leg: a 75 km leg is
- * hours of forecast, and a course sailable at its start can be in the
- * no-go angle before its end (2026-10-08, a Bermuda run failed on such a
- * leg when only the leg's start was checked). A tack that would cross
- * land or that the real polar cannot sail is tried on the other side,
- * then shorter, down to TACK_MIN_M. Every leg is timed with the real
+ * forward in time with the fewest tacks the wind and the land allow: the
+ * wind at the leg's start decides whether the course to the leg's end is
+ * a mix of two polar headings (then a beat of two legs, one tack, the
+ * second landing on the end) or a heading the polar sails directly (then
+ * the rest in one straight leg). A leg is split only when it has to be:
+ * when the real polar cannot sail it all the way (the simulator walks it
+ * with the forecast's wind, and a course sailable at its start can be in
+ * the no-go angle before its end: 2026-10-08, a Bermuda run failed on
+ * such a leg when only the start was checked) or when it crosses land.
+ * Then the longest piece that can be sailed is taken, halving down to
+ * TACK_MIN_M, the other side tried first for a tack, and the layout looks
+ * again from there. (Until the evening of 2026-10-08 tacks were chopped
+ * at a fixed 5 nm whatever they cost, so the tacking penalty could add
+ * time but never lengthen a tack.) Every leg is timed with the real
  * polar and each tack costs TACK_PENALTY_S. Anything that still cannot
  * be sailed fails the route (a RouteError naming the leg): no leg ever
  * gets an invented duration (2026-10-08: a sub-leg in irons was given
@@ -47,8 +50,6 @@ import { crossTrackPolish } from './polish';
 
 /** Seconds lost per tack or gybe when the request sets none (legsim.ts). */
 export const TACK_PENALTY_S = DEFAULT_TACK_PENALTY_S;
-/** The longest tack laid out: the wind is re-read at each tack's start, so this bounds how stale it gets (this plugin's choice, 5 nm). */
-export const TACK_MAX_M = 9260;
 /** Tacks are shortened for land or an unsailable heading down to this; below it the leg fails. */
 export const TACK_MIN_M = 500;
 /** More tacks than this on one leg is a loop, not a beat. */
@@ -197,7 +198,7 @@ export class ExperimentalPropagator {
     args.onProgress?.(
       0,
       0,
-      `experimental: convex polar: ${split} leg(s) laid out as tacks (${tacks} tack point(s), {time:${env.sim.tackPenaltyS ?? TACK_PENALTY_S}} each, tacks at most {distance:${TACK_MAX_M}}); arrival ${out[out.length - 1].time.toISOString().slice(0, 16).replace('T', ' ')} UTC`
+      `experimental: convex polar: ${split} leg(s) laid out as tacks (${tacks} tack point(s), {time:${env.sim.tackPenaltyS ?? TACK_PENALTY_S}} each, as long as the wind and the land allow); arrival ${out[out.length - 1].time.toISOString().slice(0, 16).replace('T', ' ')} UTC`
     );
     return env;
   }
@@ -233,14 +234,15 @@ export class ExperimentalPropagator {
   }
 
   /**
-   * The points laid out from a (at its time) to b, forward in time and
-   * never more than TACK_MAX_M apart: at each point the wind there and
-   * then decides between a tack (the course to b is a mix of two polar
-   * headings: one tack on the heading the hull gives, alternating sides,
-   * the last landing on b) and a straight step along the course. Each
-   * point carries its arrival time. The leg a → last point → b is what the
-   * caller times; the straight step points are collinear and the route's
-   * simplification thins them afterwards.
+   * The points laid out from a (at its time) to b, forward in time, with
+   * the fewest pieces the wind and the land allow: at each point the wind
+   * there and then decides between a beat (the course to b is a mix of two
+   * polar headings: two legs, one tack, the second landing on b) and the
+   * rest in one straight leg; a piece is split only when the real polar
+   * cannot sail it all the way or it crosses land. Each point carries its
+   * arrival time. The leg a → last point → b is what the caller times; the
+   * straight step points are collinear and the route's simplification
+   * thins them afterwards.
    */
   private layOut(a: Waypoint, b: Waypoint, cp: ConvexPolar, env: Env): Waypoint[] {
     const pts: Waypoint[] = [];
@@ -249,7 +251,7 @@ export class ExperimentalPropagator {
     const stepTo = (h: number, d: number, tack: boolean): Waypoint | null => {
       const [tLon, tLat] = projectAlongBearing(at.lon, at.lat, h, d);
       if (this.land.legCrossesLandExact(at.lon, at.lat, tLon, tLat)) return null;
-      const r = this.sailable(at, tLon, tLat, env);
+      const r = this.sailedThrough(at, tLon, tLat, env);
       if (r === null) return null;
       // Mode and mixed-mode split as tryTimeLeg records them, so the totals book motored time as motoring.
       const p: Waypoint = {
@@ -280,9 +282,11 @@ export class ExperimentalPropagator {
         }
       }
       if (!mix || !(d1 > 0 && d2 > 0)) {
-        // A direct heading in this wind: the rest in one go when it fits a step, else one straight step and look again.
-        if (D <= TACK_MAX_M) return pts;
-        const p = stepTo(theta, TACK_MAX_M, false);
+        // A direct heading in this wind: the rest in one go when the real polar sails it all the way and it is
+        // clear; else the longest straight piece that can be sailed, and look again from there.
+        if (!this.land.legCrossesLandExact(at.lon, at.lat, b.lon, b.lat) && this.sailedThrough(at, b.lon, b.lat, env) !== null) return pts;
+        let p: Waypoint | null = null;
+        for (let len = D / 2; len >= TACK_MIN_M && !p; len /= 2) p = stepTo(theta, len, false);
         if (!p)
           throw new RouteError(
             `${env.who}: the leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} to ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be sailed at ${at.lat.toFixed(4)}, ${at.lon.toFixed(4)} under the ${env.sim.modePolicy} policy; ${env.advice}`
@@ -296,18 +300,17 @@ export class ExperimentalPropagator {
       // Alternate sides; the first tack takes the larger share.
       const first = lastHeading === mix.h1 ? mix.h2 : lastHeading === mix.h2 ? mix.h1 : d1 >= d2 ? mix.h1 : mix.h2;
       const other = first === mix.h1 ? mix.h2 : mix.h1;
-      // Both shares fit in one tack each: two legs, the second ending on b.
-      if (d1 <= TACK_MAX_M && d2 <= TACK_MAX_M) {
-        for (const h of [first, other]) {
-          const p = tackTo(h, share(h));
-          if (!p || this.land.legCrossesLandExact(p.lon, p.lat, b.lon, b.lat) || this.sailable(p, b.lon, b.lat, env) === null) continue;
-          pts.push(p);
-          return pts;
-        }
-        // Neither order works in two legs: shorter tacks below.
+      // The beat as two legs, one tack, the second landing on b: whichever side first works.
+      for (const h of [first, other]) {
+        const p = tackTo(h, share(h));
+        if (!p || this.land.legCrossesLandExact(p.lon, p.lat, b.lon, b.lat) || this.sailedThrough(p, b.lon, b.lat, env) === null) continue;
+        pts.push(p);
+        return pts;
       }
+      // Neither order works in two legs (land, or the wind changing along a long leg): the longest first tack
+      // that can be sailed and is clear, halving down to TACK_MIN_M, then look again from there.
       let placed: Waypoint | null = null;
-      for (let len = Math.min(TACK_MAX_M, Math.max(share(first), share(other))); len >= TACK_MIN_M && !placed; len /= 2) {
+      for (let len = Math.max(share(first), share(other)); len >= TACK_MIN_M && !placed; len /= 2) {
         for (const h of [first, other]) {
           const d = Math.min(len, share(h));
           if (d < TACK_MIN_M) continue;
@@ -334,6 +337,21 @@ export class ExperimentalPropagator {
       at = placed;
     }
     throw new RouteError(`${env.who}: more than ${MAX_TACKS_PER_LEG} tacks on one leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}`);
+  }
+
+  /**
+   * As sailable, but under sail_max the piece must be sailed all the way:
+   * a piece the simulator finishes under motor (the wind veered into the
+   * no-go angle before its end) is split instead, so the layout looks at
+   * the wind there and tacks where the hull says it can sail. The narrow
+   * channel's last resort (the course itself, when no tack fits) uses the
+   * plain test: there motoring below the threshold is the policy's own.
+   */
+  private sailedThrough(from: Waypoint, toLon: number, toLat: number, env: Env): LegSimResult | null {
+    const r = this.sailable(from, toLon, toLat, env);
+    if (r === null) return null;
+    if (env.sim.modePolicy === 'sail_max' && r.motoringSeconds > 0) return null;
+    return r;
   }
 
   /** The real polar's timing of a straight sub-leg from a waypoint (at its time), or null when it cannot be sailed. */
