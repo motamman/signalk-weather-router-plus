@@ -263,8 +263,15 @@ export class MeshManager {
   private refreshCtrl: AbortController | null = null;
   /** The pass running now (or queued): its signal and its promise. */
   private reconciling: { signal: AbortSignal; done: Promise<void> } | null = null;
-  /** The catalogue read a `refresh` is waiting on: concurrent refreshes share it. */
-  private catalogRead: Promise<void> | null = null;
+  /**
+   * The catalogue read in flight, if any: a pass and a `refresh` (and
+   * concurrent refreshes) share it, so one read's result never lands on top
+   * of a newer one's. Its signal is kept so a read aborted by `stop` is not
+   * shared with the next `run`.
+   */
+  private catalogRead: { signal: AbortSignal; done: Promise<void> } | null = null;
+  /** Counts catalogue reads; a read superseded by a newer one writes nothing. */
+  private catalogSeq = 0;
 
   constructor(private readonly log: (m: string) => void) {}
 
@@ -307,12 +314,7 @@ export class MeshManager {
    */
   async refresh(): Promise<void> {
     const signal = this.ctrl?.signal ?? (this.refreshCtrl ??= new AbortController()).signal;
-    if (!this.catalogRead) {
-      this.catalogRead = this.fetchCatalog(signal).finally(() => {
-        this.catalogRead = null;
-      });
-    }
-    await this.catalogRead;
+    await this.readCatalog(signal);
     if (signal.aborted) return;
     void this.reconcile(signal).catch(() => undefined);
   }
@@ -346,7 +348,7 @@ export class MeshManager {
   }
 
   private async reconcileOnce(signal: AbortSignal): Promise<void> {
-    await this.fetchCatalog(signal);
+    await this.readCatalog(signal);
     if (signal.aborted) return;
     fs.mkdirSync(this.storeDir, { recursive: true });
     // Unticked meshes go, including stale .new folders.
@@ -378,15 +380,32 @@ export class MeshManager {
     }
   }
 
+  /**
+   * Read the catalogue, or join the read already in flight (unless that one
+   * was aborted: then it is winding down and a fresh read starts).
+   */
+  private readCatalog(signal: AbortSignal): Promise<void> {
+    const active = this.catalogRead;
+    if (active && !active.signal.aborted) return active.done;
+    const done = this.fetchCatalog(signal).finally(() => {
+      if (this.catalogRead?.done === done) this.catalogRead = null;
+    });
+    this.catalogRead = { signal, done };
+    return done;
+  }
+
   private async fetchCatalog(signal: AbortSignal): Promise<void> {
+    const seq = ++this.catalogSeq;
     try {
       const res = await fetch(this.catalogUrl, { signal: AbortSignal.any([signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)]) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const c = (await res.json()) as Catalog;
       if (!c || !Array.isArray(c.meshes)) throw new Error('not a mesh catalogue (no meshes[])');
+      if (seq !== this.catalogSeq) return; // a newer read has started: its result is the one that counts
       this.catalog = c;
       this.catalogError = null;
     } catch (err) {
+      if (seq !== this.catalogSeq) return;
       this.catalogError = (err as Error).message;
       this.log(`mesh catalogue ${this.catalogUrl}: ${this.catalogError}`);
     }

@@ -70,11 +70,21 @@ test('readyMeshDirs: a complete marker makes a mesh ready; clusters are listed f
 });
 
 /** A tiny published layout served over HTTP: charts/mesh/index.json and charts/mesh/<D>/ with an index and two tiles. */
-/** `hold`: a promise a `.bin` answer waits for before its body is sent (a stalled download). */
-function serve(root: string, hold?: () => Promise<void>): Promise<{ url: string; close: () => void }> {
+/**
+ * `hold`: a promise a `.bin` answer waits for before its body is sent (a
+ * stalled download). `holdCatalog`: the same for the catalogue (a slow
+ * read); `hits` counts the catalogue requests.
+ */
+function serve(
+  root: string,
+  hold?: () => Promise<void>,
+  holdCatalog?: () => Promise<void>,
+  hits: { catalog: number } = { catalog: 0 }
+): Promise<{ url: string; close: () => void }> {
   return new Promise(resolve => {
     const srv = http.createServer((req, res) => {
       const p = path.join(root, decodeURIComponent((req.url ?? '/').split('?')[0]));
+      if (p.endsWith(path.join('charts', 'mesh', 'index.json'))) hits.catalog++;
       let st: fs.Stats;
       try {
         st = fs.statSync(p);
@@ -85,6 +95,7 @@ function serve(root: string, hold?: () => Promise<void>): Promise<{ url: string;
       res.writeHead(200, { 'content-length': st.size });
       if (req.method === 'HEAD') res.end();
       else if (hold && p.endsWith('.bin')) void hold().then(() => fs.createReadStream(p).pipe(res));
+      else if (holdCatalog && p.endsWith(path.join('charts', 'mesh', 'index.json'))) void holdCatalog().then(() => fs.createReadStream(p).pipe(res));
       else fs.createReadStream(p).pipe(res);
     });
     srv.listen(0, '127.0.0.1', () => {
@@ -248,6 +259,43 @@ test('MeshManager.refresh: during a pass that is downloading, answers after the 
     release();
     await pass;
     await mgr.reconcile(); // the pass refresh queued after it: nothing left to download
+    assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'ready');
+  } finally {
+    release();
+    mgr.stop();
+    close();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(store, { recursive: true, force: true });
+  }
+});
+
+test('MeshManager.refresh: during a pass whose catalogue read is still in flight, joins that read instead of starting a second', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-meshsrv-'));
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-meshstore-'));
+  publish(root, '2026-10-09T06:43:40Z', 500);
+  let release: () => void = () => {};
+  const held = new Promise<void>(r => (release = r));
+  const hits = { catalog: 0 };
+  const { url, close } = await serve(root, undefined, () => held, hits);
+  const mgr = new MeshManager(() => {});
+  try {
+    mgr.configure(url + 'charts/mesh/index.json', ['01CGD'], store);
+    const pass = mgr.reconcile(); // its catalogue read stalls on the server
+    while (hits.catalog < 1) await new Promise(r => setTimeout(r, 20));
+    let refreshed = false;
+    const refresh = mgr.refresh().then(() => (refreshed = true));
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(hits.catalog, 1, 'refresh joined the read in flight; no second request');
+    assert.equal(refreshed, false, 'refresh waits for that read');
+    assert.equal(mgr.status().catalog_updated, null);
+    release();
+    await refresh;
+    const st = mgr.status();
+    assert.equal(st.catalog_error, null);
+    assert.equal(st.catalog_updated, '2026-10-09T06:43:40Z');
+    await pass;
+    await mgr.reconcile(); // the pass refresh queued after it: nothing left to download
+    assert.equal(hits.catalog, 2, 'one read per pass, shared by the refresh');
     assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'ready');
   } finally {
     release();
