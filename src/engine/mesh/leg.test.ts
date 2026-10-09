@@ -218,9 +218,21 @@ test('pipeline: a covered motoring leg is routed on the mesh, the coastline sear
     [1, 0.5],
   ];
   const { mesh, calls } = fakeMeshOk(path);
-  const { inp, messages } = inputs(mesh, { avoidAreas: [{ lon: 0.5, lat: 0.4, radiusM: 500 }] });
+  const boxes: { west: number; east: number; south: number; north: number }[] = [];
+  const { inp, messages } = inputs(mesh, {
+    avoidAreas: [{ lon: 0.5, lat: 0.4, radiusM: 500 }],
+    loadAreas: async bbox => {
+      boxes.push(bbox);
+      return null;
+    },
+  });
   const r = await runLegPipeline(inp, PLAN, 0, [0, 0.5], T0);
   assert.equal(r.meshLeg, true);
+  // The areas (forecast, currents) are loaded for the widest box the mesh
+  // search can widen to (2° each side), since the mesh process reads them
+  // from the worker's files only.
+  assert.equal(boxes.length, 1);
+  assert.ok(boxes[0].west <= -2 && boxes[0].east >= 3 && boxes[0].south <= -1.5 && boxes[0].north >= 2.5, JSON.stringify(boxes[0]));
   assert.deepEqual(
     r.waypoints.map(w => [w.lon, w.lat]),
     path

@@ -26,7 +26,7 @@ import { forecastHorizonNote, type LegWind } from './horizon';
 import type { ModePolicy } from './legsim';
 import { findHandover, sliceCorridor, stitchLegParts } from './mesh/handover';
 import { type MeshLegRunner, meshRulesFor } from './mesh/leg';
-import type { DrawbridgeChoice } from './mesh/route';
+import { type DrawbridgeChoice, MESH_BOX_PAD_MAX_DEG } from './mesh/route';
 import { legLabel, type LegPlan } from './multileg';
 import { DEFAULT_ROUTER, makeRouter, type RouterKind } from './router';
 import { enrichLegRanges, enrichWaypoints, RouteCancelled, ViasNotCrossedError, type PropagatorOptions } from './propagator';
@@ -116,7 +116,11 @@ async function meshLeg(
     0,
     `${tag}chart mesh: routing on charted depths (draught {depth:${r.rules.draughtM}}, air draft {length:${r.rules.airDraftM}})`
   );
-  const bbox = bboxFromLonLat([legStart[0], plan.end[0]], [legStart[1], plan.end[1]], 0.5);
+  // The widest box the mesh search can widen to: the mesh process reads
+  // the forecast and the currents from this worker's files only, so what
+  // is loaded here must cover every box it may search (the search widens
+  // its box up to MESH_BOX_PAD_MAX_DEG when the mesh route does not fit).
+  const bbox = bboxFromLonLat([legStart[0], plan.end[0]], [legStart[1], plan.end[1]], MESH_BOX_PAD_MAX_DEG);
   await inp.loadAreas(bbox, multi ? `${tag}area` : 'route area');
   const { names: currentNames } = inp.currents();
   if (currentNames && plan.index === 0) progress(0, 0, `currents: ${currentNames.join(' > ')}`);

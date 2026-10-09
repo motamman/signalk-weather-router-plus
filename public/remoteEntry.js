@@ -201,8 +201,14 @@ var signalk_weather_router_plus = (function () {
       setCatalogReading(true);
       fetch(API + '/meshes/refresh', { method: 'POST', credentials: 'include' })
         .then(function (r) {
-          if (!r.ok) return r.text().then(function (t) { throw new Error('HTTP ' + r.status + ' ' + t); });
-          return r.json();
+          if (r.ok) return r.json();
+          // 502: the read failed; the body is still the list (with catalog_error), else plain text.
+          return r.text().then(function (t) {
+            var body = null;
+            try { body = JSON.parse(t); } catch (e) { /* not JSON */ }
+            if (body && body.meshes) setMeshes(body);
+            throw new Error(body && body.error ? body.error : 'HTTP ' + r.status + ' ' + t);
+          });
         })
         .then(function (m) { if (m) setMeshes(m); })
         .catch(function (e) { setMsg('The catalogue could not be read: ' + e.message); })

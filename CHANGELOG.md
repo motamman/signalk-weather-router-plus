@@ -162,6 +162,26 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Mesh legs had no CMEMS SMOC currents while the Copernicus run was
+  provisional** (its store update still being written, hours at a time):
+  the chunk cache on disk was written only for a settled run, and the
+  mesh process reads the disk only, so it fell back to lower-priority
+  sources while the coastline legs of the same route had SMOC. A
+  provisional run now has its own cache directory, `<run>.provisional`,
+  and every run is cached and read alike; the settled run of the same
+  key never reads it, and it is dropped when the settled run replaces it
+  or pruned afterwards (`ArcoClient.dropProvisionalRun`, `pruneRuns`
+  by run). The same client serves the sea-level (tides) store.
+- **Mesh legs asked SMOC for a different area than the worker had loaded**:
+  the worker loaded the leg's start-to-end box padded 0.5°, the mesh
+  process asked for the mesh search box (padded up to 2° when the mesh
+  route does not fit) plus a margin, and a chunk outside the worker's box
+  was not on disk. The worker now loads the forecast and the currents for
+  the widest box the mesh search can use (`MESH_BOX_PAD_MAX_DEG`), and
+  passes the SMOC box and step list it loaded to the mesh process in the
+  task, which asks for exactly those, so both sides pick the same layout
+  and the same chunks. The mesh log line says which run and how many
+  steps were read.
 - The job's event stream (`/api/routes/:id/events`) reached the browser
   only when the job ended: Signal K gzips responses the browser accepts
   compressed, and gzip buffers the stream to its end, so the web app's

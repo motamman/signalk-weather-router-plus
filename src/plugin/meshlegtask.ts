@@ -64,7 +64,8 @@ export interface MeshLegTask {
   regional: { root: string; globalDLon: number } | null;
   /** The currents the worker holds, as the child can rebuild them from disk; null for none. */
   currents: {
-    smoc: { cacheDir: string; run: SmocRun; settings: SmocSettings } | null;
+    /** SMOC: the run, and the area and steps the worker loaded (and so wrote to the cache) for this leg; the child asks for exactly these. */
+    smoc: { cacheDir: string; run: SmocRun; settings: SmocSettings; area: BBox; steps: number[] } | null;
     rtofs: { cacheDir: string; region: string; runMs: number; horizonS: number; stepS: number } | null;
     harmonicDir: string | null;
   } | null;
@@ -75,7 +76,7 @@ export type MeshLegEvent = { event: 'progress'; stage: number; total: number; me
 /** fatal: the leg cannot be made as asked (a RouteError: a stretch that cannot be sailed); the route fails with the reason. Otherwise the mesh cannot take the leg and the coastline search does. */
 export type MeshLegResult = { ok: true; route: Route } | { ok: false; reason: string; fatal?: boolean };
 
-/** Degrees added around the leg's box for the currents read (the box the mesh search read plus a margin). */
+/** Degrees added around the leg's box for the currents read from complete files on disk (RTOFS, harmonics); SMOC uses the worker's area. */
 const CURRENTS_MARGIN_DEG = 0.25;
 
 export async function runMeshLegTask(t: MeshLegTask, emit: (e: MeshLegEvent) => void): Promise<MeshLegResult> {
@@ -184,11 +185,15 @@ async function loadCurrents(t: MeshLegTask, box: BBox, progress: MeshLegArgs['pr
     try {
       const client = new SmocClient({ cacheDir: c.cacheDir, network: false });
       const src = new SmocCurrentSource(c.run, c.settings, client);
-      const steps = src.stepsBetween(t.legDepartureMs, Math.max(t.legDepartureMs, Date.now() + c.settings.horizonS * 1000));
-      if (steps.length) {
-        await src.ensure(area, steps, { reason: 'mesh leg' });
+      // The worker's area and steps, so the layout and the chunks are the ones it wrote.
+      if (c.steps.length) {
+        await src.ensure(c.area, c.steps, { reason: 'mesh leg' });
         sources.push(src);
-        progress(0, 0, `${t.tag}chart mesh: CMEMS SMOC read from the cache: {dataSize:${src.memoryBytes()}}`);
+        progress(
+          0,
+          0,
+          `${t.tag}chart mesh: CMEMS SMOC read from the cache (run ${c.run.key}${c.run.settled ? '' : ', provisional'}, ${c.steps.length} steps): {dataSize:${src.memoryBytes()}}`
+        );
       }
     } catch (err) {
       progress(

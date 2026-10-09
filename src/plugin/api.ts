@@ -267,11 +267,16 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     json(res, 200, deps.meshes());
   });
   // The config panel's "Read the catalogue now" button: the catalogue is read
-  // before the answer, so the body already lists what it says (or its error).
+  // before the answer, so the body lists what it says. A read that failed
+  // (MeshManager keeps the previous catalogue and records the error) is a
+  // 502 whose body is still the list, with the error at the top.
   rw.post('/api/meshes/refresh', async (_req: Request, res: Response) => {
     try {
       await deps.refreshMeshes();
-      json(res, 200, deps.meshes());
+      const list = deps.meshes();
+      const readError = (list as { catalog_error?: string | null } | null)?.catalog_error ?? null;
+      if (readError) json(res, 502, { error: `catalogue not read: ${readError}`, ...(list as object) });
+      else json(res, 200, list);
     } catch (err) {
       fail(res, err, 500);
     }

@@ -263,6 +263,8 @@ export class MeshManager {
   private refreshCtrl: AbortController | null = null;
   /** The pass running now (or queued): its signal and its promise. */
   private reconciling: { signal: AbortSignal; done: Promise<void> } | null = null;
+  /** The catalogue read a `refresh` is waiting on: concurrent refreshes share it. */
+  private catalogRead: Promise<void> | null = null;
 
   constructor(private readonly log: (m: string) => void) {}
 
@@ -297,14 +299,20 @@ export class MeshManager {
    * (awaited, the same timeout as at start) and then run the usual pass in
    * the background (download what is ticked and missing or stale, delete
    * what is unticked). Not awaited past the read: a pass may download
-   * gigabytes. A pass already running is shared, not doubled. Before `run`
-   * (the plugin still downloading the coastline) the work runs on a
-   * controller of its own, which `stop` aborts like the loop's.
+   * gigabytes, and a pass already running (its downloads included) is
+   * shared, not doubled nor waited for. Concurrent refreshes share one
+   * read. Before `run` (the plugin still downloading the coastline) the
+   * work runs on a controller of its own, which `stop` aborts like the
+   * loop's.
    */
   async refresh(): Promise<void> {
-    if (this.reconciling) return this.reconciling.done.catch(() => undefined);
     const signal = this.ctrl?.signal ?? (this.refreshCtrl ??= new AbortController()).signal;
-    await this.fetchCatalog(signal);
+    if (!this.catalogRead) {
+      this.catalogRead = this.fetchCatalog(signal).finally(() => {
+        this.catalogRead = null;
+      });
+    }
+    await this.catalogRead;
     if (signal.aborted) return;
     void this.reconcile(signal).catch(() => undefined);
   }

@@ -72,7 +72,6 @@ export async function refreshTides(st: WorkerState): Promise<void> {
   const now = Date.now();
   const src = newRun ? new TideSource(run, settings, st.seaLevelClient, m => st.log('info', m)) : st.tides!;
   if (!newRun) src.expire(now);
-  if (provisionalReplaced) st.seaLevelClient.dropRun(run.key);
   if (newRun) st.seaLevelClient.saveRun(run);
   const steps = src.windowSteps(now);
   const pos = st.vesselPos;
@@ -98,7 +97,9 @@ export async function refreshTides(st: WorkerState): Promise<void> {
   }
   if (newRun) {
     st.tides = src;
-    const removed = st.seaLevelClient.pruneRuns([run.key]);
+    // Also removes the provisional directory the settled run replaces: only
+    // now, so a failed load above leaves the still-serving run its chunks.
+    const removed = st.seaLevelClient.pruneRuns([run]);
     if (removed.length) st.log('info', `tides: removed superseded cached run(s) ${removed.join(', ')}`);
   }
 }

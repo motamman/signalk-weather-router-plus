@@ -70,7 +70,8 @@ test('readyMeshDirs: a complete marker makes a mesh ready; clusters are listed f
 });
 
 /** A tiny published layout served over HTTP: charts/mesh/index.json and charts/mesh/<D>/ with an index and two tiles. */
-function serve(root: string): Promise<{ url: string; close: () => void }> {
+/** `hold`: a promise a `.bin` answer waits for before its body is sent (a stalled download). */
+function serve(root: string, hold?: () => Promise<void>): Promise<{ url: string; close: () => void }> {
   return new Promise(resolve => {
     const srv = http.createServer((req, res) => {
       const p = path.join(root, decodeURIComponent((req.url ?? '/').split('?')[0]));
@@ -83,6 +84,7 @@ function serve(root: string): Promise<{ url: string; close: () => void }> {
       }
       res.writeHead(200, { 'content-length': st.size });
       if (req.method === 'HEAD') res.end();
+      else if (hold && p.endsWith('.bin')) void hold().then(() => fs.createReadStream(p).pipe(res));
       else fs.createReadStream(p).pipe(res);
     });
     srv.listen(0, '127.0.0.1', () => {
@@ -219,6 +221,36 @@ test('MeshManager.refresh: a catalogue that appears after start is listed on ref
     await mgr.reconcile();
     assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'ready');
   } finally {
+    mgr.stop();
+    close();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(store, { recursive: true, force: true });
+  }
+});
+
+test('MeshManager.refresh: during a pass that is downloading, answers after the catalogue read, not after the download', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-meshsrv-'));
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-meshstore-'));
+  publish(root, '2026-10-09T06:43:40Z', 500);
+  let release: () => void = () => {};
+  const held = new Promise<void>(r => (release = r));
+  const { url, close } = await serve(root, () => held);
+  const mgr = new MeshManager(() => {});
+  try {
+    mgr.configure(url + 'charts/mesh/index.json', ['01CGD'], store);
+    const pass = mgr.reconcile(); // reads the catalogue, then stalls on the first tile
+    while (mgr.status().meshes.find(r => r.name === '01CGD')?.state !== 'downloading') await new Promise(r => setTimeout(r, 20));
+    const timeout = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 5000));
+    const refreshed = await Promise.race([mgr.refresh().then(() => 'read' as const), timeout]);
+    assert.equal(refreshed, 'read', 'refresh waited for the running download');
+    assert.equal(mgr.status().catalog_updated, '2026-10-09T06:43:40Z');
+    assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'downloading');
+    release();
+    await pass;
+    await mgr.reconcile(); // the pass refresh queued after it: nothing left to download
+    assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'ready');
+  } finally {
+    release();
     mgr.stop();
     close();
     fs.rmSync(root, { recursive: true, force: true });

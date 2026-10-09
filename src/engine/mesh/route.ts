@@ -105,6 +105,8 @@ export type MeshRouteResult =
  */
 export const MESH_BOX_PADS_DEG = [0.5, 1.0, 2.0];
 export const MESH_BOX_PAD_DEG = MESH_BOX_PADS_DEG[0];
+/** The widest box the mesh search can use: what the worker loads currents for before the mesh process starts. */
+export const MESH_BOX_PAD_MAX_DEG = MESH_BOX_PADS_DEG[MESH_BOX_PADS_DEG.length - 1];
 /**
  * Cap on the triangles one box may read. Arithmetic from the arrays
  * (store.ts 80 bytes a triangle, astar.ts 51): about 135 bytes each, so

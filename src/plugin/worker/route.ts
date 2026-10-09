@@ -65,7 +65,9 @@ function meshLegRunner(
   cfg: ResolvedConfig,
   id: string,
   request: RouteRequest,
-  progress: (m: string) => void
+  progress: (m: string) => void,
+  /** The SMOC area and steps loadAreas loaded for the current leg; the mesh process asks for exactly these. */
+  smocLeg: () => { area: BBox; steps: number[] } | null
 ): MeshLegRunner | undefined {
   const stores: { name: string; dir: string; store: MeshStore }[] = [];
   const open = (name: string, dir: string): void => {
@@ -137,8 +139,8 @@ function meshLegRunner(
           ? null
           : {
               smoc:
-                st.smoc && cfg.currents.smocEnabled
-                  ? { cacheDir: path.join(st.cacheRoot, 'smoc'), run: st.smoc.run, settings: smocSettings(cfg) }
+                st.smoc && cfg.currents.smocEnabled && smocLeg()
+                  ? { cacheDir: path.join(st.cacheRoot, 'smoc'), run: st.smoc.run, settings: smocSettings(cfg), ...smocLeg()! }
                   : null,
               rtofs:
                 st.rtofs && cfg.currents.rtofsEnabled
@@ -390,6 +392,10 @@ export async function route(
     };
 
     // Forecast area and SMOC area for a box, held until releaseAreas().
+    // The SMOC box and steps loaded for the leg: the mesh process reads the
+    // same from the disk cache, so both sides ask for one area and one step
+    // list and the chunks it wants are the ones written here.
+    let smocLeg: { area: BBox; steps: number[] } | null = null;
     const loadAreas = async (bbox: BBox, what: string): Promise<LegWind | null> => {
       if (useForecast) {
         // The route area of the forecast: the corridor box plus a margin, the
@@ -441,7 +447,9 @@ export async function route(
           progress(0, 0, `currents: checking CMEMS SMOC coverage of the ${what}`);
           try {
             await src.ensure(bbox, steps, { reason: `job ${id} ${what}`, shouldCancel });
+            smocLeg = { area: bbox, steps };
           } catch (err) {
+            smocLeg = null;
             if (shouldCancel()) throw new RouteCancelled();
             progress(
               0,
@@ -467,6 +475,7 @@ export async function route(
       }
       releaseRegional();
       wind = null;
+      smocLeg = null;
       if (st.smoc) st.smoc.trimOnDemand(0);
       rebuildStack(st);
       releaseMemory();
@@ -489,7 +498,7 @@ export async function route(
     const pipeline: LegPipelineInputs = {
       waterGrid: st.waterGrid,
       router,
-      mesh: meshLegRunner(st, cfg, id, request, m => progress(0, 0, m)),
+      mesh: meshLegRunner(st, cfg, id, request, m => progress(0, 0, m), () => smocLeg),
       avoidAreas: avoid.map(a => ({ lon: a.lon, lat: a.lat, radiusM: a.radiusM })),
       meshBufferM: cfg.routing.navigableBufferM,
       drawbridges: request.drawbridges ?? cfg.routing.drawbridges,

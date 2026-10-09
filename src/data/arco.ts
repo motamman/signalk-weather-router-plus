@@ -15,7 +15,10 @@
  *    `.zmetadata` Last-Modified);
  *  - grid-index regions for a bounding box (longitude wraps);
  *  - the client: probe, per-run disk cache of compressed chunks
- *    (cacheDir/<run>/<layout>/<var>/<chunk key>), parallel downloads;
+ *    (cacheDir/<run>/<layout>/<var>/<chunk key>; a run whose store
+ *    update is still being written lives in cacheDir/<run>.provisional,
+ *    so its chunks are never read as the settled run's), parallel
+ *    downloads;
  *  - the layout cost model and area loading (decode + crop the chunks
  *    covering a region at given steps into SharedArrayBuffers, one
  *    Float32Array per variable, [step][row][col], NaN = no data);
@@ -234,6 +237,12 @@ export function areaId(res: ArcoResolution, r: Region, steps: number[]): string 
 }
 
 // ─────────────── client (network + disk cache) ───────────────
+
+/** The directory name a run is cached under: its key, plus `.provisional` while its update is being written. */
+export function runDirName(run: Pick<ArcoRun, 'key' | 'settled'>): string {
+  return run.settled ? run.key : `${run.key}.provisional`;
+}
+const RUN_DIR_RE = /^\d{10}(\.provisional)?$/;
 
 export interface ArcoUrls {
   time: string;
@@ -505,13 +514,22 @@ export class ArcoClient {
     };
   }
 
-  private runDir(key: string): string {
-    return path.join(this.cacheDir, key);
+  /**
+   * A run's directory. A provisional run (its store update still being
+   * written) has its own, `<key>.provisional`: its chunks may predate the
+   * update, so the settled run of the same key must never read them, and a
+   * download still in flight when the settled run replaces it writes into
+   * the provisional directory, not the settled one. Every run is cached on
+   * disk the same way, so a process that reads the cache only (the mesh
+   * leg's) sees what the worker holds, provisional or not.
+   */
+  private runDir(run: Pick<ArcoRun, 'key' | 'settled'>): string {
+    return path.join(this.cacheDir, runDirName(run));
   }
 
   /** Save the run description next to its chunks (offline restarts reuse it). */
   saveRun(run: ArcoRun): void {
-    const dir = this.runDir(run.key);
+    const dir = this.runDir(run);
     fs.mkdirSync(dir, { recursive: true });
     // Random part: the data and route workers are threads of one process (same pid).
     const tmp = path.join(dir, `run.json.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -528,12 +546,11 @@ export class ArcoClient {
       return [];
     }
     const out: ArcoRun[] = [];
-    for (const e of entries
-      .filter(x => /^\d{10}$/.test(x))
-      .sort()
-      .reverse()) {
+    // Newest key first; a settled directory before its provisional one.
+    const order = (e: string): string => (e.endsWith('.provisional') ? `${e.slice(0, 10)}0` : `${e}1`);
+    for (const e of entries.filter(x => RUN_DIR_RE.test(x)).sort((a, b) => (order(a) < order(b) ? 1 : order(a) > order(b) ? -1 : 0))) {
       try {
-        out.push(JSON.parse(fs.readFileSync(path.join(this.runDir(e), 'run.json'), 'utf8')) as ArcoRun);
+        out.push(JSON.parse(fs.readFileSync(path.join(this.cacheDir, e, 'run.json'), 'utf8')) as ArcoRun);
       } catch {
         // chunks without a run description: unusable
       }
@@ -541,9 +558,13 @@ export class ArcoClient {
     return out;
   }
 
-  /** Delete every cached run except `keep`. */
-  pruneRuns(keep: string[]): string[] {
-    const keepSet = new Set(keep);
+  /**
+   * Delete every cached run directory except those of `keep` (each run
+   * keeps the one directory its settledness names, so a kept settled run's
+   * leftover provisional directory goes too).
+   */
+  pruneRuns(keep: Pick<ArcoRun, 'key' | 'settled'>[]): string[] {
+    const keepSet = new Set(keep.map(runDirName));
     const removed: string[] = [];
     let entries: string[];
     try {
@@ -552,20 +573,20 @@ export class ArcoClient {
       return removed;
     }
     for (const e of entries) {
-      if (!/^\d{10}$/.test(e) || keepSet.has(e)) continue;
-      fs.rmSync(this.runDir(e), { recursive: true, force: true });
+      if (!RUN_DIR_RE.test(e) || keepSet.has(e)) continue;
+      fs.rmSync(path.join(this.cacheDir, e), { recursive: true, force: true });
       removed.push(e);
     }
     return removed;
   }
 
-  /** Remove one run's cached chunks (a provisional run being replaced by its settled version). */
-  dropRun(key: string): void {
-    fs.rmSync(this.runDir(key), { recursive: true, force: true });
+  /** Remove a provisional run's directory (its settled version replaces it, or it is reloaded from scratch). */
+  dropProvisionalRun(key: string): void {
+    fs.rmSync(this.runDir({ key, settled: false }), { recursive: true, force: true });
   }
 
   /** Bytes cached on disk for a run. */
-  cachedBytes(key: string): number {
+  cachedBytes(run: Pick<ArcoRun, 'key' | 'settled'>): number {
     let total = 0;
     const walk = (d: string): void => {
       let es: fs.Dirent[];
@@ -587,27 +608,30 @@ export class ArcoClient {
         }
       }
     };
-    walk(this.runDir(key));
+    walk(this.runDir(run));
     return total;
   }
 
   /** Directory for derived per-run files (e.g. decoded point series), created on demand. */
   runFile(run: ArcoRun, ...parts: string[]): string {
-    const p = path.join(this.runDir(run.key), ...parts);
+    const p = path.join(this.runDir(run), ...parts);
     fs.mkdirSync(path.dirname(p), { recursive: true });
     return p;
   }
 
   chunkPath(run: ArcoRun, layout: ArcoLayout, v: string, key: string): string {
-    return path.join(this.runDir(run.key), layout, v, key);
+    return path.join(this.runDir(run), layout, v, key);
   }
 
   /**
    * Stored bytes of one chunk: disk cache first, else downloaded (and
    * cached, atomically). null = chunk absent in the store (all fill).
-   * The disk cache is used only for a settled run: a run whose update
-   * is still being written is always downloaded and never cached, so
-   * its in-flight loads cannot repopulate the cache after dropRun().
+   * Provisional and settled runs are cached alike, each in its own
+   * directory (see runDir). An absent chunk is remembered as a `.none`
+   * marker; a settled run's stays absent, but a provisional run's (its
+   * update still being written) may appear later, so with the network
+   * available it is asked for again and the marker goes once it exists.
+   * A reader without the network (the mesh process) trusts the marker.
    */
   async chunk(run: ArcoRun, layout: ArcoLayout, v: string, idx: number[], stats: DownloadStats): Promise<Uint8Array | null> {
     const level = run.levels[layout];
@@ -616,37 +640,32 @@ export class ArcoClient {
     if (!meta) throw new Error(`${this.tag}: variable ${v} not in the ${layout} level`);
     const key = chunkKey(meta, idx);
     const p = this.chunkPath(run, layout, v, key);
-    if (run.settled) {
-      try {
-        const b = new Uint8Array(fs.readFileSync(p));
-        stats.fromDisk++;
-        this.totals.diskChunks++;
-        return b;
-      } catch {
-        // not cached
-      }
-      if (fs.existsSync(`${p}.none`)) {
-        stats.absent++;
-        return null;
-      }
+    try {
+      const b = new Uint8Array(fs.readFileSync(p));
+      stats.fromDisk++;
+      this.totals.diskChunks++;
+      return b;
+    } catch {
+      // not cached
+    }
+    if ((run.settled || !this.network) && fs.existsSync(`${p}.none`)) {
+      stats.absent++;
+      return null;
     }
     if (!this.network) throw new Error(`${this.tag}: chunk ${layout}/${v}/${key} is not cached and the network is disabled`);
     const store = this.stores[layout];
     const body = await store.chunkBytes(v, meta, idx);
     if (body === null) {
       stats.absent++;
-      if (run.settled) {
-        fs.mkdirSync(path.dirname(p), { recursive: true });
-        fs.writeFileSync(`${p}.none`, '');
-      }
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(`${p}.none`, '');
       return null;
     }
-    if (run.settled) {
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      const tmp = `${p}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-      fs.writeFileSync(tmp, body);
-      fs.renameSync(tmp, p);
-    }
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const tmp = `${p}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    fs.writeFileSync(tmp, body);
+    fs.renameSync(tmp, p);
+    fs.rmSync(`${p}.none`, { force: true }); // a provisional run's chunk that has appeared since
     stats.downloaded++;
     stats.bytes += body.length;
     this.totals.downloadedBytes += body.length;

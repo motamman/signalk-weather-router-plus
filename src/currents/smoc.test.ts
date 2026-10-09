@@ -27,162 +27,8 @@ import { RtofsCurrentSource } from './rtofs';
 import type { CurrentSourceLike } from './types';
 import { type ChunkScratch, decodeChunk, parseArrayMeta, parseCfTimeUnits, parseConsolidated } from '../data/zarr';
 import { sampleField, type FieldGrid } from '../data/forecast';
+import { T0, NT, H, uTrue, vTrue, isLand, f4, Mock, makeMock, URLS, SETTINGS, tmpDir } from './smoc.mock.test';
 
-// ───────────── synthetic Zarr v2 store (uncompressed chunks) ─────────────
-//
-// Global 1° grid (80°S..90°N × 180°W..179°E), 200 hourly steps from
-// 2026-09-20T00Z, the SMOC variable layout (time, elevation, latitude,
-// longitude). Three layouts like the real product: `time` (1 h × 64 × 128
-// cells, partial edge chunks), `geo` (48 h × 16 × 8) and `ds4` (2° grid).
-// Land (fill value) on 40..45°N × 10..20°E; the rows south of 65°S are
-// fill in `time` and absent chunks (HTTP 403) in `geo`.
-
-const FILL = 9.969209968386869e36;
-const T0 = Date.UTC(2026, 8, 20, 0);
-const NT = 200;
-const H = 3600_000;
-const HOURS_1950 = (T0 - Date.UTC(1950, 0, 1)) / H;
-
-function uTrue(lat: number, lon: number, ti: number): number {
-  return 0.5 * Math.sin((2 * Math.PI * lon) / 360) + 0.01 * lat + 0.001 * ti;
-}
-function vTrue(lat: number, lon: number, ti: number): number {
-  return 0.3 * Math.cos((2 * Math.PI * lon) / 360) - 0.005 * lat - 0.002 * ti;
-}
-function isLand(lat: number, lon: number): boolean {
-  return (lat >= 40 && lat <= 45 && lon >= 10 && lon <= 20) || lat < -64.5;
-}
-
-interface MockLayout {
-  d: number;
-  chunks: [number, number, number, number];
-}
-const LAYOUTS: Record<string, MockLayout> = {
-  time: { d: 1, chunks: [1, 1, 64, 128] },
-  geo: { d: 1, chunks: [48, 1, 16, 8] },
-  ds4: { d: 2, chunks: [1, 1, 86, 180] },
-};
-
-function f4(vals: ArrayLike<number>): Uint8Array {
-  return new Uint8Array(new Float32Array(Array.from(vals)).buffer);
-}
-
-function layoutMeta(name: string): { nLat: number; nLon: number; zmeta: unknown } {
-  const L = LAYOUTS[name];
-  const nLat = Math.round(170 / L.d) + 1;
-  const nLon = Math.round(360 / L.d);
-  const comp = null;
-  const arr = (shape: number[], chunks: number[], fill: unknown) => ({
-    chunks,
-    compressor: comp,
-    dtype: '<f4',
-    fill_value: fill,
-    filters: null,
-    order: 'C',
-    shape,
-    zarr_format: 2,
-  });
-  const md: Record<string, unknown> = {
-    '.zattrs': { credit: 'E.U. Copernicus Marine Service Information (CMEMS)' },
-    'latitude/.zarray': arr([nLat], [nLat], 'NaN'),
-    'latitude/.zattrs': { _ARRAY_DIMENSIONS: ['latitude'] },
-    'longitude/.zarray': arr([nLon], [nLon], 'NaN'),
-    'longitude/.zattrs': { _ARRAY_DIMENSIONS: ['longitude'] },
-    'time/.zarray': arr([NT], [64], 'NaN'),
-    'time/.zattrs': { _ARRAY_DIMENSIONS: ['time'], calendar: 'gregorian', units: 'hours since 1950-01-01' },
-    'elevation/.zarray': arr([1], [1], 'NaN'),
-    'elevation/.zattrs': { _ARRAY_DIMENSIONS: ['elevation'] },
-  };
-  for (const v of ['utotal', 'vtotal', 'uo', 'vo']) {
-    md[`${v}/.zarray`] = arr([NT, 1, nLat, nLon], L.chunks, FILL);
-    md[`${v}/.zattrs`] = { _ARRAY_DIMENSIONS: ['time', 'elevation', 'latitude', 'longitude'], units: 'm s-1' };
-  }
-  return { nLat, nLon, zmeta: { metadata: md, zarr_consolidated_format: 1 } };
-}
-
-interface Mock {
-  fetch: typeof fetch;
-  counts: Map<string, number>;
-  total: () => number;
-  stacUpdating: boolean;
-  stacUpdated: string;
-}
-
-function makeMock(): Mock {
-  const counts = new Map<string, number>();
-  const mock: Mock = {
-    counts,
-    total: () => [...counts.values()].reduce((a, b) => a + b, 0),
-    stacUpdating: false,
-    stacUpdated: '2026-09-28T10:42:54Z',
-    fetch: (async (input: string | URL | Request) => {
-      const url = String(input);
-      counts.set(url, (counts.get(url) ?? 0) + 1);
-      const headers = { 'last-modified': 'Mon, 28 Sep 2026 08:16:14 GMT', etag: '"abc"' };
-      if (url.endsWith('dataset.stac.json')) {
-        return new Response(
-          JSON.stringify({
-            properties: {
-              admp_updated_data: mock.stacUpdated,
-              admp_updating_start_date: mock.stacUpdating ? '2026-09-28T08:00:00Z' : null,
-            },
-          }),
-          { status: 200 }
-        );
-      }
-      const m = /\/(time|geo|ds4)\.zarr\/(.+)$/.exec(url);
-      if (!m) return new Response('no', { status: 404 });
-      const layout = m[1];
-      const key = m[2];
-      const L = LAYOUTS[layout];
-      const { nLat, nLon, zmeta } = layoutMeta(layout);
-      if (key === '.zmetadata') return new Response(JSON.stringify(zmeta), { status: 200, headers });
-      if (key === 'latitude/0') return new Response(f4(Array.from({ length: nLat }, (_, i) => -80 + i * L.d)), { status: 200 });
-      if (key === 'longitude/0') return new Response(f4(Array.from({ length: nLon }, (_, i) => -180 + i * L.d)), { status: 200 });
-      const tm = /^time\/(\d+)$/.exec(key);
-      if (tm) {
-        const c = +tm[1];
-        return new Response(f4(Array.from({ length: 64 }, (_, i) => (c * 64 + i < NT ? HOURS_1950 + c * 64 + i : NaN))), { status: 200 });
-      }
-      const dm = /^(utotal|vtotal)\/(\d+)\.0\.(\d+)\.(\d+)$/.exec(key);
-      if (!dm) return new Response('no', { status: 404 });
-      const [ct, , cr, cc] = L.chunks;
-      const [tc, rc, ccI] = [+dm[2], +dm[3], +dm[4]];
-      if (layout === 'geo' && rc === 0) return new Response('denied', { status: 403 });
-      const out = new Float32Array(ct * cr * cc).fill(FILL);
-      for (let t = 0; t < ct; t++) {
-        const ti = tc * ct + t;
-        if (ti >= NT) continue;
-        for (let r = 0; r < cr; r++) {
-          const gr = rc * cr + r;
-          if (gr >= nLat) continue;
-          const lat = -80 + gr * L.d;
-          for (let c = 0; c < cc; c++) {
-            const gc = ccI * cc + c;
-            if (gc >= nLon) continue;
-            const lon = -180 + gc * L.d;
-            if (isLand(lat, lon)) continue;
-            out[(t * cr + r) * cc + c] = dm[1] === 'utotal' ? uTrue(lat, lon, ti) : vTrue(lat, lon, ti);
-          }
-        }
-      }
-      return new Response(new Uint8Array(out.buffer), { status: 200 });
-    }) as typeof fetch,
-  };
-  return mock;
-}
-
-const URLS = {
-  time: 'https://mock/time.zarr',
-  geo: 'https://mock/geo.zarr',
-  ds4: 'https://mock/ds4.zarr',
-  stac: 'https://mock/dataset.stac.json',
-};
-const SETTINGS: SmocSettings = { stepS: 3 * HOUR_S, horizonS: 24 * HOUR_S, halfWidthDeg: 10, budgetBytes: 64 * 1024 * 1024 };
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-smoc-'));
-}
 
 async function setup(): Promise<{ mock: Mock; client: SmocClient; run: SmocRun; dir: string }> {
   const mock = makeMock();
@@ -479,7 +325,7 @@ test('smoc: on-demand areas are cached (memory and disk), deduplicated, evicted 
   // … and a box too large even for that fails clearly.
   const tiny = new SmocCurrentSource(run, { ...SETTINGS, budgetBytes: 16 * 1024 }, client);
   await assert.rejects(() => tiny.ensure({ west: -60, east: 60, south: -40, north: 40 }, steps, { reason: 'route' }), /per-area cap/);
-  // Absent chunks (geo layout, far south) are remembered once the run is settled.
+  // Absent chunks (geo layout, far south) are remembered on disk.
   const south = new SmocCurrentSource(run, SETTINGS, client);
   const longSteps = src.stepsBetween(T0, T0 + 150 * H);
   await south.ensure({ west: 0, east: 1, south: -79, north: -78 }, longSteps, { reason: 'conditions' });
@@ -670,4 +516,86 @@ test('stack: NECOFS 10 > SMOC 3 > RTOFS 2 > FES 0, with (0, 0) falling through; 
   // Region containment across the wrap.
   assert.equal(regionContains({ row0: 0, nRows: 10, col0: 350, nCols: 20 }, { row0: 2, nRows: 3, col0: 5, nCols: 4 }, 360), true);
   assert.equal(regionContains({ row0: 0, nRows: 10, col0: 350, nCols: 20 }, { row0: 2, nRows: 3, col0: 9, nCols: 4 }, 360), false);
+});
+
+test('smoc: a provisional run is cached in its own directory, readable without the network, apart from the settled run', async () => {
+  const mock = makeMock();
+  const dir = tmpDir();
+  mock.stacUpdating = true;
+  const client = new SmocClient({ cacheDir: dir, urls: URLS, fetchImpl: mock.fetch, sleepImpl: async () => undefined });
+  const prov = await client.probe();
+  assert.equal(prov.settled, false);
+  client.saveRun(prov);
+  const box = { west: -10, east: 0, south: 45, north: 55 };
+  const src = new SmocCurrentSource(prov, SETTINGS, client);
+  const steps = src.bracketSteps(T0 + 7 * H);
+  await src.ensure(box, steps, { reason: 'route' });
+  const n = mock.total();
+  assert.ok(fs.existsSync(path.join(dir, prov.key + '.provisional', 'run.json')), 'provisional directory');
+  assert.ok(!fs.existsSync(path.join(dir, prov.key)), 'no settled directory yet');
+  // The mesh process: disk only, no network, the same run object.
+  const offline = new SmocCurrentSource(prov, SETTINGS, new SmocClient({ cacheDir: dir, urls: URLS, network: false }));
+  await offline.ensure(box, steps, { reason: 'mesh leg' });
+  assert.equal(mock.total(), n, 'served from the provisional directory');
+  assert.deepEqual(offline.at(-5, 50, new Date(T0 + 7 * H)), src.at(-5, 50, new Date(T0 + 7 * H)));
+  assert.deepEqual(client.cachedRuns().map(r => [r.key, r.settled]), [[prov.key, false]]);
+  // The update finishes: the settled run of the same key reads nothing from the provisional directory.
+  mock.stacUpdating = false;
+  const settled = await client.probe(prov);
+  assert.equal(settled.settled, true);
+  assert.equal(settled.key, prov.key);
+  client.saveRun(settled);
+  const fresh = new SmocCurrentSource(settled, SETTINGS, client);
+  await fresh.ensure(box, steps, { reason: 'route' });
+  assert.ok(mock.total() > n, 'downloaded again for the settled run');
+  assert.deepEqual(client.cachedRuns().map(r => [r.key, r.settled]), [[prov.key, true], [prov.key, false]]);
+  // Replacing the provisional run drops its directory; a prune keeping the settled run would too.
+  client.dropProvisionalRun(prov.key);
+  assert.ok(!fs.existsSync(path.join(dir, prov.key + '.provisional')));
+  fs.mkdirSync(path.join(dir, prov.key + '.provisional'), { recursive: true });
+  assert.deepEqual(client.pruneRuns([settled]), [prov.key + '.provisional']);
+  assert.ok(fs.existsSync(path.join(dir, prov.key, 'run.json')));
+  assert.ok(client.cachedBytes(settled) > 0);
+  assert.equal(client.cachedBytes(prov), 0);
+});
+
+test('smoc: a provisional run asks again for an absent chunk; a settled run and an offline reader trust the marker', async () => {
+  const mock = makeMock();
+  const dir = tmpDir();
+  mock.stacUpdating = true;
+  const client = new SmocClient({ cacheDir: dir, urls: URLS, fetchImpl: mock.fetch, sleepImpl: async () => undefined });
+  const prov = await client.probe();
+  assert.equal(prov.settled, false);
+  client.saveRun(prov);
+  // Far south, geo layout: the mock answers 403 (absent) for its first chunk row.
+  const box = { west: 0, east: 1, south: -79, north: -78 };
+  const chunkGets = (): number => [...mock.counts].filter(([u]) => /geo\.zarr\/(utotal|vtotal)\//.test(u)).reduce((a, [, n]) => a + n, 0);
+  const src = new SmocCurrentSource(prov, SETTINGS, client);
+  const steps = src.stepsBetween(T0, T0 + 150 * H);
+  await src.ensure(box, steps, { reason: 'conditions' });
+  assert.equal(src.onDemandAreas[0].layout, 'geo');
+  const markerDir = path.join(dir, prov.key + '.provisional', 'geo', 'utotal');
+  assert.ok(
+    fs.readdirSync(markerDir).some(f => f.endsWith('.none')),
+    'absent chunks remembered on disk'
+  );
+  const n1 = chunkGets();
+  assert.ok(n1 > 0);
+  // Loaded again while the update is still being written: the absent chunks may exist by now, so they are asked for again.
+  const again = new SmocCurrentSource(prov, SETTINGS, client);
+  await again.ensure(box, steps, { reason: 'conditions' });
+  assert.ok(chunkGets() > n1, 'provisional: absent chunks requested again');
+  // Without the network (the mesh process) the markers answer; nothing throws.
+  const offline = new SmocCurrentSource(prov, SETTINGS, new SmocClient({ cacheDir: dir, urls: URLS, network: false }));
+  await offline.ensure(box, steps, { reason: 'mesh leg' });
+  assert.equal(offline.onDemandAreas.length, 1);
+  // The settled run's markers are final.
+  mock.stacUpdating = false;
+  const settled = await client.probe(prov);
+  assert.equal(settled.settled, true);
+  client.saveRun(settled);
+  await new SmocCurrentSource(settled, SETTINGS, client).ensure(box, steps, { reason: 'conditions' });
+  const n2 = chunkGets();
+  await new SmocCurrentSource(settled, SETTINGS, client).ensure(box, steps, { reason: 'conditions' });
+  assert.equal(chunkGets(), n2, 'settled: absent chunks not requested again');
 });
