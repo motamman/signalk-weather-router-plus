@@ -10,7 +10,15 @@
  * Tasks:
  *  - rmtree:   count and delete one directory tree (a superseded tile
  *              generation: hundreds of thousands of files);
- *  - regional: decode one signalk-grib-downloader run (decodeRegionalRun).
+ *  - regional: decode one signalk-grib-downloader run (decodeRegionalRun);
+ *  - mesh-leg: plan one leg on the chart mesh (plugin/meshlegtask.ts,
+ *              engine/mesh/legrun.ts): the tiles of the leg's box are
+ *              about 1 GB of typed arrays for 6 M triangles (brain,
+ *              2026-10-08), which the route worker must not keep; the
+ *              task streams its progress before its answer;
+ *  - mesh-download: mirror one published mesh folder (plugin/meshes.ts)
+ *              file by file into a folder, resumable, progress in
+ *              `.progress.json` there.
  */
 
 import { fork } from 'node:child_process';
@@ -18,9 +26,21 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { RegionalSource } from '../data/regional';
 import type { RegionalDecodeResult } from '../data/regionaldecode';
+import type { MeshLegEvent, MeshLegResult, MeshLegTask } from './meshlegtask';
 
 export type ChildTask =
-  { task: 'rmtree'; dir: string } | { task: 'regional'; src: RegionalSource; srcDir: string; dataDir: string; keepRuns: number };
+  | { task: 'rmtree'; dir: string }
+  | { task: 'regional'; src: RegionalSource; srcDir: string; dataDir: string; keepRuns: number }
+  | MeshLegTask
+  | { task: 'mesh-download'; base: string; dest: string; build: string };
+
+/** A message a task sends before its answer (the mesh leg's progress and stage fronts). */
+export type ChildEvent = MeshLegEvent;
+
+export interface MeshDownloadResult {
+  files: number;
+  bytes: number;
+}
 
 export interface RmtreeResult {
   /** Saved tiles (.gz) and their bytes that were in the tree. */
@@ -28,13 +48,32 @@ export interface RmtreeResult {
   bytes: number;
 }
 
-export type ChildTaskResult<T extends ChildTask> = T extends { task: 'rmtree' } ? RmtreeResult : RegionalDecodeResult;
+export type ChildTaskResult<T extends ChildTask> = T extends { task: 'rmtree' }
+  ? RmtreeResult
+  : T extends { task: 'mesh-leg' }
+    ? MeshLegResult
+    : T extends { task: 'mesh-download' }
+      ? MeshDownloadResult
+      : RegionalDecodeResult;
 
 const isTs = __filename.endsWith('.ts');
 
-/** Run one task in a fresh child process; resolves with its answer, rejects on its error, exit or timeout. */
-export function runChildTask<T extends ChildTask>(task: T, timeoutMs = 30 * 60_000): Promise<ChildTaskResult<T>> {
+/**
+ * Run one task in a fresh child process; resolves with its answer, rejects
+ * on its error, exit or timeout. An aborted `signal` kills the child and
+ * rejects.
+ */
+export function runChildTask<T extends ChildTask>(
+  task: T,
+  timeoutMs = 30 * 60_000,
+  signal?: AbortSignal,
+  onEvent?: (e: ChildEvent) => void
+): Promise<ChildTaskResult<T>> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(`${task.task} child process cancelled`));
+      return;
+    }
     const child = fork(path.join(__dirname, isTs ? 'childtask.ts' : 'childtask.js'), [], {
       execArgv: isTs ? ['--import', 'tsx'] : [],
       serialization: 'advanced',
@@ -46,8 +85,15 @@ export function runChildTask<T extends ChildTask>(task: T, timeoutMs = 30 * 60_0
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       fn();
     };
+    const onAbort = (): void =>
+      finish(() => {
+        child.kill('SIGKILL');
+        reject(new Error(`${task.task} child process cancelled`));
+      });
+    signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(
       () =>
         finish(() => {
@@ -59,9 +105,13 @@ export function runChildTask<T extends ChildTask>(task: T, timeoutMs = 30 * 60_0
     child.stderr?.on('data', d => {
       if (stderr.length < 4000) stderr += String(d);
     });
-    child.on('message', (m: { ok: boolean; result?: ChildTaskResult<T>; error?: string }) =>
-      finish(() => (m.ok ? resolve(m.result as ChildTaskResult<T>) : reject(new Error(m.error ?? `${task.task} child process failed`))))
-    );
+    child.on('message', (m: { ok?: boolean; result?: ChildTaskResult<T>; error?: string; event?: ChildEvent }) => {
+      if (m.event) {
+        onEvent?.(m.event);
+        return;
+      }
+      finish(() => (m.ok ? resolve(m.result as ChildTaskResult<T>) : reject(new Error(m.error ?? `${task.task} child process failed`))));
+    });
     child.on('error', err => finish(() => reject(err)));
     child.on('exit', (code, signal) =>
       finish(() =>
@@ -103,6 +153,96 @@ async function countTree(dir: string): Promise<RmtreeResult> {
   return c;
 }
 
+/**
+ * Mirror a published mesh folder: its `index.json` (one cluster) or
+ * `meshes.json` and each cluster's `index.json` list every tile file.
+ * A file already present with the server's size is kept (resume); the
+ * rest are fetched one at a time to a temporary name and renamed.
+ * Progress goes to `<dest>/.progress.json` every file.
+ */
+async function downloadMesh(base: string, dest: string, build: string): Promise<MeshDownloadResult> {
+  dest = path.resolve(dest);
+  // A copy started for another build (or from another catalogue) is not
+  // resumed: a tile of the same size can differ in content between builds,
+  // so the folder goes and the copy starts over. `.progress.json` records
+  // what a folder was started for.
+  try {
+    const prev = JSON.parse(fs.readFileSync(path.join(dest, '.progress.json'), 'utf8')) as { base?: string; build?: string };
+    if (prev.base !== base || prev.build !== build) fs.rmSync(dest, { recursive: true, force: true });
+  } catch {
+    // no progress file: an empty or new folder
+  }
+  fs.mkdirSync(dest, { recursive: true });
+  /** The local path of a file the server's lists name; a name that leaves `dest` is refused. */
+  const inside = (rel: string): string => {
+    const p = path.resolve(dest, rel);
+    if (p !== dest && !p.startsWith(dest + path.sep)) throw new Error(`${rel}: outside the mesh folder`);
+    return p;
+  };
+  const getJson = async (rel: string): Promise<unknown> => {
+    const target = inside(rel);
+    const res = await fetch(new URL(rel, base).toString(), { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) throw new Error(`${rel}: HTTP ${res.status}`);
+    const text = await res.text();
+    fs.writeFileSync(target, text);
+    return JSON.parse(text);
+  };
+  // The file list.
+  const files: string[] = [];
+  let clusters: string[] = [''];
+  try {
+    await getJson('index.json');
+  } catch {
+    const m = (await getJson('meshes.json')) as { meshes: { dir: string }[] };
+    clusters = m.meshes.map(c => c.dir.replace(/\/$/, '') + '/');
+    for (const c of clusters) {
+      fs.mkdirSync(inside(c), { recursive: true });
+      await getJson(c + 'index.json');
+    }
+  }
+  for (const c of clusters) {
+    const ix = JSON.parse(fs.readFileSync(inside(c + 'index.json'), 'utf8')) as { tiles: { file: string }[] };
+    for (const t of ix.tiles) files.push(c + t.file);
+  }
+  let bytes = 0;
+  let done = 0;
+  const progress = (): void => {
+    fs.writeFileSync(path.join(dest, '.progress.json'), JSON.stringify({ base, build, files: done, total: files.length, bytes }));
+  };
+  progress();
+  for (const rel of files) {
+    const target = inside(rel);
+    const url = new URL(rel, base).toString();
+    let have = -1;
+    try {
+      have = fs.statSync(target).size;
+    } catch {
+      // not there yet
+    }
+    if (have >= 0) {
+      const head = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(60_000) });
+      const len = Number(head.headers.get('content-length'));
+      if (head.ok && len === have) {
+        bytes += have;
+        done++;
+        progress();
+        continue;
+      }
+    }
+    const res = await fetch(url, { signal: AbortSignal.timeout(30 * 60_000) });
+    if (!res.ok || !res.body) throw new Error(`${rel}: HTTP ${res.status}`);
+    const tmp = `${target}.part`;
+    const { pipeline } = await import('node:stream/promises');
+    const { Readable } = await import('node:stream');
+    await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), fs.createWriteStream(tmp));
+    fs.renameSync(tmp, target);
+    bytes += fs.statSync(target).size;
+    done++;
+    progress();
+  }
+  return { files: done, bytes };
+}
+
 /** Count and delete a tree (also used in-process as the fallback when a child process cannot be started). */
 export async function rmtree(dir: string): Promise<RmtreeResult> {
   const c = await countTree(dir);
@@ -118,6 +258,12 @@ async function runTask(t: ChildTask): Promise<unknown> {
       const { decodeRegionalRun } = await import('../data/regionaldecode');
       return decodeRegionalRun(t.src, t.srcDir, t.dataDir, t.keepRuns);
     }
+    case 'mesh-leg': {
+      const { runMeshLegTask } = await import('./meshlegtask');
+      return runMeshLegTask(t, event => process.send!({ event }));
+    }
+    case 'mesh-download':
+      return downloadMesh(t.base, t.dest, t.build);
   }
 }
 

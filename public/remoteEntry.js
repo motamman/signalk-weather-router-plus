@@ -122,10 +122,16 @@ var signalk_weather_router_plus = (function () {
     var units = us[0], setUnits = us[1];
     var cs = React.useState(null);
     var coast = cs[0], setCoast = cs[1];
+    var sts = React.useState(null);
+    var status = sts[0], setStatus = sts[1];
     var ds = React.useState(false);
     var dirty = ds[0], setDirty = ds[1];
     var ms = React.useState(null);
     var msg = ms[0], setMsg = ms[1];
+    var mshs = React.useState(null);
+    var meshes = mshs[0], setMeshes = mshs[1];
+    var rdg = React.useState(false);
+    var catalogReading = rdg[0], setCatalogReading = rdg[1];
 
     React.useEffect(function () {
       Promise.all([fetchUnit('distance'), fetchUnit('time')]).then(function (u) { setUnits({ loaded: true, distance: u[0], time: u[1] }); });
@@ -139,9 +145,23 @@ var signalk_weather_router_plus = (function () {
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (s) {
             if (stop) return;
+            setStatus(s || null);
             setCoast(s ? s.coastline || null : null);
             timer = setTimeout(poll, s && s.coastline && s.coastline.downloading ? 2000 : 10000);
           })
+          .catch(function () { if (!stop) timer = setTimeout(poll, 10000); });
+      }
+      poll();
+      return function () { stop = true; clearTimeout(timer); };
+    }, []);
+
+    // Managed chart meshes: the catalogue rows and their state, from the plugin (every 10 s).
+    React.useEffect(function () {
+      var stop = false, timer = null;
+      function poll() {
+        fetch(API + '/meshes', { credentials: 'include', cache: 'no-store' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (m) { if (!stop) { if (m) setMeshes(m); timer = setTimeout(poll, 10000); } })
           .catch(function () { if (!stop) timer = setTimeout(poll, 10000); });
       }
       poll();
@@ -172,6 +192,27 @@ var signalk_weather_router_plus = (function () {
           setCoast(function (c) { return Object.assign({}, c, { downloading: true, message: 'starting download…' }); });
         })
         .catch(function (e) { setMsg('Download could not start: ' + e.message); });
+    }
+
+    // "Read the catalogue now": the plugin reads it before answering, so the
+    // answer is the fresh mesh list (or the catalogue's error).
+    function refreshCatalog() {
+      setMsg(null);
+      setCatalogReading(true);
+      fetch(API + '/meshes/refresh', { method: 'POST', credentials: 'include' })
+        .then(function (r) {
+          if (r.ok) return r.json();
+          // 502: the read failed; the body is still the list (with catalog_error), else plain text.
+          return r.text().then(function (t) {
+            var body = null;
+            try { body = JSON.parse(t); } catch (e) { /* not JSON */ }
+            if (body && body.meshes) setMeshes(body);
+            throw new Error(body && body.error ? body.error : 'HTTP ' + r.status + ' ' + t);
+          });
+        })
+        .then(function (m) { if (m) setMeshes(m); })
+        .catch(function (e) { setMsg('The catalogue could not be read: ' + e.message); })
+        .then(function () { setCatalogReading(false); });
     }
 
     // Inputs -----------------------------------------------------------------
@@ -205,56 +246,196 @@ var signalk_weather_router_plus = (function () {
         h('span', { className: 'input-group-text' }, u.unit));
     }
 
-    // Coastline section ----------------------------------------------------------
-    var configuredCoast = String(get(['landShapefiles'], '')).trim();
-    var coastLines = [];
-    if (coast) {
-      if (coast.downloading) coastLines.push(h('div', { key: 'd', className: 'text-info' }, 'Downloading GSHHG: ' + (coast.message || '…')));
-      else if (coast.error) coastLines.push(h('div', { key: 'e', className: 'text-danger' }, 'Last download failed: ' + coast.error));
-      if (coast.downloaded) coastLines.push(h('div', { key: 'p' }, 'Downloaded coastline: ', h('code', null, coast.downloaded)));
-      if (coast.in_use && coast.in_use.length) coastLines.push(h('div', { key: 'u' }, 'In use: ', h('code', null, coast.in_use.join(', '))));
+    // Rendering helpers for the sections -----------------------------------------
+    // A card: title, one line saying what it does, then its rows.
+    function card(title, purpose) {
+      var kids = Array.prototype.slice.call(arguments, 2);
+      return h('div', { className: 'card mb-3' },
+        h('div', { className: 'card-body' },
+          h('h5', { className: 'card-title mb-1' }, title),
+          purpose ? h('p', { className: 'text-muted small mb-3' }, purpose) : null,
+          kids));
     }
-    var coastSection = h('div', { className: 'mb-4' },
-      h('h5', null, 'Coastline'),
-      field('Coastline shapefile(s)',
-        'Absolute path(s), comma-separated. Blank: the GSHHG 2.3.7 full-resolution shoreline downloaded into the plugin data directory (downloaded at start if missing). Add GSHHS_f_L6.shp for Antarctica.',
-        text(['landShapefiles'], 'blank = downloaded GSHHG')),
-      h('div', { className: 'mb-2' },
-        h('button', { type: 'button', className: 'btn btn-secondary me-2', disabled: !!(coast && coast.downloading), onClick: download },
-          coast && coast.downloading ? 'Downloading…' : coast && coast.downloaded ? 'Download coastline again' : 'Download coastline (149 MB)'),
-        coast && coast.downloaded && configuredCoast
-          ? h('button', { type: 'button', className: 'btn btn-outline-primary', onClick: function () { set(['landShapefiles'], ''); } }, 'Use the downloaded coastline')
-          : null),
-      h('small', { className: 'text-muted d-block' }, coastLines.length ? coastLines : 'Coastline status unavailable until the plugin answers.'),
-      msg ? h('div', { className: 'text-danger mt-1' }, msg) : null);
+    // A row: label on the left, the control and its "what it does" on the right.
+    function row(label, control, why) {
+      return h('div', { className: 'row mb-3' },
+        h('div', { className: 'col-sm-4 fw-bold' }, label),
+        h('div', { className: 'col-sm-8' }, control, why ? h('small', { className: 'form-text text-muted d-block' }, why) : null));
+    }
+    function statusDot(kind, text) {
+      var color = kind === 'ok' ? '#2a7a4b' : kind === 'warn' ? '#b7791f' : kind === 'bad' ? '#b5451b' : '#8a949a';
+      return h('span', null,
+        h('span', { style: { display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: color, marginRight: 6, verticalAlign: 'middle' } }),
+        text);
+    }
+    function fold(summary) {
+      var kids = Array.prototype.slice.call(arguments, 1);
+      return h('details', { className: 'mt-2' }, h('summary', { className: 'text-primary small', style: { cursor: 'pointer' } }, summary), h('div', { className: 'mt-2' }, kids));
+    }
+    function gb(n) { return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + ' GB'; }
 
+    // Coastline ------------------------------------------------------------------
+    var configuredCoast = String(get(['landShapefiles'], '')).trim();
+    var coastStatus;
+    if (!coast) coastStatus = statusDot('off', 'status unavailable until the plugin answers');
+    else if (coast.downloading) coastStatus = statusDot('warn', 'downloading GSHHG: ' + (coast.message || '…'));
+    else if (coast.error) coastStatus = statusDot('bad', 'last download failed: ' + coast.error);
+    else if (configuredCoast) coastStatus = statusDot('ok', 'your own coastline files, in use');
+    else if (coast.downloaded) coastStatus = statusDot('ok', 'GSHHG 2.3.7 full resolution, downloaded, in use');
+    else coastStatus = statusDot('warn', 'no coastline yet; it downloads by itself at start');
+    var coastSection = card('Coastline',
+      "The land the router steers around wherever no chart mesh covers. Needed; downloaded once by itself.",
+      h('div', { className: 'mb-2' }, coastStatus),
+      msg ? h('div', { className: 'text-danger small' }, msg) : null,
+      fold('Use my own coastline files instead',
+        row('Shapefiles', text(['landShapefiles'], 'blank = the downloaded coastline'),
+          'Absolute paths, comma-separated. A GSHHS level-1 path pulls in levels 2–4 beside it. Leave blank to keep the downloaded coastline.'),
+        row('', h('div', null,
+          h('button', { type: 'button', className: 'btn btn-outline-secondary btn-sm me-2', disabled: !!(coast && coast.downloading), onClick: download },
+            coast && coast.downloading ? 'Downloading…' : coast && coast.downloaded ? 'Download the coastline again (149 MB)' : 'Download the coastline (149 MB)'),
+          coast && coast.downloaded && configuredCoast
+            ? h('button', { type: 'button', className: 'btn btn-outline-primary btn-sm', onClick: function () { set(['landShapefiles'], ''); } }, 'Use the downloaded coastline')
+            : null))));
+
+    // Chart meshes ---------------------------------------------------------------
+    var ticked = get(['mesh', 'downloads'], []);
+    if (!Array.isArray(ticked)) ticked = [];
+    var disabled = get(['mesh', 'disabled'], []);
+    if (!Array.isArray(disabled)) disabled = [];
+    function toggleMesh(name, on) {
+      var next = ticked.filter(function (n) { return n !== name; });
+      if (on) next.push(name);
+      set(['mesh', 'downloads'], next);
+    }
+    function toggleEnabled(name, on) {
+      var next = disabled.filter(function (n) { return n !== name; });
+      if (!on) next.push(name);
+      set(['mesh', 'disabled'], next);
+    }
+    function meshStatus(r, on) {
+      if (r.state === 'downloading') {
+        var p = r.progress;
+        var pct = p && p.total ? Math.round(100 * p.files / p.total) : 0;
+        return h('span', null,
+          h('span', { style: { display: 'inline-block', width: 90, height: 6, background: '#d6dde1', borderRadius: 3, verticalAlign: 'middle', marginRight: 6, position: 'relative' } },
+            h('span', { style: { position: 'absolute', left: 0, top: 0, bottom: 0, width: pct + '%', background: '#1f5fa8', borderRadius: 3 } })),
+          h('small', null, p ? 'downloading, ' + p.files + ' of ' + p.total + ' files' : 'downloading…'));
+      }
+      if (r.state === 'ready') return statusDot('ok', 'ready');
+      if (r.state === 'update') return statusDot('warn', 'newer build published; updates at the next daily check or on Read the catalogue now');
+      if (r.state === 'error') return statusDot('bad', r.error || 'failed');
+      if (r.state === 'removing') return statusDot('warn', 'removing…');
+      return statusDot('off', on ? 'not on this server yet; downloads after Save' : 'not on this server');
+    }
+    // A catalogue row with a local folder of the same name: which copy the router opens, and why.
+    function usingNote(r) {
+      if (r.source !== 'catalog' || !r.local_dir) return null;
+      var localDate = r.local_build_date ? 'mesh ' + r.local_build_date.slice(0, 10) : 'no build date';
+      var text;
+      if (r.using === 'local') {
+        text = r.disk_build_date
+          ? 'Routing on your local copy (' + localDate + '): built later than the download.'
+          : 'Routing on your local copy (' + localDate + ') until a newer published copy is downloaded.';
+      } else if (r.using === 'download') {
+        text = 'Your local copy (' + localDate + ') is older: routing on the download.';
+      } else {
+        // using === null: the local folder cannot be opened and there is no download.
+        text = 'Your local copy (' + localDate + ') cannot be used' + (r.error ? ': ' + r.error : '') + '; nothing to route on for this mesh.';
+      }
+      return h('small', { className: 'text-muted d-block' }, text);
+    }
+    function chk(id, on, enabled, onChange) {
+      return h('input', { className: 'form-check-input', type: 'checkbox', id: id, checked: !!on, disabled: !enabled, onChange: function (e) { onChange(e.target.checked); } });
+    }
+    var meshRows = meshes && meshes.meshes ? meshes.meshes : [];
+    var meshTable = meshRows.length
+      ? h('div', { className: 'table-responsive' }, h('table', { className: 'table table-sm align-middle' },
+          h('thead', null, h('tr', null,
+            h('th', null, 'Mesh'), h('th', null, 'Covers'), h('th', null, 'Chart / mesh'), h('th', null, 'Size'), h('th', null, 'Status'),
+            h('th', { className: 'text-center' }, 'Download'), h('th', { className: 'text-center' }, 'Use'))),
+          h('tbody', null, meshRows.map(function (r) {
+            var local = r.source === 'local';
+            var on = local || ticked.indexOf(r.name) >= 0;
+            // Use applies to a downloaded copy and to a local folder of the same name alike.
+            var usable = on || !!r.local_dir;
+            var use = disabled.indexOf(r.name) < 0;
+            var parts = String(r.description || '').split(' · ');
+            var covers = local ? (parts[1] || '') : (parts[0] || '');
+            var dates = local ? (parts.slice(3).join(', ') || '—') : parts.filter(function (s) { return /^(chart|mesh) /.test(s); }).map(function (s) { return s.replace(/^(chart|mesh) /, ''); }).join(' / ');
+            return h('tr', { key: r.source + ':' + r.name },
+              h('td', null, h('strong', null, r.name), h('br'), h('small', { className: 'text-muted' }, local ? 'local folder' : r.title.replace(/^\S+ — /, ''))),
+              h('td', null, h('small', null, covers)),
+              h('td', null, h('small', null, dates || '—')),
+              h('td', null, h('small', null, r.bytes ? gb(r.bytes) : '—')),
+              h('td', null, meshStatus(r, on), usingNote(r)),
+              h('td', { className: 'text-center' }, local ? h('small', { className: 'text-muted' }, '—') : chk('wrp-mesh-dl-' + r.name, on, true, function (v) { toggleMesh(r.name, v); })),
+              h('td', { className: 'text-center' }, chk('wrp-mesh-use-' + r.name, usable && use, usable, function (v) { toggleEnabled(r.name, v); })));
+          }))))
+      : h('p', { className: 'small text-muted' }, meshes ? (meshes.catalog_error ? 'No meshes to show: the catalogue could not be read (' + meshes.catalog_error + ').' : 'The catalogue lists no meshes, and no local folder is set.') : 'Mesh list unavailable until the plugin answers.');
+    var catalogNote = meshes
+      ? (meshes.catalog_error ? 'Could not be read: ' + meshes.catalog_error : meshes.catalog_updated ? 'Last read: catalogue of ' + meshes.catalog_updated.slice(0, 16).replace('T', ' ') + 'Z, ' + meshRows.filter(function (r) { return r.source === 'catalog'; }).length + ' meshes' : '')
+      : '';
+    var meshSection = card('Chart meshes',
+      'Routing on charted water (depths, clearances, hazards) needs a navigation mesh of the area. Tick the US Coast Guard districts you sail in; each is downloaded and kept current.',
+      meshTable,
+      h('p', { className: 'small text-muted' },
+        h('b', null, 'Download'), ' copies a published mesh to this server and keeps it current; untick to delete the copy. ',
+        h('b', null, 'Use'), " lets the router route on it; untick to keep it on disk but route on the coastline there. A local folder has no Download: it's yours."),
+      fold('Where meshes come from',
+        row('Catalogue', text(['mesh', 'catalogUrl'], 'blank = the US-ENC catalogue on R2'),
+          'List of published meshes. ' + catalogNote),
+        h('div', { className: 'mb-3' },
+          h('button', { type: 'button', className: 'btn btn-outline-secondary btn-sm', disabled: catalogReading, onClick: refreshCatalog },
+            catalogReading ? 'Reading…' : 'Read the catalogue now'),
+          h('small', { className: 'form-text text-muted d-block' }, 'Reads the catalogue at the saved address, lists what it says, then downloads ticked meshes that are missing or have a newer build. Otherwise it is read at start and once a day.')),
+        row('Local mesh folder', text(['meshDir'], 'blank = none'),
+          'A folder holding one mesh (index.json and its tiles) or several mesh folders, managed by you and used beside the downloaded ones.')));
+
+    // Map tiles built ahead ------------------------------------------------------
     var d = DEFAULTS;
-    var cacheSection = h('div', { className: 'mb-4' },
-      h('h5', null, 'Map overlay cache'),
-      h('p', { className: 'text-muted small' },
-        'Map tiles (colour layers, wind barbs, current arrows, coastline, pressure) are saved on disk and shared by every client. Tiles around the boat, and around the area a map shows, are built ahead of time for every hour of the window: the full radius down to zoom 8, half of it at each deeper zoom.'),
-      check(['overlayCache', 'enabled'], d.enabled, 'Build tiles ahead of time'),
-      check(['overlayCache', 'followView'], d.followView, 'Also build around the area the map shows'),
-      field('Radius', 'Around the boat and the map view at zoom 8 and below.', unitNumber(['overlayCache', 'radius'], d.radius, units.distance, 1000, 2000000)),
-      field('Window', 'How far ahead tiles are built, from now. 0 = the whole forecast.', unitNumber(['overlayCache', 'window'], d.window, units.time, 0, 360 * 3600)),
-      field('Deepest zoom built ahead', '6–18.', number(['overlayCache', 'maxZoom'], d.maxZoom, { min: 6, max: 18 })),
-      field('Build workers', 'Threads building tiles ahead of time, 1–8.', number(['overlayCache', 'workers'], d.workers, { min: 1, max: 8 })),
-      field('Disk cap', 'Least recently used tiles are removed above this.',
-        h('div', { className: 'input-group' },
-          h(DraftNumber, { si: get(['overlayCache', 'diskCap'], d.diskCap), toDisplay: function (b) { return b / 1e9; }, fromDisplay: function (g) { return g * 1e9; },
-            precision: 1, step: 0.1, minSI: 100e6, maxSI: Number.MAX_SAFE_INTEGER, onChange: function (v) { set(['overlayCache', 'diskCap'], v); } }),
-          h('span', { className: 'input-group-text' }, 'GB'))));
+    var tiles = status && status.overlay_tiles ? status.overlay_tiles : null;
+    var windowSI = get(['overlayCache', 'window'], d.window);
+    var cacheSection = card('Map tiles built ahead',
+      "The web app's weather layers are drawn from tiles. Building them ahead of time makes the map instant; it costs disk and a little CPU in the background.",
+      row('Build ahead', check(['overlayCache', 'enabled'], d.enabled, 'On'),
+        'Off: tiles are built when first viewed (slower first view, no background work, nothing stored ahead).'),
+      row('Around the boat', unitNumber(['overlayCache', 'radius'], d.radius, units.distance, 1000, 2000000),
+        "Radius built around the vessel's position. Halved at each deeper zoom."),
+      row('How far ahead', unitNumber(['overlayCache', 'window'], d.window, units.time, 0, 360 * 3600),
+        (windowSI === 0 ? 'Currently: the whole forecast. ' : '') + 'Hours of forecast tiles kept ready; 0 = the whole forecast.'),
+      row('Where the map looks', check(['overlayCache', 'followView'], d.followView, 'Also build around the area a map shows'),
+        'A client panning away from the boat gets tiles built there too.'),
+      fold('Advanced',
+        row('Deepest zoom', number(['overlayCache', 'maxZoom'], d.maxZoom, { min: 6, max: 18 }), '6–18. Deeper = more detail near the boat, many more tiles.'),
+        row('Builders', number(['overlayCache', 'workers'], d.workers, { min: 1, max: 8 }), 'Processes building tiles, 1–8. They start when there is work and exit when done. More = faster, more memory while they run.'),
+        row('Disk cap',
+          h('div', { className: 'input-group', style: { maxWidth: 220 } },
+            h(DraftNumber, { si: get(['overlayCache', 'diskCap'], d.diskCap), toDisplay: function (b) { return b / 1e9; }, fromDisplay: function (g) { return g * 1e9; },
+              precision: 1, step: 0.1, minSI: 100e6, maxSI: Number.MAX_SAFE_INTEGER, onChange: function (v) { set(['overlayCache', 'diskCap'], v); } }),
+            h('span', { className: 'input-group-text' }, 'GB')),
+          'Oldest tiles are removed above this.' + (tiles ? ' Current use: ' + gb(tiles.bytes) + ' in ' + tiles.files + ' files.' : ''))));
 
-    var otherSection = h('div', { className: 'mb-4' },
-      h('h5', null, 'Polars, currents, forecast, Weather API'),
-      field('Default polar file (.csv or .pol)', 'Boat speeds in knots. Blank = the bundled Catalina 36 polar.', text(['polarFile'], 'blank = bundled Catalina 36')),
-      field('Polar library directory', "Polars offered in the web app's vessel picker. Blank = the ~700 polars bundled with the plugin (weather_routing_pi library, GPL-3.0); polars you generate are then kept in the plugin data directory.", text(['polarsDir'], 'blank = bundled library')),
-      field('Tidal harmonics directory (.npz)', 'FES2014 / NECOFS extracts; every *.npz in it is loaded.', text(['currents', 'harmonicDir'])),
-      field('ECMWF open-data mirror', null,
-        h('select', { className: 'form-select form-control', value: get(['forecast', 'mirror'], 'ecmwf'),
+    // Polars, currents, forecast source, Weather API -------------------------------
+    var polarSection = card('Polars',
+      "Boat speed tables for sailing. The web app's Vessel picker offers the library; a route can pick any of them.",
+      row('Default polar', text(['polarFile'], 'blank = the bundled Catalina 36'), 'A .csv or .pol file. Used when a route names no polar.'),
+      row('Library folder', text(['polarsDir'], 'blank = the ~700 bundled polars'),
+        'A folder of .pol / .csv files to offer instead of the bundled library (weather_routing_pi, GPL-3.0). Polars you generate are kept in the plugin data directory either way.'));
+    var currentsSection = card('Tidal currents',
+      'Ocean currents come from Copernicus and RTOFS by themselves (set up under Defaults → Currents in the web app). Tidal harmonics are optional local files and take precedence where they cover.',
+      row('Harmonics folder', text(['currents', 'harmonicDir'], 'blank = none'), 'FES2014 / NECOFS .npz extracts; every file in the folder is loaded.'));
+    var MIRROR_LABELS = { ecmwf: 'ECMWF (data.ecmwf.int)', aws: 'Amazon (AWS Open Data)', google: 'Google Cloud' };
+    var forecastSection = card('Forecast download',
+      "Where the ECMWF open-data forecast is fetched from. Same data on every mirror; pick the one that's fast from your connection.",
+      row('Mirror',
+        h('select', { className: 'form-select form-control', style: { maxWidth: 320 }, value: get(['forecast', 'mirror'], 'ecmwf'),
           onChange: function (e) { set(['forecast', 'mirror'], e.target.value); } },
-          MIRRORS.map(function (m) { return h('option', { key: m, value: m }, m); }))),
-      check(['weatherProvider', 'enabled'], true, 'Register as a Signal K Weather API provider'));
+          MIRRORS.map(function (m) { return h('option', { key: m, value: m }, MIRROR_LABELS[m] || m); })),
+        'Changes which server is contacted every six hours. Nothing else.'));
+    var weatherSection = card('Signal K Weather API',
+      'Other apps on this Signal K server (Freeboard, KIP, …) can ask it for weather at a point.',
+      row('Provide weather', check(['weatherProvider', 'enabled'], true, 'Register as a Weather API provider'),
+        "Off only if another plugin should be the server's weather provider."));
 
     // First setup: the plugin has no saved configuration yet, the Admin UI
     // hides its Enabled switch and enables the plugin on the first save
@@ -263,11 +444,16 @@ var signalk_weather_router_plus = (function () {
     // not wait for a field to change.
     var firstSetup = props.configuration == null;
     return h('div', { className: 'wrp-config' },
-      h('p', { className: 'text-muted' }, 'Vessel, forecast horizon, currents, routing and publishing are set in the web app (Weather Router Plus → Settings) and shared by every client.'),
-      coastSection, cacheSection, otherSection,
-      h('button', { type: 'button', className: 'btn btn-primary', disabled: !dirty && !firstSetup,
-        onClick: function () { props.save(cfg); setDirty(false); } },
-        firstSetup ? 'Save and enable the plugin' : 'Save (restarts the plugin)'));
+      h('div', { className: 'alert alert-secondary small' },
+        h('b', null, 'Two kinds of settings, two places. '),
+        'This page is the installation: files on this server, what it downloads, how it serves tiles. Everything about the boat and the routing — draft and height (Signal K vessel data), polar performance, forecast horizon, currents, routing engine, publishing — is in the web app under ',
+        h('b', null, 'Defaults'), ', shared by every client. Save here restarts the plugin.'),
+      coastSection, meshSection, cacheSection, polarSection, currentsSection, forecastSection, weatherSection,
+      h('div', { className: 'd-flex align-items-center gap-3' },
+        h('button', { type: 'button', className: 'btn btn-primary', disabled: !dirty && !firstSetup,
+          onClick: function () { props.save(cfg); setDirty(false); } },
+          firstSetup ? 'Save and enable the plugin' : 'Save (restarts the plugin)'),
+        dirty ? h('small', { className: 'text-muted' }, 'Unsaved changes') : null));
   }
 
   // The Admin UI's React, from the share scope it passes to init().

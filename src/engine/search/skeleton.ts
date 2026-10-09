@@ -1,5 +1,5 @@
 /**
- * The skeleton: the corridor from the global water grid, or a coarse A* on the route's land mask.
+ * The skeleton: the corridor from the global water grid or the chart mesh route, or a coarse A* on the route's land mask.
  *
  * Part of the isochrone search (docs/plans/structural-cleanup.md, phase
  * 2.1): the body of OceanPropagator.computeRoute, section by section, with
@@ -76,7 +76,11 @@ export function buildSkeleton(ctx: SearchContext): SkeletonData {
     widths = args.corridor.widthM && args.corridor.widthM.length === skeleton.length ? args.corridor.widthM : null;
     skeletonCum = cumulativeM(skeleton);
     const skLen = skeletonCum[skeletonCum.length - 1];
-    progress(0, ctx.K, `skeleton: corridor from the global water grid, ${skeleton.length} points, {distance:${skLen.toFixed(0)}}`);
+    progress(
+      0,
+      ctx.K,
+      `skeleton: corridor from ${args.corridor.source ?? 'the global water grid'}, ${skeleton.length} points, {distance:${skLen.toFixed(0)}}`
+    );
     if (skLen > ctx.budget.budgetDistM) resizeBudget(ctx, skLen);
   } else
     try {

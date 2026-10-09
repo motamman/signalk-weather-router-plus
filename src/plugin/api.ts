@@ -78,6 +78,10 @@ export interface ApiDeps {
   forecastWait?: () => { error: string; loading: unknown } | null;
   /** Start (or retry now) the GSHHG coastline download; progress in /api/status `coastline`. */
   downloadCoastline: () => void;
+  /** The managed chart meshes: catalogue rows and their state on disk (plugin/meshes.ts). */
+  meshes: () => unknown;
+  /** Read the mesh catalogue now and reconcile the store (the panel's button); resolves when the catalogue is read. */
+  refreshMeshes: () => Promise<void>;
   /** The page asked for this tile (the prebuilder follows the view). */
   noteTileRequest: (z: number, x: number, y: number) => void;
   publicDir: string;
@@ -256,6 +260,25 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       json(res, 200, await deps.forecastInfo(lat, lon));
     } catch (err) {
       fail(res, err);
+    }
+  });
+
+  ro.get('/api/meshes', (_req: Request, res: Response) => {
+    json(res, 200, deps.meshes());
+  });
+  // The config panel's "Read the catalogue now" button: the catalogue is read
+  // before the answer, so the body lists what it says. A read that failed
+  // (MeshManager keeps the previous catalogue and records the error) is a
+  // 502 whose body is still the list, with the error at the top.
+  rw.post('/api/meshes/refresh', async (_req: Request, res: Response) => {
+    try {
+      await deps.refreshMeshes();
+      const list = deps.meshes();
+      const readError = (list as { catalog_error?: string | null } | null)?.catalog_error ?? null;
+      if (readError) json(res, 502, { error: `catalogue not read: ${readError}`, ...(list as object) });
+      else json(res, 200, list);
+    } catch (err) {
+      fail(res, err, 500);
     }
   });
 
@@ -630,7 +653,11 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     withJob(req, res, (jobs, job) => {
       res.status(200);
       res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
+      // no-transform: Signal K's compression layer leaves the stream alone.
+      // Gzipped, the lines sat in its buffer and reached the browser only
+      // when the job ended (2026-10-08: the Log tab empty for every running
+      // job, the whole log arriving at once on done or failed).
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders?.();

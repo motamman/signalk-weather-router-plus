@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The routers explained: opened from the (i) beside the Router choice on the Route tab (index.html, rp-plan.js). -->
+<title>Standard vs Refined</title>
+<style>
+/* Layout: one reading column; each method gets a diagram beside its explanation, then one comparison chart. */
+:root {
+  --bg: #f6f7f4; --fg: #1d2420; --muted: #5d665f; --line: #c9d0c8; --panel: #ffffff;
+  --sea: #dfe9ee; --land: #d9d2bf; --iso: #1f5fa8; --exp: #b5451b; --wind: #4a7d5c; --ok: #2a7a4b;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191a; --fg: #e6e9e4; --muted: #a2aba3; --line: #38423b; --panel: #1d2325;
+  --sea: #1f2c33; --land: #3a3730; --iso: #6fa3e8; --exp: #ec8a5c; --wind: #7fbf96; --ok: #6cc08c; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #15191a; --fg: #e6e9e4; --muted: #a2aba3; --line: #38423b; --panel: #1d2325;
+  --sea: #1f2c33; --land: #3a3730; --iso: #6fa3e8; --exp: #ec8a5c; --wind: #7fbf96; --ok: #6cc08c; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.5; }
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 28px 48px; padding-inline: 16px; }
+h1 { font-size: 1.7rem; font-weight: 600; margin: 0 0 4px; text-wrap: balance; }
+h2 { font-size: 1.2rem; font-weight: 600; margin: 40px 0 10px; text-wrap: balance; }
+h2 .tag { display: inline-block; font: 500 0.7rem var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; margin-left: 8px; vertical-align: middle; color: var(--bg); }
+.tag.iso { background: var(--iso); } .tag.exp { background: var(--exp); }
+.lede, p { max-width: 68ch; }
+.lede { color: var(--muted); margin: 0 0 18px; }
+.row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+.row > * { min-width: 0; }
+.fig { flex: 1 1 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow-x: auto; }
+.fig svg { width: 100%; height: auto; display: block; }
+.steps { flex: 1 1 300px; margin: 0; padding-left: 1.2em; }
+.steps li { margin-bottom: 8px; }
+.steps b { font-weight: 600; }
+.cap { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+table { border-collapse: collapse; font-size: 0.85rem; width: 100%; max-width: 980px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; }
+td.n, th.n { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.8rem; color: var(--muted); margin: 8px 0; }
+.legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.legend .a::before { background: var(--iso); opacity: .45; } .legend .b::before { background: var(--iso); } .legend .c::before { background: var(--exp); opacity: .55; } .legend .d::before { background: var(--exp); }
+.note { font-size: 0.85rem; color: var(--muted); max-width: 68ch; }
+text { font-family: var(--sans); fill: var(--fg); font-size: 12px; }
+text.m { font-family: var(--mono); font-size: 11px; }
+text.mu { fill: var(--muted); }
+body { margin: 0; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<h1>Standard vs Refined</h1>
+<p class="lede">The two open-water routers on the Route tab, what each does with the wind and the polar, and what they measured on the same requests on a Raspberry Pi 5 (8 October 2026, one forecast run, fixed departures).</p>
+
+<h2>Standard <span class="tag iso">isochrone search</span></h2>
+<div class="row">
+  <div class="fig">
+    <svg viewBox="0 0 520 300" id="isoSvg" role="img" aria-label="Standard router: fans of headings from each parent, pruned into cross-track bins, stage by stage along a corridor">
+      <rect x="0" y="0" width="520" height="300" fill="var(--sea)"/>
+      <path d="M0,230 C60,200 90,260 160,240 S260,290 330,270 S440,300 520,280 L520,300 L0,300 Z" fill="var(--land)"/>
+      <!-- corridor skeleton -->
+      <path d="M50,150 C150,120 300,150 470,120" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4"/>
+      <text class="m mu" x="300" y="112">corridor (water grid A*)</text>
+      <g id="isoFan"></g>
+      <!-- stage fronts -->
+      <g stroke="var(--iso)" fill="none" stroke-width="1.2" opacity=".8">
+        <path d="M150,95 C160,120 160,170 150,200"/>
+        <path d="M250,85 C265,120 265,175 250,210"/>
+        <path d="M350,80 C370,120 370,180 350,215"/>
+      </g>
+      <text class="m" x="128" y="88" fill="var(--iso)">stage 1</text>
+      <text class="m" x="230" y="78" fill="var(--iso)">stage 2</text>
+      <text class="m" x="330" y="73" fill="var(--iso)">stage 3</text>
+      <!-- cross-track bins -->
+      <g stroke="var(--fg)" stroke-width=".6" opacity=".35">
+        <line x1="240" y1="90" x2="262" y2="92"/><line x1="241" y1="105" x2="263" y2="107"/><line x1="242" y1="120" x2="264" y2="122"/>
+        <line x1="243" y1="135" x2="265" y2="137"/><line x1="243" y1="150" x2="265" y2="152"/><line x1="243" y1="165" x2="265" y2="167"/>
+        <line x1="243" y1="180" x2="265" y2="182"/><line x1="242" y1="195" x2="264" y2="197"/>
+      </g>
+      <text class="m mu" x="272" y="200">one survivor per bin</text>
+      <!-- start / end -->
+      <circle cx="50" cy="150" r="5" fill="var(--ok)"/><text x="40" y="172">start</text>
+      <circle cx="470" cy="120" r="5" fill="var(--exp)"/><text x="455" y="142">end</text>
+      <!-- beat handling at the end -->
+      <path d="M350,140 L400,110 L440,135 L470,120" fill="none" stroke="var(--iso)" stroke-width="2"/>
+      <text class="m mu" x="372" y="160">final beat: two tacks tried</text>
+      <text class="m mu" x="372" y="173">at fixed margins</text>
+    </svg>
+    <div class="cap">From each surviving point, 61 headings one stage step ahead; the survivors are the best in each of 60 cross-track bins. Repeated for 20 stages. A dead-upwind final leg is tried as a two-tack beat at a few fixed angles.</div>
+  </div>
+  <ol class="steps">
+    <li><b>Corridor first.</b> An A* on the global water grid finds a land-free path; it steers the search and sets the land raster.</li>
+    <li><b>Fan of headings.</b> Each surviving point projects 61 headings (±30° about the corridor's bearing, 1° apart) one stage ahead; each leg is simulated with the real polar, wind and current, at 200 m steps.</li>
+    <li><b>Prune by position.</b> Candidates are sorted into cross-track bins; one survives per bin, the one with the best <i>elapsed + remaining ÷ cruise</i>. This is where time is lost: a slower branch heading into better wind can be dropped.</li>
+    <li><b>Beats by trial.</b> The polar has a no-go angle, so a leg straight into the wind has no speed; the search widens its sweep, and the final approach tries two-tack beats at fixed margins (3°, 8°, 15°, 25°, 40° off the no-go angle).</li>
+    <li><b>Tidy up.</b> Straight-line thinning and, optionally, a shortcut smoother that only deletes points.</li>
+  </ol>
+</div>
+
+<h2>Refined <span class="tag exp">the same search, worked over</span></h2>
+<div class="row">
+  <div class="fig">
+    <svg viewBox="0 0 520 330" role="img" aria-label="Refined router: convex hull of the polar, tacks laid forward in time, waypoints nudged sideways">
+      <!-- panel A: polar and hull -->
+      <text x="10" y="18" font-weight="600">1 · the polar and its convex hull</text>
+      <g transform="translate(90,120)">
+        <line x1="0" y1="-85" x2="0" y2="85" stroke="var(--line)"/><line x1="-85" y1="0" x2="85" y2="0" stroke="var(--line)"/>
+        <text class="m mu" x="-22" y="-90">wind</text>
+        <path d="M0,-6 L4,-14 L-4,-14 Z" fill="var(--wind)"/><path d="M0,-14 L0,-28" stroke="var(--wind)" stroke-width="2"/>
+        <!-- polar curve (symmetric, no-go sector up top) -->
+        <path id="polarL" d="M0,0 C-10,-28 -36,-48 -52,-44 C-72,-38 -82,-10 -78,10 C-74,34 -60,58 -34,66 C-22,70 -10,62 0,60" fill="none" stroke="var(--fg)" stroke-width="1.6"/>
+        <path d="M0,0 C10,-28 36,-48 52,-44 C72,-38 82,-10 78,10 C74,34 60,58 34,66 C22,70 10,62 0,60" fill="none" stroke="var(--fg)" stroke-width="1.6"/>
+        <!-- hull chord across the no-go -->
+        <line x1="-52" y1="-44" x2="52" y2="-44" stroke="var(--exp)" stroke-width="2.2"/>
+        <line x1="-34" y1="66" x2="34" y2="66" stroke="var(--exp)" stroke-width="2.2"/>
+        <circle cx="0" cy="-44" r="3.5" fill="var(--exp)"/>
+        <line x1="0" y1="0" x2="0" y2="-44" stroke="var(--exp)" stroke-dasharray="3 3"/>
+        <text class="m" x="4" y="-50" fill="var(--exp)">VMG</text>
+        <text class="m mu" x="-80" y="-62">no-go</text>
+      </g>
+      <text class="m mu" x="10" y="226">curve: the polar · chord: the hull.</text>
+      <text class="m mu" x="10" y="240">Into the wind the hull has speed (the VMG),</text>
+      <text class="m mu" x="10" y="254">so the search sails straight and tacks later.</text>
+      <!-- panel B: tacks laid forward -->
+      <text x="200" y="18" font-weight="600">2 · tacks laid forward in time</text>
+      <rect x="200" y="28" width="310" height="110" fill="var(--sea)"/>
+      <circle cx="215" cy="83" r="4" fill="var(--ok)"/><circle cx="495" cy="83" r="4" fill="var(--exp)"/>
+      <line x1="215" y1="83" x2="495" y2="83" stroke="var(--exp)" stroke-width="1" stroke-dasharray="4 4" opacity=".6"/>
+      <polyline points="215,83 260,55 305,110 350,52 395,112 440,58 495,83" fill="none" stroke="var(--exp)" stroke-width="2"/>
+      <g fill="var(--exp)"><circle cx="260" cy="55" r="3"/><circle cx="305" cy="110" r="3"/><circle cx="350" cy="52" r="3"/><circle cx="395" cy="112" r="3"/><circle cx="440" cy="58" r="3"/></g>
+      <!-- wind arrows that veer -->
+      <g stroke="var(--wind)" stroke-width="1.5" fill="var(--wind)">
+        <line x1="240" y1="40" x2="240" y2="30"/><path d="M240,42 L236,36 L244,36 Z"/>
+        <line x1="330" y1="40" x2="326" y2="31"/><path d="M331,42 L325,37 L333,34 Z"/>
+        <line x1="420" y1="40" x2="413" y2="33"/><path d="M421,42 L414,39 L420,33 Z"/>
+      </g>
+      <text class="m mu" x="206" y="130">dashed: the search's straight leg · solid: its tacks, ≤ 5 nm each,</text>
+      <text class="m mu" x="206" y="143">heading from the wind at each tack's start (it veers along the leg)</text>
+      <!-- panel C: cross-track polish -->
+      <text x="200" y="178" font-weight="600">3 · cross-track polish</text>
+      <rect x="200" y="188" width="310" height="110" fill="var(--sea)"/>
+      <polyline points="215,250 290,246 365,244 440,242 495,240" fill="none" stroke="var(--fg)" stroke-width="1.2" stroke-dasharray="4 3" opacity=".5"/>
+      <polyline points="215,250 290,222 365,214 440,220 495,240" fill="none" stroke="var(--exp)" stroke-width="2"/>
+      <g stroke="var(--exp)" stroke-width="1" fill="none"><path d="M290,246 L290,224"/><path d="M365,244 L365,216"/><path d="M440,242 L440,222"/></g>
+      <g fill="var(--exp)"><circle cx="290" cy="222" r="3"/><circle cx="365" cy="214" r="3"/><circle cx="440" cy="220" r="3"/></g>
+      <g fill="var(--wind)" opacity=".9"><text class="m" x="300" y="206" fill="var(--wind)">more wind up here</text></g>
+      <text class="m mu" x="206" y="314">each inner point tried ±2 km … ±250 m across the track; kept when the whole route then arrives earlier</text>
+    </svg>
+    <div class="cap">The Standard search runs underneath; these three steps change what it sees (the hull) and what happens to its answer (legs laid out, polish).</div>
+  </div>
+  <ol class="steps">
+    <li><b>Convex polar.</b> Per wind speed, the polar curve is replaced by its convex hull. Into the wind the hull has speed, the beat's VMG, so a leg straight upwind is a valid, fast leg and the search needs no beat tricks. The same across a dead run: the hull says "gybe".</li>
+    <li><b>Search on the hull.</b> The Standard search runs unchanged on that hull polar, corridor and bins included.</li>
+    <li><b>Legs laid forward in time.</b> Every sailed leg is walked in steps of at most 5 nm. At each step the wind there and then decides: if the course to the leg's end is a mix of two polar headings, a tack is placed (alternating sides, the last landing on the end); if the polar sails it directly, one straight step. So a wind that veers along a long leg is met where it veers. A tack that crosses land or that the real polar can't sail is tried the other way, then shorter; if nothing works the route fails and says so. No leg ever gets an invented time.</li>
+    <li><b>Cross-track polish.</b> Each inner waypoint is tried a little to either side; a move stays when the route, re-timed from there with the real polar, arrives earlier and both legs stay clear of land. Up to five passes.</li>
+  </ol>
+</div>
+
+<h2>Where they differ</h2>
+<table>
+  <tr><th style="width:26%"></th><th>Standard</th><th>Refined</th></tr>
+  <tr><td>Polar seen by the search</td><td>as written, with the no-go angle</td><td>its convex hull (no no-go angle; VMG straight upwind)</td></tr>
+  <tr><td>How a beat appears</td><td>found by the sweep widening, plus two-tack trials at fixed angles on the final leg</td><td>a straight leg in the search; real tacks laid out afterwards in the wind of the moment</td></tr>
+  <tr><td>Dead downwind</td><td>sailed straight at the polar's 180° speed</td><td>gybes where the hull says they pay</td></tr>
+  <tr><td>Waypoint positions</td><td>on the search's grid; the smoother can only delete points</td><td>nudged sideways where the arrival improves</td></tr>
+  <tr><td>What can go wrong</td><td>pruning drops a branch that would have won (measured below)</td><td>a leg the polar can't sail stops the route with a message, rather than a bad route</td></tr>
+  <tr><td>Cost on a 1,240 km passage</td><td class="n">17 s</td><td class="n">35 s</td></tr>
+</table>
+
+<h2>What was measured</h2>
+<p>Minutes saved against the Standard router with the Normal method, same forecast run and departure for all bars. <i>Moderate</i> is the wider search (stages 40, 100 cross-track bins, headings ±60°); <i>Maximum</i> is 150 bins at 0.5°.</p>
+<div class="legend"><span class="a">Standard router, Moderate method</span><span class="b">Standard router, Maximum method</span><span class="c">Refined router, Normal method</span><span class="d">Refined router, Moderate method</span></div>
+<div class="fig">
+  <svg viewBox="0 0 900 330" id="barSvg" role="img" aria-label="Bar chart of minutes saved per request and method"></svg>
+  <div class="cap">Newport → Great Salt Pond is a 5-hour beat; the offshore reach 128 km at 10 hours; Newport → Bermuda 1,240 km at 106 hours. Every route was checked leg by leg for impossible speeds before being counted.</div>
+</div>
+<table style="margin-top:14px">
+  <tr><th>Request</th><th class="n">Standard · Normal</th><th class="n">Standard · Moderate</th><th class="n">Standard · Maximum</th><th class="n">Refined · Normal</th><th class="n">Refined · Moderate</th></tr>
+  <tr><td>Newport → Great Salt Pond (beat)</td><td class="n">0d 05h 11m</td><td class="n">0d 04h 42m</td><td class="n">0d 04h 39m</td><td class="n">0d 04h 47m</td><td class="n">0d 04h 47m</td></tr>
+  <tr><td>Offshore reach</td><td class="n">0d 10h 08m</td><td class="n">0d 10h 06m</td><td class="n">0d 10h 05m</td><td class="n">0d 10h 04m</td><td class="n">0d 10h 04m</td></tr>
+  <tr><td>Newport → Bermuda</td><td class="n">4d 10h 34m</td><td class="n">4d 09h 13m</td><td class="n">4d 09h 00m</td><td class="n">4d 10h 07m</td><td class="n">4d 08h 59m</td></tr>
+  <tr><td>Bermuda wall time (Pi 5)</td><td class="n">17s</td><td class="n">2m 08s</td><td class="n">6m 03s</td><td class="n">35s</td><td class="n">3m 12s</td></tr>
+</table>
+<p class="note" style="margin-top:14px">Reading it: on the beat, the Moderate method alone finds more than the Refined router does, and the two don't add up. On the reach only the Refined router's polish moves the number, by a few minutes. On the passage they stack: Refined with Moderate equals Standard with Maximum in half the time. The Normal method's pruning is the larger loss on long passages; the Method choice is the direct remedy.</p>
+</div>
+
+<script>
+(function () {
+  // Standard router fan: three parents, 61 headings each (drawn every 3° for legibility), one stage ahead, aimed along the corridor.
+  var g = document.getElementById('isoFan');
+  var parents = [[50, 150, -12], [150, 140, -8], [250, 150, -6]];
+  var ns = 'http://www.w3.org/2000/svg';
+  parents.forEach(function (p) {
+    for (var a = -30; a <= 30; a += 3) {
+      var ang = (p[2] + a) * Math.PI / 180, len = 100;
+      var l = document.createElementNS(ns, 'line');
+      l.setAttribute('x1', p[0]); l.setAttribute('y1', p[1]);
+      l.setAttribute('x2', p[0] + len * Math.cos(ang)); l.setAttribute('y2', p[1] + len * Math.sin(ang));
+      l.setAttribute('stroke', 'var(--iso)'); l.setAttribute('stroke-width', '0.7'); l.setAttribute('opacity', '0.35');
+      g.appendChild(l);
+    }
+  });
+  // Bar chart: minutes saved vs the isochrone router at standard settings (measured, brain, 2026-10-08).
+  var data = [
+    { name: 'Great Salt Pond', vals: [29.2, 32.1, 23.8, 24.1] },
+    { name: 'Offshore reach', vals: [2.3, 2.5, 3.9, 3.5] },
+    { name: 'Newport → Bermuda', vals: [80.3, 93.8, 26.2, 95.0] }
+  ];
+  var styles = [['var(--iso)', .45], ['var(--iso)', 1], ['var(--exp)', .55], ['var(--exp)', 1]];
+  var svg = document.getElementById('barSvg');
+  var W = 900, H = 330, left = 60, right = 20, top = 20, bottom = 50;
+  var maxV = 100, plotH = H - top - bottom, plotW = W - left - right;
+  function y(v) { return top + plotH - v / maxV * plotH; }
+  function add(tag, attrs, text) {
+    var e = document.createElementNS(ns, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    svg.appendChild(e); return e;
+  }
+  [0, 20, 40, 60, 80, 100].forEach(function (v) {
+    add('line', { x1: left, x2: W - right, y1: y(v), y2: y(v), stroke: 'var(--line)', 'stroke-width': 1 });
+    add('text', { x: left - 8, y: y(v) + 4, 'text-anchor': 'end', 'class': 'm mu' }, v + ' min');
+  });
+  var groupW = plotW / data.length, barW = Math.min(44, groupW / 6);
+  data.forEach(function (d, gi) {
+    var x0 = left + gi * groupW + groupW / 2 - (barW * 4 + 18) / 2;
+    d.vals.forEach(function (v, i) {
+      var x = x0 + i * (barW + 6);
+      add('rect', { x: x, y: y(v), width: barW, height: y(0) - y(v), fill: styles[i][0], opacity: styles[i][1] });
+      add('text', { x: x + barW / 2, y: y(v) - 5, 'text-anchor': 'middle', 'class': 'm' }, v.toFixed(v < 10 ? 1 : 0));
+    });
+    add('text', { x: left + gi * groupW + groupW / 2, y: H - 22, 'text-anchor': 'middle' }, d.name);
+  });
+  add('line', { x1: left, x2: W - right, y1: y(0), y2: y(0), stroke: 'var(--fg)', 'stroke-width': 1 });
+})();
+</script>
+
+</body>
+</html>

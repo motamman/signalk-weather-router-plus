@@ -85,7 +85,8 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           summary: 'Plugin, forecast (decoded run on disk, memory held), currents, overlay land cache and queue status',
           description:
             'Top level: plugin, started, workers {data, route}, forecast, forecast_error, forecast_loading, currents, currents_route_worker, rtofs_run, overlay_land, overlay_tiles, overlay_prebuild, ' +
-            'weather_provider_registered, jobs, vessel, polar, land, harmonic_dir, extra_fields, tides, tides_enabled, tides_error, process_rss_bytes. ' +
+            'weather_provider_registered, jobs, vessel, polar, land, harmonic_dir, extra_fields, tides, tides_enabled, tides_error, process_rss_bytes, ' +
+            'meshes (the managed chart meshes, as GET /api/meshes), router (the open-water router the next route runs: "standard" | "refined"). ' +
             '`forecast` (null until a run is ready): {cycle, model, valid_from, valid_to, steps, params, coverage, storage: "decoded-on-disk", loaded_at, has_waves, ' +
             'source: "disk" (a complete decoded run was already on disk, no decode) | "grib" (decoded from the GRIB cache / download), ready_ms, fields_downloaded, ' +
             'decoded_dir, decoded_bytes (this run on disk), decoded_at, decode_ms, decoded_disk_bytes (all decoded runs kept), grib_cache_bytes, ' +
@@ -116,7 +117,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           responses: {
             200: {
               description:
-                '{values, schema: {groups[{id,label,help}], settings[{key, group, label, type, unit, quantity, min, max, multipleOf, default, nullable, enum, maxLength, help, reload}]}}',
+                '{values, schema: {groups[{id,label,help}], settings[{key, group, label, type, unit, quantity, min, max, multipleOf, step, default, nullable, enum, maxLength, help, reload}]}}',
               content: {
                 'application/json': {
                   schema: { type: 'object', properties: { values: settingsValuesSchema(), schema: { type: 'object' } } },
@@ -628,6 +629,30 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
             404: { description: 'Not found' },
             409: { description: 'Not finished' },
             502: { description: 'Resources API error' },
+            503: { description: 'Plugin not started' },
+          },
+        },
+      },
+      '/api/meshes': {
+        get: {
+          summary: 'The managed chart meshes: the catalogue rows and their state on this server',
+          description:
+            '{catalog_url, catalog_updated, catalog_error, store_dir, meshes: [{name, title, description, source: "catalog" | "local", ticked, enabled, state: ' +
+            '"absent" | "downloading" | "ready" | "update" | "error" | "removing", progress: {files, total} | null, catalog_build_date, disk_build_date, bytes, error, ' +
+            'using, local_dir, local_build_date}]}. The catalogue is read at start and once a day; POST /api/meshes/refresh reads it now.',
+          responses: { 200: { description: 'OK' }, 503: { description: 'Plugin not started' } },
+        },
+      },
+      '/api/meshes/refresh': {
+        post: {
+          summary:
+            'Read the mesh catalogue now (readwrite), then download ticked meshes that are missing or have a newer build and delete unticked ones',
+          description:
+            'Waits for the catalogue read only (the downloads run on). Answers the same body as GET /api/meshes: 200 when the catalogue was read, ' +
+            '502 {error: "catalogue not read: …", catalog_url, catalog_updated, catalog_error, store_dir, meshes} when it was not.',
+          responses: {
+            200: { description: 'The mesh list, as GET /api/meshes' },
+            502: { description: 'The catalogue could not be read; the list as it stands' },
             503: { description: 'Plugin not started' },
           },
         },

@@ -140,7 +140,6 @@ export async function refreshSmoc(st: WorkerState): Promise<void> {
   const steps = alignedSteps(run, now, now + settings.horizonS * 1000, settings.stepS / HOUR_S);
   const src = newRun ? new SmocCurrentSource(run, settings, st.smocClient, m => st.log('info', m)) : st.smoc!;
   if (!newRun) src.expire(now);
-  if (provisionalReplaced) st.smocClient.dropRun(run.key);
   if (newRun) st.smocClient.saveRun(run);
   const pos = st.vesselPos;
   let changed = newRun;
@@ -166,7 +165,9 @@ export async function refreshSmoc(st: WorkerState): Promise<void> {
   }
   if (newRun) {
     st.smoc = src;
-    const removed = st.smocClient.pruneRuns([run.key]);
+    // Also removes the provisional directory the settled run replaces: only
+    // now, so a failed load above leaves the still-serving run its chunks.
+    const removed = st.smocClient.pruneRuns([run]);
     if (removed.length) st.log('info', `smoc: removed superseded cached run(s) ${removed.join(', ')}`);
   }
   if (changed || newRun) {

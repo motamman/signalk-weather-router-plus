@@ -7,7 +7,7 @@
  * arithmetic is unchanged; the golden routes hold that.
  */
 
-import type { LandMask } from '../../geo/landmask';
+import type { LandTest } from '../../geo/landmask';
 import type { CurrentSource, WindSource } from '../environment';
 import type { ModePolicy, SimOptions } from '../legsim';
 import type { Route, StageFront } from '../route';
@@ -43,11 +43,13 @@ export interface Via {
   widthM?: number;
 }
 
-/** Precomputed corridor (engine/corridor.ts). */
+/** Precomputed corridor: from the global water grid (engine/corridor.ts) or a chart mesh route (engine/pipeline.ts). */
 export interface CorridorInput {
   skeleton: { lon: number; lat: number }[];
   /** Across-track water width per skeleton point, metres (Infinity = open water). */
   widthM?: ArrayLike<number>;
+  /** Where it came from, for the progress line (default: the global water grid). */
+  source?: string;
 }
 
 /** Bins across a narrow passage. */
@@ -69,6 +71,8 @@ export interface ComputeRouteArgs {
   current?: CurrentSource;
   modePolicy?: ModePolicy;
   sailThreshMs?: number;
+  /** Seconds lost per tack or gybe (default DEFAULT_TACK_PENALTY_S). */
+  tackPenaltyS?: number;
   simStepM?: number;
   /**
    * Stop as soon as a candidate is within this distance of the end (the
@@ -86,7 +90,7 @@ export interface ComputeRouteArgs {
    */
   snapToExact?: boolean;
   vias?: Via[];
-  /** Corridor from the global water grid; replaces the internal coarse A* skeleton. */
+  /** Corridor from the global water grid or the chart mesh route; replaces the internal coarse A* skeleton. */
   corridor?: CorridorInput;
   /** Wind speed (m/s) and significant wave height (m) a leg must not exceed; candidates over them are not allowed. */
   maxWindMs?: number;
@@ -124,7 +128,7 @@ export interface Candidate {
 
 /** The propagator's tuning, as OceanPropagator holds it. */
 export interface PropagatorParams {
-  readonly landMask: LandMask;
+  readonly landMask: LandTest;
   readonly K: number;
   readonly k: number;
   readonly m: number;

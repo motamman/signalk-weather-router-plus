@@ -1,5 +1,43 @@
 # What's new
 
+## Unreleased
+
+- **Charts to download.** The plugin configuration lists the navigation
+  meshes published for each Coast Guard district; tick the ones you sail
+  and the plugin downloads them and keeps them current.
+- **Routing on the charts.** With a chart mesh configured, routes inside
+  it follow charted depths, bridge clearances, rocks, wrecks, marks and
+  structures, using your boat's draft and height from Signal K's Vessel
+  Base Data. Under power the whole leg runs on the charts; under sail the
+  narrow bits are motored along the channel and the open water is sailed.
+  Set the sail threshold to 0 and nothing is motored: the narrow bits are
+  sailed along the channel too, and a stretch that cannot be sailed fails
+  the route and says so instead of quietly motoring it. The sailed
+  stretches respect the chart too: no leg crosses water shallower than
+  your draft, a bridge lower than your height, or a charted rock, and
+  every waypoint shows the charted depth under it.
+  A route that starts in a harbour and ends far outside the mesh is routed
+  on the charts out to open water and handed over there. Routes the mesh
+  cannot take fall back to the coastline routing you had before.
+- **A search method you can choose.** Route tab → *Method*: Normal
+  (seconds), Moderate (a better route, about 2 minutes on a long passage)
+  or Maximum (the best route, about 6 minutes). On the test boat Moderate
+  found a passage 80 minutes shorter and a harbour beat half an hour
+  shorter than Normal; a harbour hop takes seconds whichever you pick.
+- **Two routers to compare.** Route tab → *Router*: Standard, the
+  isochrone search, or Refined, which treats a beat as
+  a straight leg at its best VMG, lays the tacks out afterwards in the wind
+  of the moment, and nudges waypoints sideways where that arrives earlier.
+  On the test boat it was 24 minutes faster on a 5-hour harbour beat and
+  26 minutes faster on a 4½-day passage; the same on a reach. Pick either
+  per route; the log says which ran.
+- **Fewer tabs.** Route now has two sub-tabs: *Plan* (the request and its
+  result) and *Options* (what used to be the Setup tab). *Settings* is
+  *Defaults*: the server's starting values for every route. Forecast data
+  moved to the Log tab.
+- **Mixed legs count properly.** A leg that motors out of a harbour and
+  then sails now counts its motoring hours in the totals.
+
 ## 0.1.2-beta.1
 
 - **Less memory on a small computer.** On a Raspberry Pi, Signal K's

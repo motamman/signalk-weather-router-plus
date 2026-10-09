@@ -12,16 +12,16 @@ import { runLegPipeline, type LegPipelineInputs, type LegWind } from '../../engi
 import * as path from 'node:path';
 import { ForecastStore } from '../../data/forecast';
 import { loadForecastForBBox, resolveCycle } from '../../data/loader';
-import { openDecodedRun, type WindowOptions } from '../../data/decoded';
+import type { WindowOptions } from '../../data/decoded';
 import { REGIONAL_DIR } from '../../data/regionaldecode';
 import { LayeredWind, type RegionalWind } from '../../engine/layeredwind';
-import * as fs from 'node:fs';
 import { checkRouteForecastMemory } from '../memguard';
 import { type BBox, bboxFromLonLat, bboxHeight, bboxWidth, haversineDistanceM } from '../../geo/geodesy';
 import { LandMask } from '../../geo/landmask';
 import { releaseMemory } from '../../util/gc';
 import { NoCurrent } from '../../engine/environment';
 import { RouteCancelled } from '../../engine/propagator';
+import { RouteError } from '../../engine/errors';
 import { nearestExactWater, waterAround } from '../../engine/corridor';
 import { DEFAULT_ARRIVAL_RADIUS_M, DEFAULT_PRECISION, legLabel, type LegPlan, routeMultiLeg, type Stop } from '../../engine/multileg';
 import type { Route, StageFront, StopSnap } from '../../engine/route';
@@ -29,15 +29,150 @@ import { routeToGeoJSON, routeToSignalKRoute, skeletonToGeoJSON } from '../route
 import { PolarDiagram } from '../../vessel/polar';
 import { loadPolarCached, resolvePolarPath } from '../polars';
 
-import { routeVessel } from '../config';
+import { type ResolvedConfig, routeVessel, type SelfDesign } from '../config';
 import { type RouteRequest, type RouteSummary } from '../protocol';
 import { requireInit } from './state';
 import { extraParams, readWindow, releaseWindow } from './forecast';
 import { landMaskFor } from './landgrid';
 import { rebuildStack } from './currents';
-import { GLOBAL_DLON_DEG, isFinerThanGlobal } from './regional';
+import { GLOBAL_DLON_DEG } from './regional';
 import { avoidAt, type AvoidArea } from '../../geo/avoid';
 import type { WorkerState } from './state';
+import { MeshStore } from '../../engine/mesh/store';
+import { meshCovers } from '../../engine/mesh/route';
+import type { MeshLegArgs, MeshLegRunner } from '../../engine/mesh/leg';
+import { runChildTask } from '../childtask';
+import type { MeshLegTask } from '../meshlegtask';
+import { regionalRunsFor } from './regionalwind';
+import { smocSettings } from './currents';
+import { localMeshes, meshesToOpen, readyMeshDirs } from '../meshes';
+import { beamFor, DEFAULT_SEARCH } from '../../engine/search/presets';
+
+/**
+ * The chart meshes for this route, or undefined when there are none: the
+ * downloaded ones with a complete marker under the store directory
+ * (plugin/meshes.ts; a multi-cluster mesh is one store per cluster) and
+ * the folder configured by hand (where the two share a name, the newer
+ * copy: meshes.ts meshesToOpen). Only each mesh's index (one small JSON)
+ * is read here; a leg is covered when one mesh covers all its points, and
+ * that leg is planned whole in a child process holding that mesh
+ * (plugin/meshlegtask.ts), which exits with the leg, so its tile arrays
+ * never stay in this worker. The child reads the forecast, the currents
+ * and the regional runs from this worker's files; this worker has already
+ * fetched what needed the network (loadAreas) before the leg starts.
+ */
+function meshLegRunner(
+  st: WorkerState,
+  cfg: ResolvedConfig,
+  id: string,
+  request: RouteRequest,
+  progress: (m: string) => void,
+  /** The SMOC area and steps loadAreas loaded for the current leg; the mesh process asks for exactly these. */
+  smocLeg: () => { area: BBox; steps: number[] } | null
+): MeshLegRunner | undefined {
+  const stores: { name: string; dir: string; store: MeshStore }[] = [];
+  const open = (name: string, dir: string): void => {
+    try {
+      stores.push({ name, dir, store: MeshStore.open(dir) });
+    } catch (err) {
+      progress(`WARNING: chart mesh ${name} not used: ${(err as Error).message}`);
+    }
+  };
+  // Downloaded meshes first, then the folder managed by hand (one mesh, or a folder of them); the same
+  // Use switch applies to both, and where the two share a name only the newer copy is opened.
+  const downloaded = cfg.mesh.storeDir ? readyMeshDirs(cfg.mesh.storeDir) : [];
+  for (const m of meshesToOpen(downloaded, localMeshes(cfg.meshDir), cfg.mesh.disabled)) for (const d of m.dirs) open(m.name, d);
+  if (!stores.length) return undefined;
+  const meshFor = (points: [number, number][]): (typeof stores)[number] | undefined => stores.find(s => meshCovers(s.store, points));
+  const useForecast = !request.no_forecast && request.mode !== 'motor';
+  return {
+    covers: points => meshFor(points) !== undefined,
+    leg: async (a: MeshLegArgs) => {
+      // The child reads the forecast from the decoded run's files; without one it would plan the leg with no wind.
+      if (useForecast && !st.run) {
+        a.progress(
+          0,
+          0,
+          `WARNING: ${a.tag}chart mesh: no decoded forecast run yet for the mesh process to read; using the coastline search instead`
+        );
+        return null;
+      }
+      // The mesh holding both ends; a handover leg has one end outside every mesh, so then the one holding either.
+      const m = meshFor([a.legStart, a.plan.end]) ?? meshFor([a.legStart]) ?? meshFor([a.plan.end]);
+      if (!m) {
+        a.progress(0, 0, `WARNING: ${a.tag}chart mesh: no mesh covers the leg; using the coastline search instead`);
+        return null;
+      }
+      a.progress(0, 0, `${a.tag}chart mesh: ${m.name}`);
+      const bbox = bboxFromLonLat([a.legStart[0], a.plan.end[0]], [a.legStart[1], a.plan.end[1]], 0.5);
+      const task: MeshLegTask = {
+        task: 'mesh-leg',
+        dir: m.dir,
+        plan: a.plan,
+        legIndex: a.legIndex,
+        legStart: a.legStart,
+        legDepartureMs: a.legDeparture.getTime(),
+        tag: a.tag,
+        multi: a.multi,
+        rules: a.rules,
+        vessel: a.vessel,
+        polar: a.polar ? { twa: Array.from(a.polar.twa), tws: Array.from(a.polar.tws), speeds: Array.from(a.polar.speeds) } : null,
+        sim: a.sim,
+        router: a.router,
+        propagator: a.propagator,
+        stages: a.stages,
+        simplifyM: a.simplifyM,
+        smoother: a.smoother,
+        smootherTolerance: a.smootherTolerance,
+        drawbridges: a.drawbridges,
+        bridgeWaitS: a.bridgeWaitS,
+        forecast: useForecast ? { runDir: st.run!.dir, area: expandBBox(bbox, ROUTE_FORECAST_MARGIN_DEG), params: ROUTE_PARAMS } : null,
+        regional:
+          useForecast && request.wind_model !== 'ecmwf'
+            ? { root: path.join(st.cacheRoot, REGIONAL_DIR), globalDLon: st.run?.index.grid.dLon ?? GLOBAL_DLON_DEG }
+            : null,
+        currents: request.no_currents
+          ? null
+          : {
+              smoc:
+                st.smoc && cfg.currents.smocEnabled && smocLeg()
+                  ? { cacheDir: path.join(st.cacheRoot, 'smoc'), run: st.smoc.run, settings: smocSettings(cfg), ...smocLeg()! }
+                  : null,
+              rtofs:
+                st.rtofs && cfg.currents.rtofsEnabled
+                  ? {
+                      cacheDir: st.rtofsClient?.cacheDir ?? path.join(st.cacheRoot, 'rtofs'),
+                      region: cfg.currents.rtofsRegion,
+                      runMs: st.rtofs.runMs,
+                      horizonS: cfg.currents.rtofsHorizonS,
+                      stepS: cfg.currents.rtofsStepS,
+                    }
+                  : null,
+              harmonicDir: cfg.currents.harmonicDir,
+            },
+      };
+      // Cancel: the worker's flag, polled; aborting kills the child.
+      const ac = new AbortController();
+      const poll = setInterval(() => {
+        if (a.shouldCancel()) ac.abort();
+      }, 500);
+      try {
+        const r = await runChildTask(task, 15 * 60_000, ac.signal, e => {
+          if (e.event === 'progress') a.progress(e.stage, e.total, e.message);
+          else st.send({ type: 'frontier', id, leg: a.legIndex, ...compactFront(e.front) });
+        });
+        if (!r.ok) {
+          if (r.fatal) throw new RouteError(r.reason);
+          a.progress(0, 0, `WARNING: ${a.tag}chart mesh: ${r.reason}; using the coastline search instead`);
+          return null;
+        }
+        return r.route;
+      } finally {
+        clearInterval(poll);
+      }
+    },
+  };
+}
 
 /** The request as the API validated it; a job that slipped past (another caller) is refused the same way. */
 export function validateRequest(r: RouteRequest): void {
@@ -61,7 +196,13 @@ const ROUTE_PARAMS = ['10u', '10v', 'swh', 'mwp', 'mwd'];
  */
 const ROUTE_FORECAST_MARGIN_DEG = 5;
 
-export async function route(st: WorkerState, id: string, request: RouteRequest, avoidAreas: AvoidArea[] = []): Promise<void> {
+export async function route(
+  st: WorkerState,
+  id: string,
+  request: RouteRequest,
+  avoidAreas: AvoidArea[] = [],
+  self?: SelfDesign
+): Promise<void> {
   const { config: cfg, client: cl } = requireInit(st);
   Atomics.store(st.cancelFlag, 0, 0);
   const shouldCancel = (): boolean => Atomics.load(st.cancelFlag, 0) === 1;
@@ -77,7 +218,21 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
       { lon: end[0], lat: end[1] },
     ];
     const multi = stops.length > 2;
-    const stages = request.stages ?? cfg.routing.stages;
+    // Search accuracy: the preset's beam, or the routing settings; an explicit stages in the request still wins.
+    const search = request.search ?? DEFAULT_SEARCH;
+    const beam = beamFor(search, {
+      stages: cfg.routing.stages,
+      subsectors: cfg.routing.subsectors,
+      headings: cfg.routing.headings,
+      headingIncrementDeg: cfg.routing.headingIncrementDeg,
+    });
+    const stages = request.stages ?? beam.stages;
+    if (search !== 'normal')
+      progress(
+        0,
+        0,
+        `search: ${search} (stages ${stages}, ${beam.subsectors} cross-track bins, ${2 * beam.headings + 1} headings at {angle:${beam.headingIncrementDeg * (Math.PI / 180)}})`
+      );
     // Areas to avoid marked on Signal K notes: land to the search. A route
     // point inside one cannot be reached, so it is an error that names both.
     const avoid = request.avoid_areas === false ? [] : avoidAreas;
@@ -114,7 +269,8 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
     const snaps: StopSnap[] = [];
     {
       const SNAP_MAX_M = 1000;
-      const SNAP_CLEAR_M = 150;
+      // The land buffer, when larger, is the clearance a start or end needs (it could not leave otherwise).
+      const SNAP_CLEAR_M = Math.max(150, cfg.routing.landBufferM);
       const label = (i: number): string =>
         i === 0 ? 'the start point' : i === stops.length - 1 ? 'the destination' : `your point ${i + 1} of ${stops.length} (waypoint ${i})`;
       for (let i = 0; i < stops.length; i++) {
@@ -150,7 +306,7 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
       }
     }
 
-    const vessel = routeVessel(cfg, request.vessel);
+    const vessel = routeVessel(cfg, request.vessel, self);
     // Per-route polar: a library token from GET /api/polars, else the configured default.
     let routePolar: PolarDiagram | null = st.polar;
     let polarLabel: string | null = cfg.polarFile ? path.basename(cfg.polarFile) : null;
@@ -176,7 +332,7 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
         progress(
           0,
           0,
-          `polar: rows closer than {angle:${cfg.routing.noGoMinAngleDeg * (Math.PI / 180)}} to the wind ignored (tightest sailable angle, Settings)`
+          `polar: rows closer than {angle:${cfg.routing.noGoMinAngleDeg * (Math.PI / 180)}} to the wind ignored (tightest sailable angle, Defaults)`
         );
       }
     }
@@ -191,52 +347,19 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
     const regionalNames = new Map<string, string>();
     const loadRegional = async (area: BBox, what: string): Promise<RegionalWind[]> => {
       if (request.wind_model === 'ecmwf') return [];
-      const root = path.join(st.cacheRoot, REGIONAL_DIR);
-      let sources: string[];
-      try {
-        sources = fs.readdirSync(root).filter(n => !n.startsWith('.'));
-      } catch {
-        return [];
-      }
       const out: RegionalWind[] = [];
-      for (const name of sources) {
-        let cycles: string[];
-        try {
-          cycles = fs
-            .readdirSync(path.join(root, name))
-            .filter(n => /^\d{10}$/.test(n))
-            .sort()
-            .reverse();
-        } catch {
-          continue;
-        }
-        // The newest decoded run of the source.
-        const { run } = cycles.length ? openDecodedRun(path.join(root, name, cycles[0])) : { run: null };
-        if (!run) continue;
-        const g = run.index.grid;
-        // Only a grid finer than the global forecast's is layered over it (a decoded run from before this rule included).
-        if (!isFinerThanGlobal(g.dLon, st.run?.index.grid.dLon ?? GLOBAL_DLON_DEG)) continue;
+      for (const r of regionalRunsFor(
+        path.join(st.cacheRoot, REGIONAL_DIR),
+        area,
+        departureMs,
+        st.run?.index.grid.dLon ?? GLOBAL_DLON_DEG
+      )) {
+        const { name, run, grid: g, firstMs, lastMs } = r;
         const steps = run.index.steps;
-        const firstMs = steps[0].validMs;
-        const lastMs = steps[steps.length - 1].validMs;
-        if (lastMs < departureMs) continue; // over before the route starts
-        // Does the route area meet the regional grid? Latitudes, and for a
-        // grid that does not go all the way round the longitudes too: the
-        // area's west edge is taken to within 180° of the grid's west edge
-        // and its east edge compared the same way, so an area that starts
-        // west of the grid and reaches into it is found.
-        const gNorth = g.lat0 + (g.nLat - 1) * g.dLat;
-        if (area.north < g.lat0 || area.south > gNorth) continue;
-        if (!g.wrapLon) {
-          const gEast = g.lon0 + (g.nLon - 1) * g.dLon;
-          const aw = g.lon0 + (((area.west - g.lon0 + 540) % 360) - 180);
-          const ae = aw + bboxWidth(area);
-          if (ae < g.lon0 || aw > gEast) continue;
-        }
         const opts: WindowOptions = { bbox: area, params: ['10u', '10v'], marginCells: 1 };
         const need = run.windowBytes(opts);
         if (need <= 0) {
-          // The overlap check above passed but the grid has no cells in the area (an edge case): skip, never fail the route.
+          // The overlap check passed but the grid has no cells in the area (an edge case): skip, never fail the route.
           progress(0, 0, `regional wind ${name}: no grid cells in the ${what}, not used`);
           continue;
         }
@@ -265,6 +388,10 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
     };
 
     // Forecast area and SMOC area for a box, held until releaseAreas().
+    // The SMOC box and steps loaded for the leg: the mesh process reads the
+    // same from the disk cache, so both sides ask for one area and one step
+    // list and the chunks it wants are the ones written here.
+    let smocLeg: { area: BBox; steps: number[] } | null = null;
     const loadAreas = async (bbox: BBox, what: string): Promise<LegWind | null> => {
       if (useForecast) {
         // The route area of the forecast: the corridor box plus a margin, the
@@ -316,7 +443,9 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
           progress(0, 0, `currents: checking CMEMS SMOC coverage of the ${what}`);
           try {
             await src.ensure(bbox, steps, { reason: `job ${id} ${what}`, shouldCancel });
+            smocLeg = { area: bbox, steps };
           } catch (err) {
+            smocLeg = null;
             if (shouldCancel()) throw new RouteCancelled();
             progress(
               0,
@@ -342,6 +471,7 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
       }
       releaseRegional();
       wind = null;
+      smocLeg = null;
       if (st.smoc) st.smoc.trimOnDemand(0);
       rebuildStack(st);
       releaseMemory();
@@ -358,15 +488,33 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
       }
     };
     let legCounter = 0;
+    const router = request.router ?? cfg.routing.router;
+    if (router !== 'standard')
+      progress(0, 0, `router: ${router} (the search on the convexified polar, legs laid out afterwards, cross-track polish)`);
     const pipeline: LegPipelineInputs = {
       waterGrid: st.waterGrid,
+      router,
+      mesh: meshLegRunner(
+        st,
+        cfg,
+        id,
+        request,
+        m => progress(0, 0, m),
+        () => smocLeg
+      ),
+      avoidAreas: avoid.map(a => ({ lon: a.lon, lat: a.lat, radiusM: a.radiusM })),
+      meshBufferM: cfg.routing.navigableBufferM,
+      drawbridges: request.drawbridges ?? cfg.routing.drawbridges,
+      bridgeWaitS: cfg.routing.bridgeWaitS,
       allowCanals: cfg.routing.allowCanals,
-      landFor: b => landMaskFor(st, b, cfg.routing.landRasterMaxCells, cfg.landShapefiles).withAvoid(avoid),
+      landFor: b =>
+        landMaskFor(st, b, cfg.routing.landRasterMaxCells, cfg.landShapefiles).withBuffer(cfg.routing.landBufferM).withAvoid(avoid),
+      landBufferM: cfg.routing.landBufferM,
       stages,
       propagator: {
-        subsectors: cfg.routing.subsectors,
-        headings: cfg.routing.headings,
-        headingIncrementDeg: cfg.routing.headingIncrementDeg,
+        subsectors: beam.subsectors,
+        headings: beam.headings,
+        headingIncrementDeg: beam.headingIncrementDeg,
       },
       vessel,
       polar: routePolar,
@@ -377,8 +525,10 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
         maxWindMs: request.max_wind_ms ?? cfg.routing.maxWindMs ?? undefined,
         maxSwhM: request.max_swh_m ?? cfg.routing.maxSwhM ?? undefined,
         comfortWeight: request.comfort_weight ?? cfg.routing.comfortWeight,
+        tackPenaltyS: cfg.routing.tackPenaltyS,
       },
       simplifyM: request.simplify_m ?? cfg.routing.simplifyM,
+      // Both routers (the owner's decision, 2026-10-08): the smoother times every shortcut with the real polar, so two laid-out tacks become one straight leg only where that course is sailable within the tolerance.
       smoother: request.smoother ?? cfg.routing.smoother,
       smootherTolerance: request.smoother_tolerance ?? cfg.routing.smootherTolerance,
       loadAreas,
@@ -465,6 +615,13 @@ export async function route(st: WorkerState, id: string, request: RouteRequest, 
       summary.legs = stops.length - 1;
       summary.precision = request.precision ?? DEFAULT_PRECISION;
     }
+    if (result.meshLeg) summary.mesh = true;
+    if (result.drawbridges?.length) {
+      summary.drawbridges = result.drawbridges.map(b => ({ lat: b.lat, lon: b.lon, clear_m: b.clearM, leg_index: b.legIndex }));
+      summary.drawbridges_rule = request.drawbridges ?? cfg.routing.drawbridges;
+    }
+    summary.router = router;
+    summary.search = search;
     if (result.corridorFallback) {
       summary.corridor_fallback = true;
       st.log('info', 'WARNING: corridor search failed on at least one leg; the route ran on the coarse per-route skeleton');

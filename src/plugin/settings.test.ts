@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { KTS_TO_MS } from '../geo/geodesy';
-import { resolveConfig, routeVessel, type LegacyPluginConfig } from './config';
+import { resolveConfig, routeVessel, selfDesignValue, type LegacyPluginConfig } from './config';
 import {
   defaultSettings,
   mergeSettings,
@@ -148,6 +148,21 @@ test('reload kinds per changed key', () => {
   for (const s of SETTINGS_SPEC) {
     assert.ok(s.label && s.help, s.key);
     if (s.quantity && !['count'].includes(s.quantity)) assert.ok(s.unit, `${s.key} has a unit`);
+    // Every number is a slider on the Defaults tab: it needs min, max and a
+    // step inside the range, a whole multiple of multipleOf where set, and
+    // one that lands on each oneOf value from min.
+    if (s.type === 'number' || s.type === 'integer') {
+      assert.ok(s.min !== undefined && s.max !== undefined && s.step !== undefined, `${s.key} has min, max, step`);
+      assert.ok(s.step! > 0 && s.step! <= s.max! - s.min!, `${s.key} step ${s.step} fits ${s.min}–${s.max}`);
+      if (s.type === 'integer') assert.ok(Number.isInteger(s.step), `${s.key} integer step`);
+      if (s.multipleOf)
+        assert.ok(
+          Math.abs(s.step! / s.multipleOf - Math.round(s.step! / s.multipleOf)) < 1e-9,
+          `${s.key} step is a multiple of ${s.multipleOf}`
+        );
+      for (const v of s.oneOf ?? [])
+        assert.ok(Math.abs((v - s.min!) / s.step! - Math.round((v - s.min!) / s.step!)) < 1e-9, `${s.key} slider reaches ${v}`);
+    }
   }
   assert.equal(settingsSchema().groups.length, 6);
 });
@@ -393,4 +408,15 @@ test('settings: Tides group reloads tides only', () => {
     SETTINGS_SPEC.filter(s => s.group === 'tides').map(s => s.key),
     ['tides.enabled', 'tides.halfWidth', 'tides.horizon']
   );
+});
+
+test('selfDesignValue: Signal K self-data within the vessel bounds is used, anything else is unknown', () => {
+  assert.equal(selfDesignValue({ value: { maximum: 2.1 } }, 'maximum', [0.1, 30]), 2.1);
+  assert.equal(selfDesignValue({ value: 18 }, undefined, [0.5, 100]), 18);
+  assert.equal(selfDesignValue(18, undefined, [0.5, 100]), 18);
+  assert.equal(selfDesignValue({ value: { maximum: 0.05 } }, 'maximum', [0.1, 30]), null, 'below the bound');
+  assert.equal(selfDesignValue({ value: 1800 }, undefined, [0.5, 100]), null, 'an air height in the wrong unit');
+  assert.equal(selfDesignValue({ value: null }, undefined, [0.5, 100]), null);
+  assert.equal(selfDesignValue(undefined, 'maximum', [0.1, 30]), null);
+  assert.equal(selfDesignValue({ value: { maximum: 'deep' } }, 'maximum', [0.1, 30]), null);
 });

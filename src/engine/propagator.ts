@@ -54,7 +54,7 @@ import { runStages } from './search/stages';
 import { chooseTerminal } from './search/terminal';
 import { buildGuide } from './search/zones';
 import type { ComputeRouteArgs, PropagatorOptions } from './search/types';
-import type { LandMask } from '../geo/landmask';
+import type { LandTest } from '../geo/landmask';
 import type { Route } from './route';
 
 export {
@@ -81,7 +81,7 @@ export class OceanPropagator {
   readonly skeletonPaddingDeg: number;
 
   constructor(
-    readonly landMask: LandMask,
+    readonly landMask: LandTest,
     opts: PropagatorOptions = {}
   ) {
     this.K = Math.max(1, Math.floor(opts.stages ?? 20));

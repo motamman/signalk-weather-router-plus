@@ -4,7 +4,7 @@
 // result strip, itinerary, route library, waypoint and conditions popups,
 // Live mode with the Signal K vessel.
 
-import { _apiErrorText, _fmt, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, KT_MS, loadPluginStatus, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
+import { oneOpenAtATime, _apiErrorText, _fmt, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, KT_MS, loadPluginStatus, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { _overlayTimeIso, centreOnVesselOnce, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats } from './rp-layers.js';
 
@@ -1259,6 +1259,53 @@ function _savePlan() {
   try { localStorage.setItem('rp:plan', JSON.stringify(plan)); } catch (_) {}
 }
 
+// --- Search accuracy and router selects (Route tab): remembered per browser;
+// the router's first value is the plugin's routing.router setting (status).
+function _initRouteChoices() {
+  // Values an earlier panel saved under the old names.
+  const renamed = { search: { wide: 'moderate', finer: 'maximum' }, router: { experimental: 'refined' } };
+  for (const [id, key] of [['search', 'rp:search'], ['router', 'rp:router']]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    let saved = null;
+    try { saved = localStorage.getItem(key); } catch (_) {}
+    if (saved && renamed[id] && renamed[id][saved]) saved = renamed[id][saved];
+    if (saved && [...el.options].some(o => o.value === saved)) el.value = saved;
+    el.addEventListener('change', () => { try { localStorage.setItem(key, el.value); } catch (_) {} });
+  }
+}
+// Smoothing applies to both routers (the owner's decision, 2026-10-08): a
+// shortcut replaces laid-out tacks only where the straight course can be
+// sailed within the tolerance, which the smoother times with the real polar.
+function _syncSmoothing() {
+  const sm = document.getElementById('smootherSel');
+  if (sm) sm.disabled = false;
+}
+document.getElementById('router')?.addEventListener('change', _syncSmoothing);
+window.addEventListener('rp:status', e => {
+  const el = document.getElementById('router');
+  const st = e.detail;
+  let saved = null;
+  try { saved = localStorage.getItem('rp:router'); } catch (_) {}
+  if (el && !saved && st && st.router && [...el.options].some(o => o.value === st.router)) el.value = st.router;
+  _syncSmoothing();
+});
+
+// --- The routers explained: (i) beside the Router choice opens routers.html in a large popup ---
+(function () {
+  const overlay = document.getElementById('routerInfoOverlay');
+  const btn = document.getElementById('routerInfoBtn');
+  const close = document.getElementById('routerInfoClose');
+  const frame = document.getElementById('routerInfoFrame');
+  if (!overlay || !btn || !close || !frame) return;
+  const open = () => { if (!frame.getAttribute('src')) frame.setAttribute('src', 'routers.html'); overlay.style.display = 'flex'; };
+  const shut = () => { overlay.style.display = 'none'; };
+  btn.addEventListener('click', open);
+  close.addEventListener('click', shut);
+  overlay.addEventListener('click', e => { if (e.target === overlay) shut(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.style.display === 'flex') shut(); });
+})();
+
 // --- Reset ---
 document.getElementById('resetBtn').addEventListener('click', function() {
   _hideRecompute();
@@ -1352,6 +1399,8 @@ function _restorePlan() {
   updateButton();
 }
 _restorePlan();
+_initRouteChoices();
+_syncSmoothing();
 document.getElementById('departure').addEventListener('change', _savePlan);
 
 // --- Tabs ---
@@ -1361,7 +1410,9 @@ const modalLog = document.getElementById('modalLog');
 const modalItinerary = document.getElementById('modalItinerary');
 const modalStatus = document.getElementById('modalStatus');
 const cancelBtn = document.getElementById('cancelRoute');
-const TAB_IDS = ['routeSection', 'settingsSection', 'layersSection', 'savedSection', 'logSection', 'itinerarySection', 'srvSettingsSection'];
+// Which Route sub-tab is showing (set by the sub-tab code below; read by showTab to redraw the polar on Options).
+let _routeGroup = 'plan';
+const TAB_IDS = ['routeSection', 'layersSection', 'savedSection', 'logSection', 'itinerarySection', 'srvSettingsSection'];
 function showTab(id) {
   if (!TAB_IDS.includes(id)) return;
   for (const t of TAB_IDS) {
@@ -1374,7 +1425,7 @@ function showTab(id) {
     b.setAttribute('aria-selected', String(on));
   });
   try { localStorage.setItem('rp:tab', id); } catch (_) {}
-  if (id === 'settingsSection') drawPolarDiagram();
+  if (id === 'routeSection' && _routeGroup === 'options') drawPolarDiagram();
   window.dispatchEvent(new CustomEvent('rp:tab', { detail: id }));
 }
 document.querySelectorAll('#tabBar button').forEach(b => {
@@ -1384,6 +1435,29 @@ document.querySelectorAll('#tabBar button').forEach(b => {
   let saved = null;
   try { saved = localStorage.getItem('rp:tab'); } catch (_) {}
   showTab(TAB_IDS.includes(saved) ? saved : 'routeSection');
+})();
+
+// Route sub-tabs: Plan (the request and its result) or Options (this
+// browser's choices for every route it asks for). Remembered per browser.
+(function () {
+  const row = document.getElementById('routeSubTabs');
+  if (!row) return;
+  const groups = Array.from(document.querySelectorAll('#routeSection .route-group'));
+  function show(id) {
+    _routeGroup = id;
+    groups.forEach(g => g.classList.toggle('active', g.dataset.group === id));
+    row.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.group === id));
+    try { localStorage.setItem('rp:routeTab', id); } catch (_) {}
+    if (id === 'options') drawPolarDiagram();
+  }
+  // The polar diagram draws into a canvas that has no size while Vessel is closed: draw when it opens.
+  document.getElementById('vesselSection')?.addEventListener('toggle', e => { if (e.target.open) drawPolarDiagram(); });
+  // One Options section open at a time.
+  oneOpenAtATime(document.querySelector('#routeSection .route-group[data-group="options"]'));
+  row.querySelectorAll('button').forEach(b => b.addEventListener('click', () => show(b.dataset.group)));
+  let saved = null;
+  try { saved = localStorage.getItem('rp:routeTab'); } catch (_) {}
+  show(groups.some(g => g.dataset.group === saved) ? saved : 'plan');
 })();
 
 // Layers sub-tabs: one group of toggles visible at a time.
@@ -1890,8 +1964,8 @@ function _legCardHtml(f, i, cw) {
   // index weighted for that angle (the encounter index), by band.
   const seasStr = _seasHtml(p.next_seas_sector, p.next_seas_side, p.next_encounter_index);
 
-  // Depth: the plugin has no bathymetry, so `depth_m` is null and the
-  // card shows "—".
+  // Depth: the charted depth under the waypoint from the chart mesh on
+  // mesh legs (`depth_m`); null elsewhere, and the card shows "—".
   const depth = depthM != null ? fmtDepth(depthM) : '—';
 
   // Distance + time of the leg DEPARTING this waypoint
@@ -2002,6 +2076,10 @@ function _focusOnWaypoint(f) {
 // Build the POST body for /api/routes. Accepts an `overrides` object so
 // Live-mode re-plans can supply {start, waypoints, departure} without
 // touching the other configurables, which still come from the DOM.
+// Set by the "Re-plan avoiding drawbridges" button for the next request only
+// (the owner's decision, 2026-10-08: the standing choice lives on the
+// Defaults tab and a re-plan must not change it).
+let _nextDrawbridges = null;
 function buildRoutePayload(overrides) {
   overrides = overrides || {};
   const sailThreshMs = parseFloat(document.getElementById('sailThresh').value);
@@ -2017,17 +2095,26 @@ function buildRoutePayload(overrides) {
     mode: document.getElementById('mode').value,
     sail_thresh_ms: sailThreshMs,
   };
+  const routerSel = document.getElementById('router');
+  if (routerSel && routerSel.value) body.router = routerSel.value;
+  const searchSel = document.getElementById('search');
+  if (searchSel && searchSel.value && searchSel.value !== 'normal') body.search = searchSel.value;
   const maxWindMs = _limitSI('maxWind'), maxSwhM = _limitSI('maxSwh');
   if (maxWindMs !== null) body.max_wind_ms = maxWindMs;
   if (maxSwhM !== null) body.max_swh_m = maxSwhM;
   if (overrides.departure !== undefined) body.departure = overrides.departure;
   else if (fromClockInput(depVal)) body.departure = fromClockInput(depVal).toISOString();
-  const stages = parseInt(document.getElementById('stages').value, 10);
-  if (stages > 0) body.stages = Math.max(4, Math.min(200, stages));
   const name = (document.getElementById('routeName').value || '').trim();
   if (name) body.name = name;
   const pub = document.getElementById('publishSel').value;
   if (pub === 'true') body.publish = true; else if (pub === 'false') body.publish = false;
+  const sm = document.getElementById('smootherSel');
+  // Drawbridges: the Defaults setting (routing.drawbridges) rules; the only
+  // request-level choice is the one-shot "re-plan avoiding them" below.
+  // Sent, not cleared, here: the request's success handler clears it, so a
+  // request that fails to start keeps it for the next attempt.
+  if (_nextDrawbridges) body.drawbridges = _nextDrawbridges;
+  if (sm && sm.value === 'true') body.smoother = true; else if (sm && sm.value === 'false') body.smoother = false;
   if (document.getElementById('noCurrents').checked) body.no_currents = true;
   const rw = document.getElementById('regionalWind');
   if (rw && !rw.checked) body.wind_model = 'ecmwf';
@@ -2210,7 +2297,29 @@ function _jobOnDone(job, d) {
   const { id, statusEl } = job;
   const elapsed = ((Date.now() - job.t0) / 1000).toFixed(1);
   appendLog('Route complete! (' + elapsed + 's)', 'done');
-  if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : ''));
+  if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : '') + (d.summary.mesh ? ', on the chart mesh' : '') + (d.summary.router ? ', router ' + d.summary.router : '') + (d.summary.search && d.summary.search !== 'normal' ? ', search ' + d.summary.search : ''));
+  // Opening bridges the route passes under: say so; under Ask, offer the re-plan avoiding them.
+  if (d && d.summary && d.summary.drawbridges && d.summary.drawbridges.length) {
+    const list = d.summary.drawbridges.map(b => b.lat.toFixed(4) + ', ' + b.lon.toFixed(4) + (b.clear_m == null ? ' (open clearance not charted)' : ' (open clearance ' + fmtDepth(b.clear_m) + ')')).join('; ');
+    appendLog('drawbridges: the route passes under ' + d.summary.drawbridges.length + ' opening bridge(s): ' + list, 'warn');
+    const hint = document.getElementById('planHint');
+    if (hint && d.summary.drawbridges_rule === 'ask') {
+      hint.innerHTML = '';
+      const p = document.createElement('div');
+      p.textContent = 'This route passes under ' + d.summary.drawbridges.length + ' drawbridge(s): ' + list + '. Keep it, or re-plan avoiding them?';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = 'Re-plan avoiding drawbridges';
+      btn.style.marginTop = '6px';
+      btn.addEventListener('click', () => {
+        _nextDrawbridges = 'avoid';
+        hint.innerHTML = '';
+        document.getElementById('findRoute').click();
+      });
+      hint.appendChild(p);
+      hint.appendChild(btn);
+    }
+  }
   modalStatus.textContent = 'Done in ' + elapsed + 's';
   statusEl.textContent = '';
   RouteProgress.done(elapsed);
@@ -2295,6 +2404,7 @@ document.getElementById('findRoute').addEventListener('click', function() {
   }, null)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(job => {
+      if (body.drawbridges) _nextDrawbridges = null;
       _currentRouteName = body.name || '';
       attachToJob(job.id, { request: body });
       loadRouteHistory();
@@ -3315,13 +3425,30 @@ popup.on('change:position', () => {
   showSimFactor();
 
   // LIVE / SIMULATE: the map stays centred on the boat (the real one in
-  // LIVE, the simulated one in SIMULATE) until the user drags it; the
-  // "Centre the map on the boat" button, or starting LIVE / SIMULATE again,
-  // follows it again. Zooming keeps following.
-  let following = true;
-  map.on('pointerdrag', () => { if (liveMode) following = false; });
+  // LIVE, the simulated one in SIMULATE) while "Follow the boat" is ticked.
+  // A real drag of the map (further than FOLLOW_DRAG_PX from where the
+  // pointer went down, so a tap that wobbles does not count) unticks it;
+  // ticking it, the "Centre the map on the boat" button, or starting LIVE /
+  // SIMULATE, follows again. Zooming keeps following.
+  const followBox = document.getElementById('followBoat');
+  const FOLLOW_DRAG_PX = 10;   // the same movement the long press treats as a pan (CANCEL_PX)
+  let followDragStart = null;  // pixel of the last pointerdown on the map
+  map.getViewport().addEventListener('pointerdown', e => {
+    const rect = map.getViewport().getBoundingClientRect();
+    followDragStart = [e.clientX - rect.left, e.clientY - rect.top];
+  });
+  map.on('pointerdrag', e => {
+    if (!liveMode || !followDragStart || !e.pixel) return;
+    const dx = e.pixel[0] - followDragStart[0], dy = e.pixel[1] - followDragStart[1];
+    if (dx * dx + dy * dy > FOLLOW_DRAG_PX * FOLLOW_DRAG_PX) setFollowing(false);
+  });
+  function setFollowing(on) {
+    if (followBox) followBox.checked = on;
+    if (on && liveMode && lastSnap && lastSnap.lat != null && lastSnap.lon != null) centreOnBoat([lastSnap.lon, lastSnap.lat]);
+  }
+  if (followBox) followBox.addEventListener('change', () => setFollowing(followBox.checked));
   function centreOnBoat(lonLat) {
-    if (following) map.getView().setCenter(ol.proj.fromLonLat(lonLat));
+    if (!followBox || followBox.checked) map.getView().setCenter(ol.proj.fromLonLat(lonLat));
   }
 
   // LIVE works from the boat's own position: it is available only when the
@@ -3380,7 +3507,7 @@ popup.on('change:position', () => {
     liveMode = true;
     simMode = simulate;
     simRunning = false;   // SIMULATE waits for Start
-    following = true;
+    setFollowing(true);
     resetPassage();
     if (simulate) {
       simTrack = createTrackRecorder(TRACK_EPSILON_M);
@@ -3620,6 +3747,7 @@ popup.on('change:position', () => {
     }, null)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(job => {
+      if (payload.drawbridges) _nextDrawbridges = null;
       jobId = job.id;
       replanJobId = job.id;
       // Cancelled before the job existed: stop it now.
@@ -3885,7 +4013,7 @@ popup.on('change:position', () => {
         .then(snap => {
           if (snap.lat == null || snap.lon == null) throw new Error('no position');
           renderMarker(snap);
-          following = true;   // LIVE / SIMULATE: follow the boat again
+          setFollowing(true);   // LIVE / SIMULATE: follow the boat again
           map.getView().animate({ center: ol.proj.fromLonLat([snap.lon, snap.lat]), duration: 400 });
           btn.title = 'Centre the map on the boat (Signal K position)';
         })

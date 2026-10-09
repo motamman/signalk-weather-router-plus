@@ -413,7 +413,7 @@ export class SmocCurrentSource implements CurrentSourceLike {
       shared_resident: !!r && r.u.buffer instanceof SharedArrayBuffer,
       last_download: this.set.lastDownload,
       downloaded_bytes_total: this.client?.totals.downloadedBytes ?? 0,
-      disk_cache_bytes: this.client ? this.client.cachedBytes(this.run.key) : null,
+      disk_cache_bytes: this.client ? this.client.cachedBytes(this.run) : null,
       layouts: (['time', 'geo', 'ds4'] as SmocLayout[]).filter(l => this.run.levels[l]),
     };
   }

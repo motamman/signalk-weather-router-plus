@@ -11,7 +11,7 @@ import { haversineBearing, haversineDistanceM, projectAlongBearing } from '../..
 import { norm360, twaFromHeading } from '../../geo/angles';
 import { DEG, NM_M } from '../../geo/units';
 import type { CurrentSource, WindSource } from '../environment';
-import { simulateLegTime, type LegSimResult, type ModePolicy, type SimOptions } from '../legsim';
+import { simulateLegTime, type LegSimResult, type ModePolicy, type SimOptions, DEFAULT_TACK_PENALTY_S } from '../legsim';
 import type { PolarDiagram } from '../../vessel/polar';
 import type { VesselParams } from '../../vessel/vessel';
 import { forecastNote, tryNote } from './context';
@@ -55,6 +55,9 @@ function hopCandidate(from: Candidate, lon: number, lat: number, sim: LegSimResu
  * whichever order is faster and clear of land. Null when the straight hop
  * can be sailed (or motored, in motor mode), or no beat is possible.
  */
+/** A final leg shorter than this is no leg: the candidate is at the destination. */
+export const MIN_FINAL_LEG_M = 1;
+
 export function beatToWindward(
   ctx: SearchContext,
   from: Candidate,
@@ -71,7 +74,7 @@ export function beatToWindward(
   const [ws, wd] = wind.at(from.lon, from.lat, new Date(from.timeMs));
   if (!Number.isFinite(ws) || ws <= 0 || !Number.isFinite(wd)) return null;
   const D = haversineDistanceM(from.lon, from.lat, gLon, gLat);
-  if (D <= 0) return null;
+  if (D < MIN_FINAL_LEG_M) return null;
   const theta = haversineBearing(from.lon, from.lat, gLon, gLat);
   const twa = twaFromHeading(theta, wd);
   const floor = polar.noGoFloor(ws);
@@ -109,6 +112,12 @@ export function beatToWindward(
       const s1 = simulateLegTime(from.lon, from.lat, new Date(from.timeMs), tLon, tLat, vessel, polar, wind, current, simOpts);
       if (!Number.isFinite(s1.seconds) || s1.seconds <= 0) continue;
       const tack = hopCandidate(from, tLon, tLat, s1);
+      // The beat's one tack costs the penalty, in time and in cost.
+      const tackS = simOpts.tackPenaltyS ?? DEFAULT_TACK_PENALTY_S;
+      tack.timeMs += tackS * 1000;
+      tack.elapsedS += tackS;
+      tack.costS += tackS;
+      tack.sailingS += tackS; // time spent sailing: the totals must add up
       const s2 = simulateLegTime(tLon, tLat, new Date(tack.timeMs), gLon, gLat, vessel, polar, wind, current, simOpts);
       if (!Number.isFinite(s2.seconds) || s2.seconds <= 0) continue;
       // Time plus comfort cost: with a comfort weight the beat avoids the rougher tack.

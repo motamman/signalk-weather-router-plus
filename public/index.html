@@ -143,6 +143,8 @@
   .subtab-row button.active { background: var(--go); border-color: var(--go); color: #fff; }
   .layer-group { display: none; }
   .layer-group.active { display: block; }
+  .route-group { display: none; }
+  .route-group.active { display: block; }
   /* Legend box: one row per active water/weather overlay. */
   #legendBox {
     position: absolute; left: 10px; bottom: 28px; z-index: 90;
@@ -372,6 +374,13 @@
   #srvSettingsForm .st-row label .st-unit { color: var(--text-muted); font-size: var(--f-xs); }
   #srvSettingsForm .st-row.st-bool label { justify-content: flex-start; align-items: center; cursor: pointer; }
   #srvSettingsForm .st-row.st-dirty input, #srvSettingsForm .st-row.st-dirty select { border-color: var(--go); }
+  #srvSettingsForm .st-row.st-dirty .st-val { color: var(--go); font-weight: 600; }
+  #srvSettingsForm .st-row.st-range input[type="range"] { width: 100%; margin: 2px 0 var(--s-1); }
+  #srvSettingsForm .st-row.st-range input[type="range"]:disabled { opacity: 0.4; }
+  #srvSettingsForm .st-row .st-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-2); }
+  #srvSettingsForm .st-row .st-head label { flex: 1; }
+  #srvSettingsForm .st-row label.st-none { flex: 0 0 auto; font-size: var(--f-xs); color: var(--text-muted); white-space: nowrap; cursor: pointer; }
+  #srvSettingsForm .st-row .st-none input { width: auto; margin: 0 4px 0 0; vertical-align: middle; }
   #srvSettingsForm .st-row.st-invalid input, #srvSettingsForm .st-row.st-invalid select { border-color: var(--danger); }
   #srvSettingsForm .st-err { color: var(--danger); font-size: var(--f-xs); margin: 0 0 var(--s-1); }
   #srvSettingsForm .st-err:empty { display: none; }
@@ -566,7 +575,7 @@
     padding: 0 6px; background: transparent; color: #c88; border: 1px solid #644;
     border-radius: 3px; cursor: pointer; font-size: 14px; line-height: 1;
   }
-  /* Polar diagram (Setup → Vessel) */
+  /* Polar diagram (Route → Options → Vessel) */
   .ol-zoom .rp-locate.rp-locate-none { color: #c62828; }
   #polarDiagram { display: block; width: 100%; height: auto; margin-top: var(--s-1); border: 1px solid var(--border); border-radius: var(--r-sm); background: #fff; }
   #polarInfo { font-size: var(--f-xs); color: var(--text-2); margin-top: 2px; min-height: 14px; }
@@ -602,12 +611,11 @@
 
   <div id="tabBar" role="tablist">
     <button type="button" data-tab="routeSection" role="tab">Route</button>
-    <button type="button" data-tab="settingsSection" role="tab">Setup</button>
     <button type="button" data-tab="layersSection" role="tab">Layers</button>
     <button type="button" data-tab="savedSection" role="tab">Saved</button>
     <button type="button" data-tab="logSection" role="tab">Log</button>
     <button type="button" data-tab="itinerarySection" role="tab">Itinerary</button>
-    <button type="button" data-tab="srvSettingsSection" role="tab">Settings</button>
+    <button type="button" data-tab="srvSettingsSection" role="tab">Defaults</button>
   </div>
   </div><!-- /panelHead -->
   <div id="tabBody">
@@ -617,6 +625,9 @@
        rest of the panel is not pushed down by it. -->
   <section class="tab-pane" id="routeSection">
   <div class="section-body">
+  <!-- Two sub-tabs: Plan (the request and its result) and Options (this browser's choices for every route it asks for). -->
+  <div class="subtab-row" id="routeSubTabs"><button type="button" data-group="plan">Plan</button><button type="button" data-group="options">Options</button></div>
+  <div class="route-group" data-group="plan">
   <!-- Plan strip: start, end, vias, departure, Find Route. -->
   <div id="planStrip">
 
@@ -635,7 +646,9 @@
     <div style="font-weight:600;color:var(--live);margin-bottom:2px;">Live vessel</div>
     <div id="liveReadoutBody" style="font-family:ui-monospace,Menlo,monospace;color:var(--text);">connecting…</div>
     <div id="liveReadoutStale" style="color:var(--danger);font-size:10px;margin-top:2px;display:none;">⚠ data stale</div>
-    <label style="margin-top:var(--s-2);" title="Perpendicular distance from the planned route that counts as off course; a re-plan follows when the boat stays further off for the off-course sustain time (Setup tab).">Off-course threshold: <span id="xteThresholdMLabel">500</span> <span class="unitOf" data-for="xteThresholdMLabel"></span></label>
+    <!-- Follow the boat: the map keeps the boat centred (the owner's request, 2026-10-09). A real drag of the map unticks it; ticking it, or the centre-on-boat button, follows again. -->
+    <label style="display:flex;align-items:center;gap:4px;margin-top:var(--s-1);cursor:pointer;" title="Keep the map centred on the boat. Dragging the map stops following; tick again, or press the centre-on-boat button, to follow again."><input type="checkbox" id="followBoat" checked style="width:auto;margin:0;">Follow the boat</label>
+    <label style="margin-top:var(--s-2);" title="Perpendicular distance from the planned route that counts as off course; a re-plan follows when the boat stays further off for the off-course sustain time (Route → Options → Live re-plan triggers).">Off-course threshold: <span id="xteThresholdMLabel">500</span> <span class="unitOf" data-for="xteThresholdMLabel"></span></label>
     <input type="range" id="xteThresholdM" min="100" max="2000" step="50" value="500" aria-label="Off-course threshold">
     <div id="simControls" style="display:none;">
       <div style="display:flex;gap:var(--s-1);margin-top:var(--s-2);">
@@ -671,6 +684,37 @@
     <div style="flex:1;"><label>Route name</label><input type="text" id="routeName" placeholder="(optional)" maxlength="200"></div>
   </div>
 
+  <div style="display:flex;gap:var(--s-2);">
+    <div style="flex:1;">
+      <label for="search" title="How wide the router's search is. Normal: the routing settings as they are, seconds. Moderate: a better route, about 2 minutes on a long passage. Maximum: the best route, about 6 minutes. A harbour hop takes seconds whichever you pick.">Effort</label>
+      <select id="search" aria-label="Search effort">
+        <option value="normal">Normal</option>
+        <option value="moderate">Moderate</option>
+        <option value="maximum">Maximum</option>
+      </select>
+    </div>
+    <div style="flex:1;">
+      <label for="router" title="Which open-water router computes the route: Standard is the isochrone search; Refined runs the same search on the polar's convex hull, lays the legs out in the wind of the moment and polishes the waypoints. Run the same route with each to compare; the (i) explains both.">Router <button type="button" id="routerInfoBtn" aria-label="How the two routers work" title="How the two routers work" style="width:18px;height:18px;padding:0;margin-left:4px;border:1px solid var(--border-hard);border-radius:50%;background:var(--surface-2);color:var(--text);font:600 11px/16px ui-serif,Georgia,serif;cursor:pointer;vertical-align:1px;">i</button></label>
+      <select id="router" aria-label="Open-water router">
+        <option value="standard">Standard</option>
+        <option value="refined">Refined</option>
+      </select>
+    </div>
+  </div>
+
+  <label for="smootherSel" title="Replaces runs of waypoints with straight shortcuts when they are clear of land and not much slower (the tolerance is on the Defaults tab). Your own waypoints are always kept. With the Refined router two tacks become one straight leg only where that course can be sailed within the tolerance.">Smoothing</label>
+  <select id="smootherSel" aria-label="Shortcut smoothing">
+    <option value="">Default</option>
+    <option value="true">On</option>
+    <option value="false">Off</option>
+  </select>
+
+  <!-- Minimum sailing speed: below it the boat motors (0 = never motor). Moved here from Options (2026-10-08, the owner's request). -->
+  <div class="sail-only">
+  <label for="sailThresh" title="Below this boat speed under sail the router motors instead. 0 means never motor: every stretch is sailed, and a stretch that cannot be sailed fails the route and says so.">Min sail speed: <span id="sailThreshLabel">5.0</span> <span class="unitOf" data-for="sailThreshLabel"></span></label>
+  <input type="range" id="sailThresh" min="0" max="5.2" step="0.1" value="2.6" aria-label="Minimum sailing speed">
+  </div>
+
   <button id="findRoute" disabled>Find Route</button>
   <label style="display:block;font-size:11px;cursor:pointer;margin-top:var(--s-1);" title="Draw the router's search on the map while a route computes: the front of each stage and the best path so far. Off by default; the same switch is in Layers → Base."><input type="checkbox" id="frontToggleRoute" style="width:auto;margin-right:4px;">Show decision lines (the router's search)</label>
   <button id="resetBtn" style="width:100%;padding:7px;margin-top:var(--s-1);background:var(--surface-2);color:var(--text);border:1px solid var(--border-hard);border-radius:var(--r-sm);cursor:pointer;font-size:var(--f-sm);transition:background var(--t-quick);">Clear all</button>
@@ -690,24 +734,12 @@
 
   <!-- Result strip: what the route is. Hidden while empty. -->
   <div id="routeInfo"></div>
+  </div><!-- /plan -->
 
-  </div>
-  </section>
-
-  <section class="tab-pane" id="settingsSection">
-  <div class="section-body">
-
-  <!-- Display units: taken from the Signal K user's unit preferences. -->
-  <details class="subsection" open>
-  <summary>Display</summary>
-  <div class="subsection-body">
-  <div class="ctl-hint" id="unitSource">Loading your Signal K unit preferences…</div>
-  <div class="ctl-hint">Units are set in your Signal K unit preferences.</div>
-  </div>
-  </details>
-
-  <!-- Vessel: type toggle + power-boat specs + polar picker. -->
-  <details class="subsection" open>
+  <div class="route-group" data-group="options">
+  <!-- Options: this browser's choices for the routes it asks for (remembered here); the server's defaults are on the Defaults tab. -->
+  <!-- Vessel: type toggle + power-boat specs + polar picker. Closed by default; the polar diagram draws when it opens. -->
+  <details class="subsection" id="vesselSection">
   <summary>Vessel</summary>
   <div class="subsection-body">
 
@@ -750,10 +782,6 @@
     <option value="motor">Motor Only</option>
   </select>
 
-  <label>Min sail speed: <span id="sailThreshLabel">5.0</span> <span class="unitOf" data-for="sailThreshLabel"></span></label>
-  <div class="ctl-hint">Below this speed, skip sailing and motor instead. Lower = more sailing segments.</div>
-  <input type="range" id="sailThresh" min="0" max="5.2" step="0.1" value="2.6" aria-label="Minimum sailing speed">
-
   <label>Max wind: <input type="number" id="maxWind" min="0" step="1" placeholder="none" style="width:5em;" aria-label="Maximum wind speed"> <span class="unitOf" data-q="speed"></span></label>
   <div class="ctl-hint">Legs where the forecast wind is above this are not allowed. Empty = no limit.</div>
   <label>Max wave height: <input type="number" id="maxSwh" min="0" step="0.5" placeholder="none" style="width:5em;" aria-label="Maximum wave height"> <span class="unitOf" data-q="wave_height"></span></label>
@@ -790,10 +818,6 @@
   <summary>Solver tuning</summary>
   <div class="subsection-body">
 
-  <label>Isochrone stages: <span id="stagesLabel">auto</span></label>
-  <div class="ctl-hint">Number of propagation stages between start and end. 0 = the plugin's configured default. More stages = finer route, slower solve.</div>
-  <input type="range" id="stages" min="0" max="200" step="4" value="0" aria-label="Isochrone stages (0 = default)">
-
   <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="noCurrents">Ignore currents</label>
   <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Finer wind from the signalk-grib-downloader plugin (AROME, ARPEGE, ICON-EU) where it covers the route and time, ECMWF elsewhere. Unticked: ECMWF only. No effect without the downloader."><input type="checkbox" id="regionalWind" checked>Regional wind where available</label>
   <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Areas marked &quot;avoid&quot; on Signal K notes (a circle around the note) are land to the router: no route goes through them. Unticked: the notes are ignored."><input type="checkbox" id="avoidAreas" checked>Avoid marked areas</label>
@@ -809,18 +833,6 @@
   </div>
   </details>
 
-  <!-- Forecast data: what is loaded, and a refresh. -->
-  <details class="subsection">
-  <summary>Forecast data</summary>
-  <div class="subsection-body">
-    <div id="forecastInfo" class="ctl-hint" style="margin-top:var(--s-1);">—</div>
-    <div style="display:flex;gap:var(--s-2);align-items:center;margin-top:var(--s-1);">
-      <button type="button" id="refreshForecast" class="sm-btn" title="Check ECMWF for a newer cycle">Refresh forecast</button>
-      <span id="refreshForecastStatus" class="ctl-hint" style="margin:0;"></span>
-    </div>
-  </div>
-  </details>
-
   <!-- Live mode re-plan triggers. -->
   <details class="subsection">
   <summary>Live re-plan triggers</summary>
@@ -830,7 +842,7 @@
   <div class="ctl-hint">Re-plan fires when the vessel comes within this distance of the next waypoint.</div>
   <input type="range" id="proximityRadiusM" min="50" max="1000" step="25" value="200" aria-label="Proximity re-plan radius">
 
-  <div class="ctl-hint">The off-course threshold is in the LIVE / SIMULATE box on the Route tab.</div>
+  <div class="ctl-hint">The off-course threshold is in the LIVE / SIMULATE box on the Plan sub-tab.</div>
 
   <label>Off-course sustain: <span id="xteSustainSecLabel">30</span> <span class="unitOf" data-for="xteSustainSecLabel"></span></label>
   <div class="ctl-hint">How long the vessel must stay off-course before triggering a re-plan.</div>
@@ -838,6 +850,8 @@
 
   </div>
   </details>
+
+  </div><!-- /options -->
 
   </div>
   </section>
@@ -895,6 +909,19 @@
 
   <section class="tab-pane data-pane" id="logSection">
   <div class="section-body">
+  <!-- Forecast data: what is loaded, and a refresh. -->
+  <details class="subsection">
+  <summary>Forecast data</summary>
+  <div class="subsection-body">
+    <div id="forecastInfo" class="ctl-hint" style="margin-top:var(--s-1);">—</div>
+    <div style="display:flex;gap:var(--s-2);align-items:center;margin-top:var(--s-1);">
+      <button type="button" id="refreshForecast" class="sm-btn" title="Check ECMWF for a newer cycle">Refresh forecast</button>
+      <span id="refreshForecastStatus" class="ctl-hint" style="margin:0;"></span>
+    </div>
+  </div>
+  </details>
+
+
     <details id="rawLog">
       <summary>Engine log (raw)</summary>
       <div id="modalLog"></div>
@@ -925,7 +952,7 @@
   <!-- Server-side settings shared by every client (GET/PUT /api/settings; rp-settings.js). -->
   <section class="tab-pane" id="srvSettingsSection">
   <div class="section-body">
-    <div class="ctl-hint">Saved on the Signal K server and shared by every client. Values show in your display units (Setup → Display). File paths, the download mirror and Weather API registration stay in the Signal K plugin configuration.</div>
+    <div class="ctl-hint">Saved on the Signal K server and shared by every client; what a route starts from unless Route → Options says otherwise. Values show in your display units: <span id="unitSource">loading your Signal K unit preferences…</span> File paths, the download mirror and Weather API registration stay in the Signal K plugin configuration.</div>
     <form id="srvSettingsForm" novalidate><div class="ctl-hint">Loading…</div></form>
     <div id="srvSettingsActions">
       <button type="button" id="srvSettingsSave" class="sm-btn" disabled>Save</button>
@@ -940,6 +967,16 @@
 </div>
 
 <!-- Vessel/polar specs form (POST /api/polar-from-specs) ------------- -->
+<!-- The routers explained (public/routers.html), opened from the (i) beside the Router choice. -->
+<div id="routerInfoOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:200;justify-content:center;align-items:center;">
+  <div style="background:var(--surface);color:var(--text);border-radius:8px;width:1040px;max-width:94vw;height:90vh;display:flex;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,0.4);overflow:hidden;">
+    <div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex:none;">
+      <h3 style="margin:0;font-size:15px;">The two routers</h3>
+      <button id="routerInfoClose" type="button" aria-label="Close" style="background:none;border:none;font-size:20px;color:var(--muted);cursor:pointer;">&times;</button>
+    </div>
+    <iframe id="routerInfoFrame" title="Standard vs Refined" style="flex:1;width:100%;border:0;background:var(--surface);"></iframe>
+  </div>
+</div>
 <div id="vesselOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:200;justify-content:center;align-items:flex-start;padding-top:40px;">
   <div id="vesselModal" style="background:white;color:#222;border-radius:8px;width:640px;max-width:92vw;max-height:85vh;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,0.4);">
     <div style="padding:12px 16px;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;align-items:center;">

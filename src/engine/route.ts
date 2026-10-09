@@ -9,6 +9,13 @@ import { twaFromHeading } from '../geo/angles';
 
 export type Mode = 'sailing' | 'motoring';
 
+export interface RouteDrawbridge {
+  lon: number;
+  lat: number;
+  clearM: number | null;
+  legIndex: number;
+}
+
 export interface Waypoint {
   lon: number;
   lat: number;
@@ -18,6 +25,8 @@ export interface Waypoint {
   /** Course over ground into this waypoint, degrees true. */
   cogDeg: number;
   mode: Mode;
+  /** Charted depth under the waypoint, metres, from the chart mesh (mesh legs only). */
+  depthM?: number;
   twaDeg?: number;
   windMs?: number;
   /** Wind direction FROM, degrees true. */
@@ -41,6 +50,8 @@ export interface Waypoint {
   swhMaxM?: number;
   leg?: string;
   role?: 'via';
+  /** A tack or gybe point the router placed when it split a beat into its two legs (experimental router). */
+  tack?: true;
   /**
    * Sailing and motoring seconds of the leg arriving here, set when the
    * shortcut smoother merged several legs into one (mixed modes); totals
@@ -121,8 +132,12 @@ export interface Route {
   smootherDrops?: number;
   /** Automatic vias the router placed at narrow passages (not waypoints). */
   autoVias?: { lon: number; lat: number; radiusM: number; widthM: number; name: string }[];
+  /** Opening bridges the route passes under (mesh legs): position, charted open clearance (null = none charted), the waypoint the crossing leg arrives at. */
+  drawbridges?: RouteDrawbridge[];
   /** The corridor search failed and the leg ran on the per-route coarse skeleton instead (decision E: counted in the status). */
   corridorFallback?: true;
+  /** The leg (or at least one leg) was routed on the chart mesh (engine/mesh) instead of the coastline search. */
+  meshLeg?: true;
 }
 
 /** Recompute cog / twa / sog on every waypoint from the final geometry. */

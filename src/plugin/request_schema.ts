@@ -5,7 +5,10 @@
  * worker all read this table (docs/plans/structural-cleanup.md, phase 4.1).
  */
 
+import { DRAWBRIDGE_CHOICES } from '../engine/mesh/route';
 import { DEFAULT_ARRIVAL_RADIUS_M, MAX_ARRIVAL_RADIUS_M, validateLegOptions } from '../engine/multileg';
+import { ROUTER_KINDS } from '../engine/router';
+import { SEARCH_PRESETS } from '../engine/search/presets';
 import type { RouteRequest } from './protocol';
 import { SETTINGS_SPEC } from './settings';
 
@@ -44,6 +47,19 @@ export const ROUTE_REQUEST_FIELDS: Record<string, RouteFieldSpec> = {
   },
   departure: { type: 'date-time', description: 'Empty or absent = now' },
   mode: { type: 'enum', values: MODES, default: 'sail_max' },
+  search: {
+    type: 'enum',
+    values: SEARCH_PRESETS,
+    default: 'normal',
+    description:
+      'Search method: normal (the routing settings as they are, seconds), moderate (a better route; about 2 minutes on a long passage), maximum (the best route; about 6 minutes). An explicit stages still wins over the preset',
+  },
+  router: {
+    type: 'enum',
+    values: ROUTER_KINDS,
+    description:
+      'Open-water router: standard (the isochrone search) or refined (the search on the convexified polar, legs laid out afterwards, cross-track polish; engine/experimental); default from the routing.router setting',
+  },
   sail_thresh_ms: { type: 'number', min: 0, description: 'Overrides the routing.sailThreshold setting (m/s)' },
   max_wind_ms: {
     type: 'number',
@@ -68,6 +84,12 @@ export const ROUTE_REQUEST_FIELDS: Record<string, RouteFieldSpec> = {
     description: 'RDP simplification tolerance in metres (0 = off); overrides routing.simplify',
   },
   smoother: { type: 'boolean', description: 'Run the shortcut smoother; overrides routing.smoother' },
+  drawbridges: {
+    type: 'enum',
+    values: DRAWBRIDGE_CHOICES,
+    description:
+      'Opening bridges on chart-mesh legs: ask (plan as open and report the ones crossed in the summary), open (plan as open), avoid (never pass one); default from the routing.drawbridges setting',
+  },
   smoother_tolerance: {
     type: 'number',
     ...settingRange('routing.smootherTolerance'),
@@ -103,6 +125,19 @@ export const VESSEL_FIELDS: Record<string, RouteFieldSpec> = {
     description: 'Share of the polar boat speeds achieved under sail (ratio, 1 = as written)',
   },
   polar: { type: 'string', maxLength: 200, description: 'Polar token from /api/polars; absent = the configured default' },
+  draught_m: {
+    type: 'number',
+    min: 0.1,
+    max: 30,
+    description:
+      "Draught, m (default: the vessel's Signal K design.draft.maximum); with air_draft_m, lets motoring legs use the chart mesh",
+  },
+  air_draft_m: {
+    type: 'number',
+    min: 0.5,
+    max: 100,
+    description: "Air draft (height above the waterline), m (default: the vessel's Signal K design.airHeight)",
+  },
 };
 
 const isPoint = (p: unknown): p is { lat: number; lon: number } =>

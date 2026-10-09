@@ -7,7 +7,7 @@
 
 import type { BBox } from './geodesy';
 import { bboxHeight, bboxWidth, lonOffsetFromWest, wrapLon } from './geodesy';
-import type { LandMask } from './landmask';
+import type { LandTest } from './landmask';
 
 export class GridSpec {
   readonly nx: number;
@@ -65,7 +65,7 @@ export class NavigabilityGrid {
  * Rasterise a coarse grid over `bbox` from the land mask: passable where
  * the cell centre is water. No depth information in this version.
  */
-export function buildCoarseGrid(landMask: LandMask, bbox: BBox, resolutionDeg: number, maxCells = 100_000_000): NavigabilityGrid {
+export function buildCoarseGrid(landMask: LandTest, bbox: BBox, resolutionDeg: number, maxCells = 100_000_000): NavigabilityGrid {
   const spec = new GridSpec(bbox, resolutionDeg);
   if (spec.cells > maxCells) {
     throw new Error(

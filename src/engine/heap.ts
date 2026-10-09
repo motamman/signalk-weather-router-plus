@@ -36,6 +36,11 @@ export class MinHeap {
     this.v[i] = val;
   }
 
+  /** The smallest key (the heap must not be empty). */
+  peekKey(): number {
+    return this.k[0];
+  }
+
   /** The value with the smallest key (the heap must not be empty). */
   pop(): number {
     const top = this.v[0];

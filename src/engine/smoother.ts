@@ -16,7 +16,7 @@
 
 import { haversineDistanceM } from '../geo/geodesy';
 import { M_PER_DEG } from '../geo/units';
-import type { LandMask } from '../geo/landmask';
+import type { LandTest } from '../geo/landmask';
 import type { CurrentSource, WindSource } from './environment';
 import { simulateLegTime, type SimOptions } from './legsim';
 import type { Route, Waypoint } from './route';
@@ -28,7 +28,7 @@ const SAIL_PRESERVE_FLOOR_S = 60.0;
 const SAIL_PRESERVE_ORIG_FRAC = 0.5;
 const SAIL_PRESERVE_CANDIDATE_FRAC = 0.5;
 
-function legClear(land: LandMask, a: Waypoint, b: Waypoint): boolean {
+function legClear(land: LandTest, a: Waypoint, b: Waypoint): boolean {
   return !land.legsCrossLandBulk([a.lon], [a.lat], [b.lon], [b.lat])[0];
 }
 
@@ -38,7 +38,7 @@ function legClear(land: LandMask, a: Waypoint, b: Waypoint): boolean {
  * either side and that line is clear of land. Endpoints and user
  * waypoints (`role: 'via'`) are always kept. Returns the number dropped.
  */
-export function rdpSimplify(route: Route, land: LandMask, toleranceM: number): number {
+export function rdpSimplify(route: Route, land: LandTest, toleranceM: number): number {
   const wps = route.waypoints;
   if (wps.length <= 2 || !(toleranceM > 0)) return 0;
   const tolDeg = toleranceM / M_PER_DEG;
@@ -91,7 +91,7 @@ function chainSailingSeconds(wps: Waypoint[], lo: number, hi: number): number {
 }
 
 export interface SmootherArgs {
-  land: LandMask;
+  land: LandTest;
   vessel: VesselParams;
   polar: PolarDiagram | null;
   wind: WindSource;
@@ -220,7 +220,7 @@ export function recomputeTotals(route: Route): void {
 }
 
 /** Exact-polygon land check of every leg (the propagator's final validation), after simplification. */
-export function revalidateLand(route: Route, land: LandMask): void {
+export function revalidateLand(route: Route, land: LandTest): void {
   const wps = route.waypoints;
   const warns: NonNullable<Route['warnings']> = [];
   for (let i = 0; i + 1 < wps.length; i++) {

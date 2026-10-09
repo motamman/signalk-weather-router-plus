@@ -6,8 +6,319 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Follow the boat** (Live vessel panel, LIVE and SIMULATE): a checkbox,
+  on by default, that keeps the map centred on the boat. A real drag of
+  the map (more than 10 px) unticks it; before, any pointer movement with
+  the button down, a wobbling tap included, stopped the following silently
+  and only the centre-on-boat button or restarting the mode resumed it.
+  Ticking the box, the centre-on-boat button, or starting LIVE or SIMULATE
+  follows again.
+- **Read the catalogue now** (plugin panel, Chart meshes → Where meshes
+  come from): `POST /api/meshes/refresh` (read-write) reads the mesh
+  catalogue at once, answers with the mesh list as `GET /api/meshes` does,
+  and then runs the usual pass (download ticked meshes that are missing or
+  have a newer build, delete unticked ones). Until now the catalogue was
+  read only at start and once a day, so a catalogue published after the
+  plugin started was not seen for up to a day.
+
+- **Managed chart meshes** (`src/plugin/meshes.ts`): the plugin panel
+  lists the meshes a catalogue publishes (`mesh.catalogUrl`, default the
+  US-ENC catalogue on R2) with a description built from the catalogue
+  (area, chart and mesh dates, size, triangles) and a tick box each;
+  ticked meshes are mirrored file by file into `<data dir>/mesh/<name>/`
+  by a child process, swapped in when complete, re-downloaded when the
+  catalogue's build is newer (checked daily), deleted when unticked.
+  `GET /api/meshes` and `/api/status` `meshes` report each mesh's state.
+  The route worker uses whichever ready mesh covers a leg (multi-cluster
+  meshes as one store per cluster), beside the `meshDir` folder.
+- **Chart mesh routing** (`src/engine/mesh/`). With a navigation mesh
+  configured (`meshDir` in the plugin config), a leg inside it is routed
+  on the charts: triangles carry charted depth, vertical clearance,
+  rocks, wrecks and obstructions, marks, structures and fairways, and
+  are blocked against the vessel's draught and air draft (Signal K
+  `design.draft.maximum` and `design.airHeight`; `vessel.draught_m` and
+  `vessel.air_draft_m` in a request override them). Motor legs run as an
+  A* over the mesh with the funnel algorithm; sailing legs motor the
+  narrow passages (both shores within 1 km) and sail the open stretches
+  with the open-water router; a leg with one end outside the mesh is
+  routed on it to the first open water after the last narrow passage
+  within 50 km and handed to the coastline search there. The mesh search
+  runs in a child process that exits with the leg. Summary `mesh`.
+- **Search method** on the Route tab (request `search`: `normal`,
+  `moderate`, `maximum`; `src/engine/search/presets.ts`): `moderate` is
+  stages 40, 100 cross-track bins and headings ±60° at 1°, `maximum` 150
+  bins at 0.5°; `normal` is the routing settings untouched. Measured on a
+  Raspberry Pi 5: on a 1,240 km passage `moderate` arrives 80 minutes
+  earlier than the standard beam in 128 s (17 s standard), `maximum` 94
+  minutes earlier in 363 s; on a 5 h harbour beat 29 and 32 minutes earlier in about 5 s.
+  The summary carries `search`.
+- **Open-water router toggle**: request `router` (`standard` or
+  `refined`), setting `routing.router`, a selector on the Route tab
+  beside Method; the summary and `/api/status` say which runs. An (i)
+  beside it opens `public/routers.html`: how each router works, where
+  they differ, and the measurements, with diagrams.
+- **Refined router** (`src/engine/experimental/`): the isochrone
+  search on a convexified polar (a beat is a straight leg at its exact
+  VMG), every sailed leg laid out afterwards forward in time in steps of
+  at most 9,260 m (at each step the wind there decides between a tack,
+  30 s each, and a straight step; a leg that cannot be sailed fails the
+  route rather than getting an invented time), and a cross-track polish that moves waypoints sideways where the
+  route then arrives earlier. GeoJSON points carry `tack: true` on tack
+  points. Measured on a Raspberry Pi 5 against the isochrone router
+  (same forecast run, fixed departures): harbour beat 17,234 s vs
+  18,659 s; offshore reach 36,235 s vs 36,469 s; 1,240 km passage
+  382,041 s vs 383,615 s.
+- Mixed sail/motor legs carry their split, so the totals count the
+  motored part of a leg that starts under power and ends under sail.
+
+### Changed
+
+- **Defaults tab: every number is a slider**, the value and unit beside
+  the label, bounds and step from the setting's schema (`step`, SI, new
+  in `/api/settings`' schema and the OpenAPI description) converted to the
+  user's unit. The two settings that can be "none" (max wind, max wave
+  height) have a "no limit" box. A value saved earlier that is off the
+  slider's step shows as saved until the slider moves. Text boxes are
+  gone, so the finest value is the step (0.1 kt for speeds, 1 m for
+  simplification, 5 s for the tacking penalty, 30 s for the bridge wait,
+  10 m for the buffers and the simulation step, 1 h for horizons).
+- **Drawbridges** is a Defaults setting only (`routing.drawbridges`,
+  default ask); the Plan sub-tab's select is removed. The "re-plan
+  avoiding drawbridges" button sends `drawbridges: avoid` for that one
+  request and leaves the setting as it is. The Plan sub-tab's Method
+  label reads Effort.
+- **Buffer from land** (Defaults → `routing.landBuffer`, metres, default
+  0): on a coastline leg the route keeps at least this far from the
+  shoreline. The land raster is grown by the buffer (`LandMask.withBuffer`,
+  a two-pass dilation; local patches the same) and the exact polygon tests
+  count a point within the buffer of a shoreline edge as land and a move
+  that comes within it as crossing land, so the search, the smoother and
+  the final check all keep it. A start or end closer than the buffer is
+  moved out to it (the 150 m clearance becomes the buffer when larger); a
+  corridor passage narrower than twice the buffer fails the route naming
+  the passage. On a mesh leg the mesh's own edge is not yet grown by it
+  (the growth of the blocked set is being reworked for speed).
+- **Buffer from unusable water** (Defaults → `routing.navigableBuffer`,
+  metres, default 0): on a chart-mesh leg the blocked set is grown once
+  per leg by exact distance from its boundary (`growBlocked` in
+  `src/engine/mesh/route.ts`: a usable triangle whose nearest point is
+  within the buffer of an edge between blocked and usable triangles is
+  blocked too), so the mesh route, the passage widths, the search, the
+  tack layout and the polish all keep that distance. A start or end
+  inside the buffer is refused with the distance; a passage narrower than
+  twice the buffer closes. The log reports the triangles added and the
+  time. The growth is one nearest-first flood over the triangles, which
+  misses a few tenths of a percent of the triangles within the buffer
+  (measured on brain, the exact walk being 3 to 12 times slower); the
+  exact alternative is described in the code.
+- **Opening bridges** (the mesh build of 2026-10-08 marks them, flag bit
+  7, and stores their open clearance): the clearance rule applies to the
+  open clearance; a request's `drawbridges` (or Defaults →
+  `routing.drawbridges`, default `ask`) is `ask` (plan as open, report the
+  bridges crossed in the summary, the log and the web app, which offers a
+  re-plan avoiding them), `open` or `avoid` (every opening bridge
+  blocked). `routing.bridgeWait` (seconds, default 0) is added at each
+  bridge passed under; the GeoJSON carries `drawbridges`. Older meshes
+  have no bit 7 and behave as before.
+- **Tacks as long as the wind and the land allow** (the refined router's
+  layout): a beat is laid as two legs, one tack, and a leg is split only
+  when the real polar cannot sail it all the way under sail (the forecast
+  wind veering into the no-go angle) or it crosses land or the mesh; then
+  the longest piece that can be sailed is taken and the layout looks
+  again from there. Until this evening tacks were chopped at a fixed 5 nm
+  whatever they cost, so the tacking penalty added time but could never
+  lengthen a tack (measured 2026-10-08: 22 tacks with the penalty, 16
+  without, on a test beat).
+- **Tacking penalty** (Defaults → `routing.tackPenalty`, seconds, default
+  30): the time lost on every tack or gybe, charged by both routers. The
+  standard search charges it on a move that puts the wind on the other
+  side of the boat from its parent's heading (time and rank) and on the
+  final beat's tack; the refined router's layout uses the setting in place
+  of its 30 s constant.
+- **Min sail speed** on the Route tab's Plan sub-tab, beside Method,
+  Router and Smoothing (it was under Options → Sailing strategy); same
+  control, same request field (`sail_thresh_ms`), remembered per browser.
+- **Smoothing** on the Route tab's Plan (Default / On / Off): the
+  request's `smoother`, beside Method and Router, remembered per browser.
+  The shortcut smoother runs for both routers (2026-10-08, the owner's
+  decision; before that evening it was forced off for Refined): it times
+  every shortcut with the real polar, so two laid-out tacks become one
+  straight leg only where that course is sailable within the tolerance.
+- **Web app tabs.** The Setup tab is gone: its sections (vessel, sailing
+  strategy, waypoint behaviour, solver tuning, live re-plan triggers) are
+  the **Options** sub-tab of the Route tab, beside **Plan**; the stages
+  slider is dropped (the Method choice replaces it). The Settings tab is
+  **Defaults**. The forecast-data block (what is loaded, refresh) is on
+  the Log tab; the units note is in the Defaults header.
+- The open-water search is reached through one seam (`src/engine/router.ts`)
+  for a plain leg and for each open stretch of a mesh leg.
+- `MinHeap.peekKey()` (engine/heap.ts).
+
+### Measured, not changed
+
+- A wider isochrone beam (`routing.stages` 40, `routing.subsectors`
+  150, `routing.headings` 120 at 0.5°) arrives 94 minutes earlier on a
+  1,240 km passage than the standard beam, at 21 × the wall time (363 s
+  vs 17 s on a Raspberry Pi 5), and 32 minutes earlier on a harbour beat.
+- Displacement (motion-compensated) interpolation of the forecast in
+  time, tested by rebuilding dropped frames of a decoded run: no gain
+  over the linear blend (speed RMSE 0.95 vs 0.88 m/s at 6 h gaps on a
+  slow-moving pattern). Not adopted.
+
 ### Fixed
 
+- Review of PR #34, seven code points: (1) a leg whose ends lie in two
+  different meshes was planned as one mesh leg, the runner opened the
+  start's mesh, the search reported the end outside and the whole leg fell
+  back to the coastline search; one mesh must now hold both ends, else the
+  handover applies (`src/engine/pipeline.ts`, the runner prefers the mesh
+  holding both). (2) A mesh download interrupted and resumed after the
+  catalogue published a newer build kept tiles of the old build when
+  their size matched; `.progress.json` now records the base URL and build
+  and a folder started for another is cleared (`childtask.ts
+  downloadMesh`). (3) A `01CGD.old` folder left by a swap counted as a ready
+  mesh of its own; `.old` is skipped and removed with an unticked mesh.
+  (4) The tacking penalty was in the total but not in the sailing time, so
+  sailing plus motoring fell short of the total by the penalty per tack
+  (golden beat: sailing 30121 s against a total of 30391 s, nine tacks);
+  it counts as sailing time in the search and the final beat, and the
+  golden fixture is re-recorded (sailing 30391 s). (5) A multi-segment mesh
+  leg lost `smoother_drops` in the stitch. (6) A Signal K draught or air
+  height outside the vessel bounds (0.1–30 m, 0.5–100 m; an air height in
+  the wrong unit) made every route throw; it now reads as unknown and only
+  disables the mesh (`selfDesignValue`). (7) `GET /api/meshes` and
+  `POST /api/meshes/refresh` in the OpenAPI document, with `meshes` and
+  `router` in the status description. Text: the off-course tooltip and
+  README named tabs that no longer exist; the panel's mesh help; the
+  README said narrow-passage tacks are checked against the coastline (they
+  are tested against the mesh) and three places said the refined router
+  never smooths.
+- **A leg starting (or ending) just off an open coast inside a chart mesh
+  never used the mesh**: the mesh handover looked only for narrow water
+  (both shores within 2 km across the track), so a start 3.4 km off a
+  straight coast (Lake Superior's south shore, 2026-10-09, distance to
+  GSHHG full-resolution land) read as open water and the coastline search
+  took the whole leg, with no charted depths, shoals or hazards near the
+  shore. The handover now also needs
+  the corridor to be clear of land: the first point after the last narrow
+  one with no land within 5 km (`SHORE_CLEAR_M`; 2 km was tried first and
+  left a start 3.4 km off the same shore to the coastline search; a new
+  per-point distance to land on the corridor, `Corridor.shoreM`), staying
+  clear at the next point. Within the 50 km scan cap as before; a leg still near land at the
+  cap hands over there, and the log says which (`Handover.reason`).
+- **A local chart mesh blocked a newer published mesh of the same name**:
+  a ticked catalogue mesh whose name matched a mesh in the `meshDir`
+  folder was never downloaded, however new the published build, and the
+  router always tried a downloaded copy before a local one, older or not.
+  Now the newer of the two is used (`localWins`): the local mesh's
+  sidecar `build_date` against the catalogue's (for the download) or the
+  marker's (for the router, `meshesToOpen`); a local mesh without a
+  sidecar date loses. The plugin panel shows one row per name, saying
+  which copy is routed on (`using`, `local_dir`, `local_build_date` in
+  `GET /api/meshes`), and its Use box covers both copies.
+- **Mesh legs had no CMEMS SMOC currents while the Copernicus run was
+  provisional** (its store update still being written, hours at a time):
+  the chunk cache on disk was written only for a settled run, and the
+  mesh process reads the disk only, so it fell back to lower-priority
+  sources while the coastline legs of the same route had SMOC. A
+  provisional run now has its own cache directory, `<run>.provisional`,
+  and every run is cached and read alike; the settled run of the same
+  key never reads it, and it is dropped when the settled run replaces it
+  or pruned afterwards (`ArcoClient.dropProvisionalRun`, `pruneRuns`
+  by run). The same client serves the sea-level (tides) store.
+- **Mesh legs asked SMOC for a different area than the worker had loaded**:
+  the worker loaded the leg's start-to-end box padded 0.5°, the mesh
+  process asked for the mesh search box (padded up to 2° when the mesh
+  route does not fit) plus a margin, and a chunk outside the worker's box
+  was not on disk. The worker now loads the forecast and the currents for
+  the widest box the mesh search can use (`MESH_BOX_PAD_MAX_DEG`), and
+  passes the SMOC box and step list it loaded to the mesh process in the
+  task, which asks for exactly those, so both sides pick the same layout
+  and the same chunks. The mesh log line says which run and how many
+  steps were read.
+- The job's event stream (`/api/routes/:id/events`) reached the browser
+  only when the job ended: Signal K gzips responses the browser accepts
+  compressed, and gzip buffers the stream to its end, so the web app's
+  Log tab stayed empty for every running job and filled in one lump on
+  done or failed. The stream is now sent with `Cache-Control: no-cache,
+  no-transform`, which the compression layer honours; lines and
+  keepalives arrive as written. Live re-plans use the same stream.
+- On a chart-mesh leg the simplification and the shortcut smoother did
+  not run at all (they ran only after the coastline search, and the mesh
+  leg's planner, moved into the mesh process on 2026-10-08, had neither),
+  so the Smoothing choice did nothing there and even the Standard router's
+  route kept every search step. Each searched stretch of a mesh leg now
+  gets the same two steps as a coastline leg, with the mesh as land, so a
+  shortcut is taken only where the mesh allows it, for both routers.
+- A mesh leg's open stretch whose search failed was motored whatever the
+  request asked (job 1c1fda5b, 2026-10-08: 106 km around the outside of
+  Cape Cod motored under sail_max with a sail threshold of 0). It now
+  follows the mesh route under the request's own mode: under sail_max it
+  is laid out as the refined router lays out its legs (tacks where the
+  wind there and then needs them, motor only below a positive threshold)
+  and fails the route naming the segment when a stretch cannot be sailed;
+  under fastest it is walked choosing per step. With a sail threshold of
+  0 the narrow passages are sailed along the mesh route the same way
+  instead of motored.
+- **The sailed stretches of a mesh leg ignored charted depth** (job
+  20e5c6ef, 2026-10-08: off Monomoy the search cut across 2 m shoals and
+  put waypoints on them; it tested its legs against the coastline alone,
+  which has no depths and draws the island differently from the chart).
+  The whole mesh leg is now planned in the child process that holds the
+  mesh (`src/plugin/meshlegtask.ts`, `src/engine/mesh/legrun.ts`): the
+  search, the tack layout, the polish and the smoother test every move by
+  walking the mesh triangles (`src/engine/mesh/land.ts`, the walk that
+  measures passage widths), so no leg of a mesh route can cross a
+  triangle the boat cannot use. The child reads the forecast window, the
+  regional runs, the cached currents and the polar from disk (the worker
+  fetches on-demand current areas first, as before) and streams its
+  progress and stage fronts. The land checks the routers make are typed
+  on a `LandTest` interface the coastline raster and the mesh both
+  answer. A leg the mesh cannot take still falls back to the coastline
+  search; a leg that cannot be sailed as asked fails the route with the
+  reason, as before.
+- **Waypoint depth**: `depth_m`, always null until now, is the charted
+  depth of the mesh triangle under each waypoint of a mesh leg (a contour
+  corner reports the usable side); the itinerary shows it.
+- With the chart's shallows blocked, the refined router's tack layout
+  could not gybe inside the passage south of Monomoy (job a0a18bcb: a
+  channel narrower than the shortest tack, dead downwind) and failed the
+  route although the polar runs dead downwind. When no tack fits and the
+  real polar sails the course straight along a clear line, the course is
+  sailed straight; only a course the polar cannot sail fails.
+- A search candidate landing exactly on the destination (the stage step
+  dividing the distance) got a final hop of millimetres, so the route
+  ended with the same point twice and a zero-length leg; a final leg
+  under 1 m is dropped and the candidate's waypoint takes the exact end.
+- A mesh leg whose route must swing further out than half a degree beyond
+  the box around its ends was a silent "no route on the mesh" and fell back
+  to the coastline search (job aeedeb52, 2026-10-08: Block Island to the
+  canal's east end, the way round Nauset at 69.91°W outside a box ending
+  at 69.96°W). When the search finds no route the box is widened to 1°,
+  then 2°, and searched again, unless the wider box would read more than
+  16 M triangles (about 2.2 GB in the child process by arithmetic from
+  the array sizes; the first box of that job read 8.2 M, its 1° box
+  11.8 M by the index); the log says when the box was widened, and the
+  failure names the box and the cap.
+- The open-water search between two narrow passages of a mesh route drew
+  its own coarse skeleton on the coastline instead of using the mesh
+  route, as the hybrid rule says (job 219300ca, 2026-10-08: the coarse
+  skeleton cut across the tip of Monomoy, every first-stage candidate
+  towards it was on land, the one survivor went up the wrong side of the
+  island and the search was boxed in after 20 stages). The mesh route and
+  its passage widths are now the search's corridor (`meshCorridor` in
+  `src/engine/pipeline.ts`); water that reached the ray walk's 4 km cap
+  on both sides counts as open, so the search keeps its freedom to leave
+  the line. Measured on brain from the same start: 19 stages, arrival
+  13:58Z, where the coastline skeleton was boxed in.
+- The mesh funnel could emit a corner vertex twice when the crossed edges
+  fan around it (a zero-length leg in the mesh route; the motored walk hid
+  it, the tack layout refused it). A point equal to the last one emitted is
+  skipped, as Recast's `appendVertex` does; the route's geometry is
+  unchanged, with one point fewer where the Python experiment's funnel
+  repeats one.
 - Apply the GSHHG L1/L2/L3/L4 land/water hierarchy to global water grids,
   route rasters, refined masks and exact polygon checks. The full global
   grid is rebuilt from all four levels; old overlay caches are invalidated.

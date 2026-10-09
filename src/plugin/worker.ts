@@ -256,7 +256,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
       if (msg.reload.tides && st.role === 'data') {
         if (msg.position !== undefined) st.vesselPos = msg.position;
         // A provisional run's cached chunks may predate its update: drop them with the old client.
-        if (st.tides && st.seaLevelClient && !st.tides.run.settled) st.seaLevelClient.dropRun(st.tides.run.key);
+        if (st.tides && st.seaLevelClient && !st.tides.run.settled) st.seaLevelClient.dropProvisionalRun(st.tides.run.key);
         st.seaLevelClient = makeSeaLevelClient(st, st.config);
         st.tides = null;
         st.tidesError = null;
@@ -283,7 +283,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
         st.send({ type: 'error', id: msg.id, message: 'route sent to the data worker' });
         return;
       }
-      await route(st, msg.id, msg.request, msg.avoid ?? []);
+      await route(st, msg.id, msg.request, msg.avoid ?? [], msg.self);
       sendCurrents(st);
       return;
     case 'query':

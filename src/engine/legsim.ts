@@ -52,6 +52,27 @@ export interface SimOptions {
   maxSwhM?: number;
   /** Comfort weight (0 or absent: off): rough water, as the boat meets it, costs extra seconds in the search's choices (engine/seas.ts). */
   comfortWeight?: number;
+  /** Seconds lost per tack or gybe (absent: DEFAULT_TACK_PENALTY_S). */
+  tackPenaltyS?: number;
+}
+
+/** Seconds lost per tack or gybe when the request sets none (the refined router's constant before the setting existed). */
+export const DEFAULT_TACK_PENALTY_S = 30;
+
+/**
+ * Is the move from heading `a` to heading `b` a tack or a gybe: the wind
+ * (from `windDirDeg`) on the other side of the boat? A heading dead into
+ * or dead away from the wind is on neither side and changes nothing.
+ */
+export function tackBetween(a: number, b: number, windDirDeg: number): boolean {
+  const side = (h: number): number => {
+    const t = ((h - windDirDeg + 540) % 360) - 180;
+    if (Math.abs(t) < 1e-9 || Math.abs(t) > 180 - 1e-9) return 0; // dead upwind, dead downwind
+    return t > 0 ? 1 : -1;
+  };
+  const sa = side(a);
+  const sb = side(b);
+  return sa !== 0 && sb !== 0 && sa !== sb;
 }
 
 function selectSpeed(sailSpeed: number, motorSpeed: number, policy: ModePolicy, sailThreshMs: number): [number, boolean] {

@@ -64,7 +64,7 @@ export function fmtUtc(ms: number): string {
 export function forecastNote(ctx: SearchContext): string {
   const { args, lastTry } = ctx;
   if (args.forecastEndMs === undefined || lastTry.latestMs <= args.forecastEndMs) return '';
-  return ` The forecast ends ${fmtUtc(args.forecastEndMs)} and the search is ${((lastTry.latestMs - args.forecastEndMs) / HOUR_MS).toFixed(0)} h past it, on conditions held at that last step: a longer forecast horizon (Settings) may open a way.`;
+  return ` The forecast ends ${fmtUtc(args.forecastEndMs)} and the search is ${((lastTry.latestMs - args.forecastEndMs) / HOUR_MS).toFixed(0)} h past it, on conditions held at that last step: a longer forecast horizon (Defaults) may open a way.`;
 }
 
 /**
@@ -92,6 +92,7 @@ export function buildContext(prop: PropagatorParams, args: ComputeRouteArgs): Se
     maxWindMs: args.maxWindMs,
     maxSwhM: args.maxSwhM,
     comfortWeight: args.comfortWeight,
+    tackPenaltyS: args.tackPenaltyS,
   };
   const hasLimit = args.maxWindMs !== undefined || args.maxSwhM !== undefined;
   const limitNote = hasLimit ? ' or over the wind/wave limit' : '';

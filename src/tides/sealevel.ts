@@ -538,7 +538,7 @@ export class TideSource {
       last_download: this.set.lastDownload,
       last_point_query: this.lastPoint,
       downloaded_bytes_total: this.client?.totals.downloadedBytes ?? 0,
-      disk_cache_bytes: this.client ? this.client.cachedBytes(this.run.key) : null,
+      disk_cache_bytes: this.client ? this.client.cachedBytes(this.run) : null,
       layouts: (['time', 'geo', 'ds4'] as ArcoLayout[]).filter(l => this.run.levels[l]),
       mean_window_days: MEAN_WINDOW_DAYS,
     };

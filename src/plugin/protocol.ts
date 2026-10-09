@@ -14,9 +14,12 @@
  * Everything crossing the boundary is structured-cloneable.
  */
 
+import type { DrawbridgeChoice } from '../engine/mesh/route';
 import type { AvoidArea } from '../geo/avoid';
-import type { ResolvedConfig } from './config';
+import type { ResolvedConfig, SelfDesign } from './config';
 import type { ModePolicy } from '../engine/legsim';
+import type { RouterKind } from '../engine/router';
+import type { SearchPreset } from '../engine/search/presets';
 import type { BBox } from '../geo/geodesy';
 import type { DecodedIndex } from '../data/decoded';
 import type { SerializedSmoc, SmocStatus } from '../currents/smoc';
@@ -57,6 +60,8 @@ export interface RouteRequest {
   simplify_m?: number;
   /** Run the shortcut smoother; default from routing.smoother. */
   smoother?: boolean;
+  /** Opening bridges on chart-mesh legs: ask (plan as open and report the ones crossed), open, or avoid; default from routing.drawbridges. */
+  drawbridges?: DrawbridgeChoice;
   /** Smoother time tolerance, ratio; default from routing.smootherTolerance. */
   smoother_tolerance?: number;
   name?: string;
@@ -65,6 +70,10 @@ export interface RouteRequest {
   no_currents?: boolean;
   /** auto (default): regional wind layered over ECMWF where available; ecmwf: ECMWF only. */
   wind_model?: 'auto' | 'ecmwf';
+  /** Open-water router: standard (the isochrone search) or refined (engine/experimental); default from the routing.router setting. */
+  router?: RouterKind;
+  /** Search method: normal (the routing settings), moderate or maximum (engine/search/presets.ts); an explicit `stages` still wins. */
+  search?: SearchPreset;
   /** Treat the areas marked on Signal K notes (properties.avoid.radius_m) as land (default true). */
   avoid_areas?: boolean;
   publish?: boolean;
@@ -75,6 +84,10 @@ export interface RouteRequest {
     polar_performance?: number;
     /** Polar token from GET /api/polars (`default` or a library file name). */
     polar?: string;
+    /** Draught, m (default: Signal K design.draft.maximum); with the air draft, enables the chart mesh for motoring legs. */
+    draught_m?: number;
+    /** Air draft, m (default: Signal K design.airHeight). */
+    air_draft_m?: number;
   };
 }
 
@@ -111,6 +124,15 @@ export interface RouteSummary {
   corridor_fallback?: true;
   /** Regional wind models used and the share of the search's wind samples each answered (0..1); absent when only ECMWF was used. */
   regional_wind?: { name: string; run: string; share: number }[];
+  /** At least one leg was routed on the chart mesh (charted depths and obstructions) instead of the coastline search. */
+  mesh?: true;
+  /** Opening bridges the route passes under (mesh legs), and the rule that applied. */
+  drawbridges?: { lat: number; lon: number; clear_m: number | null; leg_index: number }[];
+  drawbridges_rule?: DrawbridgeChoice;
+  /** The open-water router that ran. */
+  router?: RouterKind;
+  /** The search method the route ran with. */
+  search?: SearchPreset;
 }
 
 export type QueryKind =
@@ -293,7 +315,7 @@ export type MainToWorker =
       position?: VesselPosition | null;
     }
   /** avoid: the areas to avoid marked on Signal K notes, read by the main thread (the workers have no Resources API). */
-  | { type: 'route'; id: string; request: RouteRequest; avoid?: AvoidArea[] }
+  | { type: 'route'; id: string; request: RouteRequest; avoid?: AvoidArea[]; self?: SelfDesign }
   | { type: 'query'; id: number; kind: QueryKind; args: QueryArgs[QueryKind] }
   /** tiles workers: the data worker's tide run (null: tides off or not loaded). */
   | { type: 'tides-run'; run: ArcoRun | null }

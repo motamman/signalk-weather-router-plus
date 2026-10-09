@@ -9,7 +9,7 @@
 
 import { haversineBearing, haversineDistanceM, projectAlongBearing, segmentWithinDisc } from '../../geo/geodesy';
 import { norm360 } from '../../geo/angles';
-import { scoreCandidatesFromParent } from '../legsim';
+import { scoreCandidatesFromParent, DEFAULT_TACK_PENALTY_S, tackBetween } from '../legsim';
 import type { Candidate, SearchContext } from './types';
 import type { SkeletonGuide } from './zones';
 
@@ -102,8 +102,13 @@ export function propose(
     const bearings = new Float64Array(keep.map(i => hdg[i]));
     const dists = new Float64Array(keep.map(i => dist[i]));
     const sc = scoreCandidatesFromParent(par.lon, par.lat, new Date(par.timeMs), bearings, dists, vessel, polar, wind, current, simOpts);
+    // The tacking penalty: a move that puts the wind on the other side of
+    // the boat from the parent's heading, both under sail, costs the penalty
+    // in time and in rank (the start has no heading: no penalty).
+    const tackS = simOpts.tackPenaltyS ?? DEFAULT_TACK_PENALTY_S;
+    const [, wdPar] = tackS > 0 && par.mode === 'sailing' ? wind.at(par.lon, par.lat, new Date(par.timeMs)) : [0, NaN];
     for (let c = 0; c < keep.length; c++) {
-      const secs = sc.seconds[c];
+      let secs = sc.seconds[c];
       if (!Number.isFinite(secs) || secs <= 0) {
         if (sc.limited[c]) lastTry.limited++;
         else if (sc.noGo[c]) lastTry.noGo++;
@@ -111,6 +116,9 @@ export function propose(
         continue;
       }
       const i = keep[c];
+      // A tack: the penalty is time spent sailing, so it counts in the sailing time too (the totals must add up).
+      const tacked = Number.isFinite(wdPar) && sc.dominant[c] === 1 && tackBetween(par.cogDeg, hdg[i], wdPar);
+      if (tacked) secs += tackS;
       const legDist = haversineDistanceM(par.lon, par.lat, cLon[i], cLat[i]);
       const cand: Candidate = {
         lon: cLon[i],
@@ -122,7 +130,7 @@ export function propose(
         sogMs: legDist / secs,
         cogDeg: hdg[i],
         mode: sc.dominant[c] === 1 ? 'sailing' : 'motoring',
-        sailingS: sc.sailing[c],
+        sailingS: sc.sailing[c] + (tacked ? tackS : 0),
         motoringS: sc.motoring[c],
         viaCount: par.viaCount,
         viaIdxs: [],

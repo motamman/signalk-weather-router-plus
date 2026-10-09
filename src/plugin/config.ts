@@ -6,7 +6,7 @@
  *    server / installation settings — file paths, the download mirror,
  *    Weather API registration and the map overlay cache;
  *  - the web-app settings (settings.ts, stored in the plugin data dir as
- *    settings.json, edited in the page's Settings tab): vessel, forecast
+ *    settings.json, edited in the page's Defaults tab): vessel, forecast
  *    horizon and extras, currents, routing engine and publishing.
  *
  * Older versions kept everything in the plugin config; those keys are
@@ -14,7 +14,10 @@
  * settings.json (settings.ts migrateLegacy). After that they are ignored.
  */
 
+import type { DrawbridgeChoice } from '../engine/mesh/route';
 import { makeVessel, type VesselParams } from '../vessel/vessel';
+import type { RouterKind } from '../engine/router';
+import { DEFAULT_MESH_CATALOG_URL } from './meshes';
 import { HOUR_S } from '../geo/units';
 import type { AppSettings } from './settings';
 import type { RouteRequest } from './protocol';
@@ -22,6 +25,15 @@ import type { RouteRequest } from './protocol';
 /** What the Signal K plugin config holds now. */
 export interface PluginConfig {
   landShapefiles?: string;
+  /** A chart navigation mesh folder you manage yourself (index.json and tiles); blank = none. */
+  meshDir?: string;
+  /** Managed meshes: the catalogue of published meshes and the names ticked for download (plugin/meshes.ts). */
+  mesh?: {
+    catalogUrl?: string;
+    downloads?: string[];
+    /** Downloaded meshes switched off for routing (kept on disk). */
+    disabled?: string[];
+  };
   polarFile?: string;
   polarsDir?: string;
   forecast?: {
@@ -85,6 +97,10 @@ export interface LegacyPluginConfig {
 
 export interface ResolvedConfig {
   landShapefiles: string[];
+  /** A mesh folder managed by hand, or null. */
+  meshDir: string | null;
+  /** Managed meshes: catalogue URL, the names ticked, and the store directory the copies live in. */
+  mesh: { catalogUrl: string; downloads: string[]; disabled: string[]; storeDir: string };
   polarFile: string | null;
   polarsDir: string | null;
   /** Where user polars are kept and generated ones written (see polars.ts PolarLibraryConfig.userDir). */
@@ -129,6 +145,14 @@ export interface ResolvedConfig {
     headings: number;
     headingIncrementDeg: number;
     sailThreshMs: number;
+    /** Seconds lost per tack or gybe. */
+    tackPenaltyS: number;
+    /** Buffer from unusable water on mesh legs, metres (0 = none). */
+    navigableBufferM: number;
+    /** Buffer from the coastline, metres (0 = none). */
+    landBufferM: number;
+    drawbridges: DrawbridgeChoice;
+    bridgeWaitS: number;
     /** Polar rows closer to the wind than this many degrees are ignored (0 = as written). */
     noGoMinAngleDeg: number;
     maxWindMs: number | null;
@@ -141,6 +165,8 @@ export interface ResolvedConfig {
     simplifyM: number;
     smoother: boolean;
     smootherTolerance: number;
+    /** Open-water router by default (engine/router.ts). */
+    router: RouterKind;
     keepJobs: number;
   };
   publish: {
@@ -181,7 +207,7 @@ export const CONFIG_SCHEMA = {
   type: 'object',
   description:
     'Server and installation settings only. Vessel, forecast horizon, currents, routing and publishing are set in the ' +
-    'web app (Weather Router Plus → Settings tab) and shared by every client.',
+    'web app (Weather Router Plus → Defaults tab) and shared by every client.',
   properties: {
     landShapefiles: {
       type: 'string',
@@ -189,6 +215,38 @@ export const CONFIG_SCHEMA = {
       description:
         'Absolute path(s) to polygon land shapefiles, comma-separated. Blank: GSHHG 2.3.7 full-resolution levels 1–4 are downloaded once ' +
         '(149 MB from www.soest.hawaii.edu) into the plugin data directory and used. A GSHHS layer path requires all four sibling levels. Add GSHHS_f_L6.shp for Antarctica.',
+    },
+    mesh: {
+      type: 'object',
+      title: 'Chart meshes',
+      properties: {
+        catalogUrl: {
+          type: 'string',
+          title: 'Mesh catalogue URL',
+          description:
+            'The index.json listing the published meshes (the s57Work build writes charts/mesh/index.json). Blank = the US-ENC catalogue on R2.',
+        },
+        downloads: {
+          type: 'array',
+          title: 'Meshes to download',
+          description:
+            'Names from the catalogue (01CGD, 07CGD, …); each is mirrored into the plugin data directory and kept current. An unticked mesh is deleted.',
+          items: { type: 'string' },
+        },
+        disabled: {
+          type: 'array',
+          title: 'Downloaded meshes not used for routing',
+          description: 'Names of downloaded meshes switched off (kept on disk, not opened by the router).',
+          items: { type: 'string' },
+        },
+      },
+    },
+    meshDir: {
+      type: 'string',
+      title: 'Chart mesh directory (your own)',
+      description:
+        'A navigation mesh folder you manage yourself (index.json and its tiles), used beside the downloaded ones. Where a mesh covers a leg, and the vessel draught and air draft are set ' +
+        '(Signal K vessel base data), the leg is routed on the mesh: charted depths, bridge clearances, rocks, wrecks, marks and structures avoided. Blank = none.',
     },
     polarFile: {
       type: 'string',
@@ -314,6 +372,13 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
   const p = settings.publish;
   return {
     landShapefiles: land,
+    meshDir: c.meshDir && c.meshDir.trim() ? c.meshDir.trim() : null,
+    mesh: {
+      catalogUrl: c.mesh?.catalogUrl && c.mesh.catalogUrl.trim() ? c.mesh.catalogUrl.trim() : DEFAULT_MESH_CATALOG_URL,
+      downloads: Array.isArray(c.mesh?.downloads) ? c.mesh.downloads.map(s => String(s).trim()).filter(Boolean) : [],
+      disabled: Array.isArray(c.mesh?.disabled) ? c.mesh.disabled.map(s => String(s).trim()).filter(Boolean) : [],
+      storeDir: '', // set by the plugin (index.ts resolve) from its data directory
+    },
     polarFile: c.polarFile && c.polarFile.trim() ? c.polarFile.trim() : null,
     polarsDir: c.polarsDir && c.polarsDir.trim() ? c.polarsDir.trim() : null,
     polarUserDir: null,
@@ -353,6 +418,11 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       headings: r.headings,
       headingIncrementDeg: r.headingIncrement,
       sailThreshMs: r.sailThreshold,
+      tackPenaltyS: r.tackPenalty ?? 30,
+      navigableBufferM: r.navigableBuffer ?? 0,
+      landBufferM: r.landBuffer ?? 0,
+      drawbridges: r.drawbridges ?? 'ask',
+      bridgeWaitS: r.bridgeWait ?? 0,
       noGoMinAngleDeg: r.noGoMinAngle ?? 0,
       maxWindMs: r.maxWind ?? null,
       maxSwhM: r.maxSwh ?? null,
@@ -363,6 +433,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       simplifyM: r.simplify,
       smoother: r.smoother,
       smootherTolerance: r.smootherTolerance,
+      router: r.router,
       keepJobs: r.keepJobs,
     },
     publish: {
@@ -390,14 +461,37 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
   };
 }
 
+/** Draught and air draft as Signal K's vessel base data has them (design.draft.maximum, design.airHeight), null when unset. */
+export interface SelfDesign {
+  draughtM: number | null;
+  airDraftM: number | null;
+}
+
+/**
+ * A vessel dimension from Signal K self-data (`design.draft.maximum`,
+ * `design.airHeight`): the raw value or its `{value}` wrapper, a `key`
+ * inside it when given, a finite number within `range`; anything else is
+ * null (unknown). The bounds are makeVessel's, so a value Signal K reports
+ * in the wrong unit disables the chart mesh instead of failing every route.
+ */
+export function selfDesignValue(raw: unknown, key: string | undefined, range: readonly [number, number]): number | null {
+  let v = raw && typeof raw === 'object' && 'value' in raw ? (raw as { value: unknown }).value : raw;
+  if (key && v && typeof v === 'object') v = (v as Record<string, unknown>)[key];
+  return typeof v === 'number' && Number.isFinite(v) && v >= range[0] && v <= range[1] ? v : null;
+}
+
 /**
  * The vessel for one route: values in the request take precedence; the
- * rest come from the vessel settings (never the built-in defaults).
+ * rest come from the vessel settings (never the built-in defaults), and
+ * the draught and air draft from Signal K's vessel base data (like the
+ * name: not plugin settings).
  */
-export function routeVessel(cfg: ResolvedConfig, rv: RouteRequest['vessel']): VesselParams {
+export function routeVessel(cfg: ResolvedConfig, rv: RouteRequest['vessel'], self?: SelfDesign): VesselParams {
   return makeVessel({
     ...cfg.vessel,
     motorSpeedMs: rv?.motor_speed_ms ?? cfg.vessel.motorSpeedMs,
     polarPerformance: rv?.polar_performance ?? cfg.vessel.polarPerformance,
+    draughtM: rv?.draught_m ?? self?.draughtM ?? null,
+    airDraftM: rv?.air_draft_m ?? self?.airDraftM ?? null,
   });
 }

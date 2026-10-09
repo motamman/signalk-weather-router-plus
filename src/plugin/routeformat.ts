@@ -104,7 +104,7 @@ export function waypointProperties(wp: Waypoint): Record<string, unknown> {
     time: wp.time.toISOString(),
     sog_ms: round(wp.sogMs, 3),
     cog_deg: round(wp.cogDeg, 1),
-    depth_m: null,
+    depth_m: finite(wp.depthM) ? round(wp.depthM, 1) : null,
     mode: wp.mode,
   };
   if (finite(wp.twaDeg)) d.twa_deg = Math.round(wp.twaDeg);
@@ -148,6 +148,7 @@ export function waypointProperties(wp: Waypoint): Record<string, unknown> {
   if (finite(wp.swhMaxM)) d.leg_swh_max_m = round(wp.swhMaxM, 2);
   if (wp.leg !== undefined) d.leg = wp.leg;
   if (wp.role !== undefined) d.role = wp.role;
+  if (wp.tack) d.tack = true;
   return d;
 }
 
@@ -166,6 +167,14 @@ export function routeToGeoJSON(route: Route): Record<string, unknown> {
     smoother_drops: route.smootherDrops ?? 0,
   };
   if (route.forecastCycle) props.forecast_cycle = route.forecastCycle;
+  if (route.drawbridges && route.drawbridges.length) {
+    props.drawbridges = route.drawbridges.map(b => ({
+      lat: round(b.lat, 6),
+      lon: round(b.lon, 6),
+      clear_m: b.clearM === null ? null : round(b.clearM, 1),
+      leg_index: b.legIndex,
+    }));
+  }
   if (route.autoVias && route.autoVias.length) {
     props.auto_vias = route.autoVias.map(v => ({
       name: v.name,

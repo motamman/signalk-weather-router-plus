@@ -181,12 +181,10 @@ function refreshSliderLabels() {
     if (u) u.textContent = c.unit;
     inp.setAttribute('aria-valuetext', lbl.textContent + (c.unit ? ' ' + c.unit : ''));
   }
-  const st = document.getElementById('stages'), stl = document.getElementById('stagesLabel');
-  if (st && stl) stl.textContent = parseInt(st.value, 10) > 0 ? st.value : 'auto';
 }
 (function () {
   const SLIDER_IDS = [
-    'sailThresh', 'stages', 'arrivalRadiusM',
+    'sailThresh', 'arrivalRadiusM',
     'proximityRadiusM', 'xteThresholdM', 'xteSustainSec', 'simPushDeg',
   ];
   for (const id of SLIDER_IDS) {
@@ -194,7 +192,7 @@ function refreshSliderLabels() {
     const lbl = document.getElementById(id + 'Label');
     if (!inp || !lbl) continue;
     inp.addEventListener('input', () => {
-      if (SLIDER_DISPLAY[id] || id === 'stages') refreshSliderLabels(); else lbl.textContent = inp.value;
+      if (SLIDER_DISPLAY[id]) refreshSliderLabels(); else lbl.textContent = inp.value;
     });
   }
   refreshSliderLabels();
@@ -656,8 +654,8 @@ document.getElementById('polarSelect').addEventListener('change', function() {
 // labels update to match.
 (function() {
   const PERSIST_IDS = [
-    'mode', 'sailThresh', 'stages', 'arrivalRadiusM', 'precision',
-    'publishSel', 'proximityRadiusM', 'xteThresholdM', 'xteSustainSec',
+    'mode', 'sailThresh', 'arrivalRadiusM', 'precision',
+    'publishSel', 'smootherSel', 'proximityRadiusM', 'xteThresholdM', 'xteSustainSec',
   ];
   const CHECK_IDS = ['noCurrents', 'noForecast', 'regionalWind', 'avoidAreas'];
   // The sail-speed slider held knots until 2026-10; it holds m/s now under a new key.
@@ -1160,6 +1158,20 @@ function _noteWaiting(s) {
     window.dispatchEvent(new Event('rp:forecast-ready'));
   }
 }
+// ─────────── One section open at a time ───────────
+// The <details> sections directly inside `container` behave as an
+// accordion: opening one closes the others. `toggle` does not bubble, so
+// it is caught in the capture phase on the container (works for sections
+// rendered later too).
+export function oneOpenAtATime(container) {
+  if (!container) return;
+  container.addEventListener('toggle', e => {
+    const d = e.target;
+    if (!d || d.tagName !== 'DETAILS' || !d.open || d.parentElement !== container) return;
+    for (const other of container.querySelectorAll(':scope > details[open]')) if (other !== d) other.open = false;
+  }, true);
+}
+
 // ─────────── Plugin status (header line + Forecast data section) ───────────
 export function loadPluginStatus() {
   const el = document.getElementById('dataStatus');
@@ -1168,6 +1180,7 @@ export function loadPluginStatus() {
     .then(r => r.json())
     .then(s => {
       _lastStatus = s;
+      window.dispatchEvent(new CustomEvent('rp:status', { detail: s }));
       if (el) el.innerHTML = _statusLine(s);
       _noteWaiting(s);
       // First start (coastline, first forecast): check again soon, not in 30 s.
