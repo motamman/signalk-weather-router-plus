@@ -104,9 +104,10 @@ uses [Semantic Versioning](https://semver.org/).
   control, same request field (`sail_thresh_ms`), remembered per browser.
 - **Smoothing** on the Route tab's Plan (Default / On / Off): the
   request's `smoother`, beside Method and Router, remembered per browser.
-  With the Refined router the shortcut smoother never runs (its polish
-  replaces it, and the smoother would take its tacks back); the control
-  is disabled then.
+  The shortcut smoother runs for both routers (2026-10-08, the owner's
+  decision; before that evening it was forced off for Refined): it times
+  every shortcut with the real polar, so two laid-out tacks become one
+  straight leg only where that course is sailable within the tolerance.
 - **Web app tabs.** The Setup tab is gone: its sections (vessel, sailing
   strategy, waypoint behaviour, solver tuning, live re-plan triggers) are
   the **Options** sub-tab of the Route tab, beside **Plan**; the stages

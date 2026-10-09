@@ -1274,16 +1274,12 @@ function _initRouteChoices() {
     el.addEventListener('change', () => { try { localStorage.setItem(key, el.value); } catch (_) {} });
   }
 }
-// Smoothing is built into the Refined router (its cross-track polish; the
-// shortcut smoother would take its tacks back): the control is disabled then.
+// Smoothing applies to both routers (the owner's decision, 2026-10-08): a
+// shortcut replaces laid-out tacks only where the straight course can be
+// sailed within the tolerance, which the smoother times with the real polar.
 function _syncSmoothing() {
-  const router = document.getElementById('router');
   const sm = document.getElementById('smootherSel');
-  const note = document.getElementById('smootherNote');
-  if (!router || !sm) return;
-  const refined = router.value === 'refined';
-  sm.disabled = refined;
-  if (note) note.hidden = !refined;
+  if (sm) sm.disabled = false;
 }
 document.getElementById('router')?.addEventListener('change', _syncSmoothing);
 window.addEventListener('rp:status', e => {
@@ -2111,8 +2107,7 @@ function buildRoutePayload(overrides) {
   const sm = document.getElementById('smootherSel');
   const db = document.getElementById('drawbridges');
   if (db && db.value) body.drawbridges = db.value;
-  if (body.router === 'refined') body.smoother = false;
-  else if (sm && sm.value === 'true') body.smoother = true; else if (sm && sm.value === 'false') body.smoother = false;
+  if (sm && sm.value === 'true') body.smoother = true; else if (sm && sm.value === 'false') body.smoother = false;
   if (document.getElementById('noCurrents').checked) body.no_currents = true;
   const rw = document.getElementById('regionalWind');
   if (rw && !rw.checked) body.wind_model = 'ecmwf';

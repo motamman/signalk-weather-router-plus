@@ -454,3 +454,49 @@ test('land buffer: a channel 445 m wide closes at a 250 m buffer and is sailed d
     }
   );
 });
+
+test('refined router with smoothing: every leg stays sailable, the arrival is within the tolerance, no more waypoints than without', async () => {
+  // The dead-upwind beat of the first refined test, smoothed: a shortcut across two tacks is refused where it
+  // cannot be sailed (dead upwind) and taken only where the straight course is sailable within the tolerance.
+  const land = LandMask.fromPolygons([rect(1, 0.3, 1.5, 0.7, 2)], BBOX, 0.005);
+  const polar = PolarDiagram.parse(POLAR_CSV, ',');
+  const wind = Object.assign(new ConstantWind(12 * 0.514444, 60), {
+    validRange: [T0, new Date(T0.getTime() + 48 * 3600e3)] as [Date, Date],
+  });
+  const [plan] = planLegs(
+    [
+      { lon: 0, lat: 0.5 },
+      { lon: 1, lat: 0.5 },
+    ],
+    'precise',
+    300
+  );
+  const run = async (smoother: boolean): Promise<Route> => {
+    const { inp } = inputs(land, {
+      router: 'refined',
+      polar,
+      vessel: makeVessel({ motorSpeedMs: 1 }),
+      sim: { modePolicy: 'sail_max', sailThreshMs: 1, simStepM: 200 },
+      loadAreas: async () => wind,
+      simplifyM: 10,
+      smoother,
+      smootherTolerance: 0.05,
+    });
+    return runLegPipeline(inp, plan, 0, [0, 0.5], T0);
+  };
+  const plain = await run(false);
+  const smoothed = await run(true);
+  assert.ok(smoothed.waypoints.length <= plain.waypoints.length, `${smoothed.waypoints.length} vs ${plain.waypoints.length}`);
+  assert.ok(smoothed.totalTimeS <= plain.totalTimeS * 1.05 + 1, `${smoothed.totalTimeS} s vs ${plain.totalTimeS} s`);
+  for (let i = 1; i < smoothed.waypoints.length; i++) {
+    const a = smoothed.waypoints[i - 1];
+    const b = smoothed.waypoints[i];
+    const dt = (b.time.getTime() - a.time.getTime()) / 1000;
+    const d = haversineDistanceM(a.lon, a.lat, b.lon, b.lat);
+    assert.ok(dt > 0 && d / dt < 4, `leg ${i}: ${d.toFixed(0)} m in ${dt.toFixed(0)} s`);
+    if (b.mode === 'sailing' && b.twaDeg !== undefined)
+      assert.ok(b.twaDeg >= polar.noGoFloor(12 * 0.514444) - 1e-9, `leg ${i} at TWA ${b.twaDeg}`);
+    assert.ok(!land.legCrossesLandExact(a.lon, a.lat, b.lon, b.lat));
+  }
+  assert.ok(Math.abs(smoothed.waypoints[smoothed.waypoints.length - 1].lon - 1) < 1e-6);
+});

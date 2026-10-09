@@ -693,13 +693,12 @@
     </div>
   </div>
 
-  <label for="smootherSel" title="Replaces runs of waypoints with straight shortcuts when they are clear of land and not much slower (the tolerance is on the Defaults tab). Your own waypoints are always kept. With the Refined router it can take back a tack where a straight line is within the tolerance.">Smoothing</label>
+  <label for="smootherSel" title="Replaces runs of waypoints with straight shortcuts when they are clear of land and not much slower (the tolerance is on the Defaults tab). Your own waypoints are always kept. With the Refined router two tacks become one straight leg only where that course can be sailed within the tolerance.">Smoothing</label>
   <select id="smootherSel" aria-label="Shortcut smoothing">
     <option value="">Default</option>
     <option value="true">On</option>
     <option value="false">Off</option>
   </select>
-  <div id="smootherNote" class="ctl-hint" hidden>Built into the Refined router.</div>
 
   <label for="drawbridges" title="Opening bridges on chart-mesh legs. Ask: the route is planned as if they open, and if it passes under one you are told and offered a re-plan avoiding them. Open: plan as if they open. Avoid: never pass one. The chart's open clearance is checked against your air draft either way. Default: the Defaults tab.">Drawbridges</label>
   <select id="drawbridges" aria-label="Opening bridges">

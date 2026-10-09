@@ -508,8 +508,8 @@ export async function route(
         tackPenaltyS: cfg.routing.tackPenaltyS,
       },
       simplifyM: request.simplify_m ?? cfg.routing.simplifyM,
-      // The refined router polishes its own polyline and lays out tacks the shortcut smoother would take back: never smoothed.
-      smoother: router === 'refined' ? false : (request.smoother ?? cfg.routing.smoother),
+      // Both routers (the owner's decision, 2026-10-08): the smoother times every shortcut with the real polar, so two laid-out tacks become one straight leg only where that course is sailable within the tolerance.
+      smoother: request.smoother ?? cfg.routing.smoother,
       smootherTolerance: request.smoother_tolerance ?? cfg.routing.smootherTolerance,
       loadAreas,
       releaseAreas,
