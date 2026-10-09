@@ -595,16 +595,60 @@ test('pipeline: a leg whose ends lie in two different meshes is not planned as o
   const r = await runLegPipeline(inp, PLAN, 0, [0, 0.5], T0);
   assert.equal(calls.length, 0, 'the mesh leg was not asked for');
   assert.ok(!r.meshLeg);
-  assert.ok(messages.some(m => /^skeleton/.test(m)), 'the coastline search ran: ' + messages.join('\n'));
+  assert.ok(
+    messages.some(m => /^skeleton/.test(m)),
+    'the coastline search ran: ' + messages.join('\n')
+  );
 });
 
 test('stitchMeshSegments: the smoother drops of every segment are summed', () => {
-  const a = routeFromMeshPath([[0, 0], [0.01, 0]], T0, BOAT, null, new NoWind(), new NoCurrent(), SIM)!;
-  const b = routeFromMeshPath([[0.01, 0], [0.02, 0]], new Date(a.waypoints[1].time), BOAT, null, new NoWind(), new NoCurrent(), SIM)!;
+  const a = routeFromMeshPath(
+    [
+      [0, 0],
+      [0.01, 0],
+    ],
+    T0,
+    BOAT,
+    null,
+    new NoWind(),
+    new NoCurrent(),
+    SIM
+  )!;
+  const b = routeFromMeshPath(
+    [
+      [0.01, 0],
+      [0.02, 0],
+    ],
+    new Date(a.waypoints[1].time),
+    BOAT,
+    null,
+    new NoWind(),
+    new NoCurrent(),
+    SIM
+  )!;
   a.smootherDrops = 2;
   b.smootherDrops = 3;
   const r = stitchMeshSegments([a, b], new NoWind());
   assert.equal(r.waypoints.length, 3);
   assert.equal(r.smootherDrops, 5);
-  assert.equal(stitchMeshSegments([routeFromMeshPath([[0, 0], [0.01, 0]], T0, BOAT, null, new NoWind(), new NoCurrent(), SIM)!], new NoWind()).smootherDrops, undefined);
+  assert.equal(
+    stitchMeshSegments(
+      [
+        routeFromMeshPath(
+          [
+            [0, 0],
+            [0.01, 0],
+          ],
+          T0,
+          BOAT,
+          null,
+          new NoWind(),
+          new NoCurrent(),
+          SIM
+        )!,
+      ],
+      new NoWind()
+    ).smootherDrops,
+    undefined
+  );
 });

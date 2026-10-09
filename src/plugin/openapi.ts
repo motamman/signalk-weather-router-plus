@@ -645,11 +645,16 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
       },
       '/api/meshes/refresh': {
         post: {
-          summary: 'Read the mesh catalogue now (readwrite), then download ticked meshes that are missing or have a newer build and delete unticked ones',
+          summary:
+            'Read the mesh catalogue now (readwrite), then download ticked meshes that are missing or have a newer build and delete unticked ones',
           description:
             'Waits for the catalogue read only (the downloads run on). Answers the same body as GET /api/meshes: 200 when the catalogue was read, ' +
             '502 {error: "catalogue not read: …", catalog_url, catalog_updated, catalog_error, store_dir, meshes} when it was not.',
-          responses: { 200: { description: 'The mesh list, as GET /api/meshes' }, 502: { description: 'The catalogue could not be read; the list as it stands' }, 503: { description: 'Plugin not started' } },
+          responses: {
+            200: { description: 'The mesh list, as GET /api/meshes' },
+            502: { description: 'The catalogue could not be read; the list as it stands' },
+            503: { description: 'Plugin not started' },
+          },
         },
       },
       '/api/openapi.json': {

@@ -156,7 +156,10 @@ test('MeshManager: downloads a ticked mesh, marks it ready, re-downloads a newer
     assert.ok(!fs.existsSync(path.join(store, '01CGD.new')) && !fs.existsSync(path.join(store, '01CGD.old')));
     // A copy started for another build is not resumed: same tile size, other content.
     fs.mkdirSync(path.join(store, '01CGD.new'), { recursive: true });
-    fs.writeFileSync(path.join(store, '01CGD.new', '.progress.json'), JSON.stringify({ base: url + 'charts/mesh/01CGD/', build: '2026-10-09T00:00:00Z', files: 1, total: 2, bytes: 1200 }));
+    fs.writeFileSync(
+      path.join(store, '01CGD.new', '.progress.json'),
+      JSON.stringify({ base: url + 'charts/mesh/01CGD/', build: '2026-10-09T00:00:00Z', files: 1, total: 2, bytes: 1200 })
+    );
     fs.writeFileSync(path.join(store, '01CGD.new', 'mesh_001_002.bin'), Buffer.alloc(1300, 7));
     publish(root, '2026-10-10T00:00:00Z', 1300, 9);
     await mgr.reconcile();
