@@ -269,8 +269,12 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   // The config panel's "Read the catalogue now" button: the catalogue is read
   // before the answer, so the body already lists what it says (or its error).
   rw.post('/api/meshes/refresh', async (_req: Request, res: Response) => {
-    await deps.refreshMeshes();
-    json(res, 200, deps.meshes());
+    try {
+      await deps.refreshMeshes();
+      json(res, 200, deps.meshes());
+    } catch (err) {
+      fail(res, err, 500);
+    }
   });
 
   // The config panel's Download coastline button (works before the plugin has a coastline).

@@ -259,6 +259,8 @@ export class MeshManager {
   private removing = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private ctrl: AbortController | null = null;
+  /** A refresh started before `run` (the coastline still downloading): `stop` aborts its read and its pass. */
+  private refreshCtrl: AbortController | null = null;
   /** The pass running now (or queued): its signal and its promise. */
   private reconciling: { signal: AbortSignal; done: Promise<void> } | null = null;
 
@@ -295,18 +297,23 @@ export class MeshManager {
    * (awaited, the same timeout as at start) and then run the usual pass in
    * the background (download what is ticked and missing or stale, delete
    * what is unticked). Not awaited past the read: a pass may download
-   * gigabytes. A pass already running is shared, not doubled.
+   * gigabytes. A pass already running is shared, not doubled. Before `run`
+   * (the plugin still downloading the coastline) the work runs on a
+   * controller of its own, which `stop` aborts like the loop's.
    */
   async refresh(): Promise<void> {
-    const signal = this.ctrl?.signal ?? new AbortController().signal;
     if (this.reconciling) return this.reconciling.done.catch(() => undefined);
+    const signal = this.ctrl?.signal ?? (this.refreshCtrl ??= new AbortController()).signal;
     await this.fetchCatalog(signal);
+    if (signal.aborted) return;
     void this.reconcile(signal).catch(() => undefined);
   }
 
   stop(): void {
     this.ctrl?.abort();
     this.ctrl = null;
+    this.refreshCtrl?.abort();
+    this.refreshCtrl = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
