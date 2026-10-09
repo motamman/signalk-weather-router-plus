@@ -12,7 +12,7 @@ import {
   slerpSamples,
   wrapLon,
 } from './geodesy';
-import { LandMask } from './landmask';
+import { dilate, LandMask } from './landmask';
 import type { ShapePolygon } from './shapefile';
 import { pointInShape } from './shapefile';
 import { buildCoarseGrid } from './grid';
@@ -179,4 +179,62 @@ test('land checks find a spit narrower than the old 200 m sampling gap (Point Ju
   const shallow: string[] = [];
   walkGrid(0.2, 0.1, 3.7, 0.9, (i, j) => (shallow.push(`${i},${j}`), false));
   assert.deepEqual(shallow, ['0,0', '1,0', '2,0', '3,0']);
+});
+
+test('land buffer: the raster grows by the buffer and the exact tests measure to the shoreline', () => {
+  // An island from lon 0 to 1, lat 0 to 1; raster 0.001° (111 m); the box at the equator so a degree of lon is 111 km too.
+  const island = square(1, 0, 0, 1, 1);
+  const bbox = { west: -1, south: -1, east: 2, north: 2 };
+  const plain = LandMask.fromPolygons([island], bbox, 0.001);
+  const m100 = plain.withBuffer(100);
+  const m300 = plain.withBuffer(300);
+  assert.equal(plain.bufferM, 0);
+  assert.equal(m100.bufferM, 100);
+  // A point 200 m east of the island's east shore (lon 1 + 200 m).
+  const lon200 = 1 + 200 / 111_320;
+  assert.equal(plain.isLandExact(lon200, 0.5), false);
+  assert.equal(m100.isLandExact(lon200, 0.5), false, '200 m off, buffer 100: water');
+  assert.equal(m300.isLandExact(lon200, 0.5), true, '200 m off, buffer 300: land');
+  assert.equal(m300.isLand(lon200, 0.5), true, 'the grown raster agrees');
+  // The raster is conservative: the shore's own cell counts as land, plus the grown cells (one for 100 m at 111 m cells).
+  // 200 m out is in that grown cell; 350 m out is not.
+  assert.equal(m100.isLand(lon200, 0.5), true, 'the grown raster, conservative');
+  assert.equal(m100.isLand(1 + 350 / 111_320, 0.5), false, '350 m out is beyond the grown cell');
+  // A move running north-south 200 m off the east shore.
+  assert.equal(plain.legCrossesLandExact(lon200, -0.5, lon200, 1.5), false);
+  assert.equal(m100.legCrossesLandExact(lon200, -0.5, lon200, 1.5), false);
+  assert.equal(m300.legCrossesLandExact(lon200, -0.5, lon200, 1.5), true);
+  assert.deepEqual(Array.from(m300.legsCrossLandBulk([lon200], [-0.5], [lon200], [1.5])), [1]);
+  // Far from land both agree.
+  assert.equal(m300.isLandExact(1.5, 1.5), false);
+  assert.equal(m300.legCrossesLandExact(1.2, -0.5, 1.2, 1.5), false);
+  // The underlying mask is untouched; 0 gives the mask itself.
+  assert.equal(plain.isLand(lon200, 0.5), false);
+  assert.equal(plain.withBuffer(0), plain);
+});
+
+test('dilate: a cell is set when any cell within the window is', () => {
+  const nx = 5;
+  const ny = 4;
+  const r = new Uint8Array(nx * ny);
+  r[1 * nx + 2] = 1; // (i=2, j=1)
+  const d = dilate(r, nx, ny, 1, 1);
+  const at = (i: number, j: number): number => d[j * nx + i];
+  assert.equal(at(2, 1), 1);
+  assert.equal(at(1, 0), 1);
+  assert.equal(at(3, 2), 1);
+  assert.equal(at(0, 0), 0);
+  assert.equal(at(4, 1), 0);
+  assert.equal(at(2, 3), 0);
+  assert.equal(
+    Array.from(d).reduce((a, b) => a + b, 0),
+    9
+  );
+  assert.deepEqual(Array.from(dilate(r, nx, ny, 0, 0)), Array.from(r));
+  const dx = dilate(r, nx, ny, 2, 0);
+  assert.equal(
+    Array.from(dx).reduce((a, b) => a + b, 0),
+    5,
+    'east-west only'
+  );
 });

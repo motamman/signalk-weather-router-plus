@@ -38,7 +38,17 @@ import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSI
       if (c && c.inv) return { unit: c.unit, fn: c.fn, inv: c.inv, prec: Math.max(1, c.precision) + 1 };
       return { unit: UNIT_MISSING, fn: () => NaN, inv: () => NaN, prec: 0, missing: true };
     }
-    if (q === 'hours' || q === 'minutes' || q === 'seconds') {
+    // ======================================================================
+    // EXCEPTION TO THE UNITS RULE (the owner's decision, 2026-10-08).
+    // Everywhere else the display unit comes from the Signal K unit
+    // preferences and nothing else. Signal K has ONE time category, and a
+    // preference of "hour" shows a 30 s tacking penalty as "0.01 hour".
+    // Until a seconds category exists in Signal K (the owner is dealing with
+    // that separately), a setting declared in SECONDS is shown and typed in
+    // seconds, full stop. Remove this block when that category exists.
+    // ======================================================================
+    if (q === 'seconds') return lin('s', 1, 0);
+    if (q === 'hours' || q === 'minutes') {
       // Durations in the user's time unit. A duration-format preference
       // (e.g. "1d 2h") has no single unit to type a number in: no unit.
       const c = UI_UNITS.time;

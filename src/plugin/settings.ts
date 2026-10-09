@@ -63,6 +63,12 @@ export interface AppSettings {
     headings: number;
     headingIncrement: number;
     sailThreshold: number;
+    /** Seconds lost per tack or gybe, charged by both routers. */
+    tackPenalty: number;
+    /** On a chart mesh leg, keep at least this far (m) from every triangle the boat cannot use; 0 = none. */
+    navigableBuffer: number;
+    /** Keep at least this far (m) from the coastline; 0 = none. */
+    landBuffer: number;
     /** Polar rows closer to the wind than this (degrees) are ignored; 0 = the polar as written. */
     noGoMinAngle: number;
     /** A leg is not allowed where the wind speed (m/s) exceeds this; null = no limit. */
@@ -464,6 +470,46 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     max: 50 * KTS_TO_MS,
     default: 4.9 * KTS_TO_MS,
     help: 'Below this polar speed the route motors (sail_max mode).',
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.tackPenalty',
+    group: 'routing',
+    label: 'Tacking penalty',
+    type: 'number',
+    unit: 's',
+    // EXCEPTION: shown and typed in seconds whatever the Signal K time preference says (public/rp-settings.js, the owner's decision 2026-10-08, until Signal K has a seconds category).
+    quantity: 'seconds',
+    min: 0,
+    max: 3600,
+    default: 30,
+    help: 'Time lost on every tack or gybe. Both routers charge it: a branch that tacks arrives later and ranks lower, so routes with needless tacks lose to straighter ones.',
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.landBuffer',
+    group: 'routing',
+    label: 'Buffer from land',
+    type: 'number',
+    unit: 'm',
+    quantity: 'short_distance',
+    min: 0,
+    max: 5000,
+    default: 0,
+    help: 'The route keeps at least this far from the coastline: the search, the smoother and the final check all measure to the shoreline. A start or end closer than this is moved out to it; a passage narrower than twice this closes. 0 = none.',
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.navigableBuffer',
+    group: 'routing',
+    label: 'Buffer from unusable water',
+    type: 'number',
+    unit: 'm',
+    quantity: 'short_distance',
+    min: 0,
+    max: 5000,
+    default: 0,
+    help: 'On a chart-mesh leg the route keeps at least this far from every bit of water the boat cannot use (charted depth under the draft, bridges under the air draft, rocks, marks, structures, areas to avoid). The mesh route and the sailed stretches both keep it. A passage narrower than twice this closes. 0 = none.',
     reload: 'next_job',
   },
   {

@@ -7,6 +7,8 @@ import { planLegs } from './multileg';
 import { runLegPipeline, type LegPipelineInputs } from './pipeline';
 import { OceanPropagator } from './propagator';
 import { makeVessel } from '../vessel/vessel';
+import { tackBetween } from './legsim';
+import type { Route } from './route';
 import { PolarDiagram } from '../vessel/polar';
 import { haversineDistanceM } from '../geo/geodesy';
 import { ConstantWind } from './environment';
@@ -316,4 +318,139 @@ test('refined router: a straight course that veers into the no-go angle mid-leg 
     assert.ok(!land.legCrossesLandExact(a.lon, a.lat, b.lon, b.lat));
   }
   assert.ok(Math.abs(r.waypoints[r.waypoints.length - 1].lon - 1) < 1e-6);
+});
+
+test("refined router: dead downwind in a channel too narrow to gybe, the course is sailed straight at the polar's running speed", async () => {
+  // A channel 0.003° (330 m) wide between two shores, running east; wind from the west; the leg is dead downwind.
+  // The hull says a run is a mix of two broad reaches, but no gybe leg of TACK_MIN_M fits between the shores.
+  const land = LandMask.fromPolygons([rect(1, -0.1, 0.5015, 0.5, 0.7), rect(2, -0.1, 0.3, 0.5, 0.4985)], BBOX, 0.0005);
+  const polar = PolarDiagram.parse(POLAR_CSV, ',');
+  const wind = Object.assign(new ConstantWind(12 * 0.514444, 270), {
+    validRange: [T0, new Date(T0.getTime() + 48 * 3600e3)] as [Date, Date],
+  });
+  const [plan] = planLegs(
+    [
+      { lon: 0.02, lat: 0.5 },
+      { lon: 0.3, lat: 0.5 },
+    ],
+    'precise',
+    300
+  );
+  const { inp } = inputs(land, {
+    router: 'refined',
+    stages: 2,
+    polar,
+    vessel: makeVessel({ motorSpeedMs: 1 }),
+    sim: { modePolicy: 'sail_max', sailThreshMs: 0, simStepM: 200 },
+    loadAreas: async () => wind,
+  });
+  const r = await runLegPipeline(inp, plan, 0, [0.02, 0.5], T0);
+  for (const w of r.waypoints) assert.ok(w.lat > 0.4985 && w.lat < 0.5015, `waypoint ${w.lat}, ${w.lon} is inside the channel`);
+  for (let i = 1; i < r.waypoints.length; i++) {
+    const a = r.waypoints[i - 1];
+    const b = r.waypoints[i];
+    assert.ok(!land.legCrossesLandExact(a.lon, a.lat, b.lon, b.lat), `leg ${i} is clear`);
+    const dt = (b.time.getTime() - a.time.getTime()) / 1000;
+    const d = haversineDistanceM(a.lon, a.lat, b.lon, b.lat);
+    assert.ok(dt > 0 && d / dt < 4, `leg ${i}: ${d.toFixed(0)} m in ${dt.toFixed(0)} s`);
+  }
+  assert.equal(r.motoringTimeS, 0);
+  assert.ok(Math.abs(r.waypoints[r.waypoints.length - 1].lon - 0.3) < 1e-6);
+});
+
+/** Tacks in a route: consecutive sailed legs with the wind on the other side of the boat. */
+function countTacks(r: Route): number {
+  let n = 0;
+  const wps = r.waypoints;
+  for (let i = 2; i < wps.length; i++) {
+    const a = wps[i - 1];
+    const b = wps[i];
+    if (a.mode !== 'sailing' || b.mode !== 'sailing' || a.windDirDeg === undefined) continue;
+    if (tackBetween(a.cogDeg, b.cogDeg, a.windDirDeg)) n++;
+  }
+  return n;
+}
+
+test('tacking penalty: a dead-upwind leg with a large penalty tacks no more often and arrives later by at least the penalty, in both routers', async () => {
+  const land = LandMask.fromPolygons([rect(1, 0.3, 1.5, 0.7, 2)], BBOX, 0.005);
+  const polar = PolarDiagram.parse(POLAR_CSV, ',');
+  const wind = Object.assign(new ConstantWind(12 * 0.514444, 90), {
+    validRange: [T0, new Date(T0.getTime() + 48 * 3600e3)] as [Date, Date],
+  });
+  const [plan] = planLegs(
+    [
+      { lon: 0, lat: 0.5 },
+      { lon: 1, lat: 0.5 },
+    ],
+    'precise',
+    300
+  );
+  for (const router of ['standard', 'refined'] as const) {
+    const run = async (tackPenaltyS: number): Promise<Route> => {
+      const { inp } = inputs(land, {
+        router,
+        polar,
+        vessel: makeVessel({ motorSpeedMs: 1 }),
+        sim: { modePolicy: 'sail_max', sailThreshMs: 1, simStepM: 200, tackPenaltyS },
+        loadAreas: async () => wind,
+      });
+      return runLegPipeline(inp, plan, 0, [0, 0.5], T0);
+    };
+    const free = await run(0);
+    const dear = await run(1800);
+    const tacksFree = countTacks(free);
+    const tacksDear = countTacks(dear);
+    assert.ok(tacksFree >= 1, `${router}: the beat tacks at least once (${tacksFree})`);
+    // The standard search ranks a tacking branch lower, so it tacks no more often. The refined router's
+    // layout places tacks by its fixed tack length whatever they cost (measured 2026-10-08: 22 with the
+    // penalty, 16 without, on this beat), so for it only the time is asserted.
+    if (router === 'standard') assert.ok(tacksDear <= tacksFree, `${router}: ${tacksDear} tacks with the penalty, ${tacksFree} without`);
+    assert.ok(tacksDear >= 1, `${router}: a beat cannot avoid every tack (${tacksDear})`);
+    assert.ok(
+      dear.totalTimeS >= free.totalTimeS + 1800 - 1,
+      `${router}: with the penalty ${dear.totalTimeS} s, without ${free.totalTimeS} s: at least one 1800 s tack is charged`
+    );
+  }
+});
+
+test('tackBetween: the wind changing sides is a tack; dead upwind or downwind is neither side', () => {
+  assert.equal(tackBetween(45, 315, 0), true, 'starboard to port, wind from north');
+  assert.equal(tackBetween(45, 60, 0), false, 'same side');
+  assert.equal(tackBetween(135, 225, 0), true, 'a gybe');
+  assert.equal(tackBetween(0, 45, 0), false, 'from dead upwind');
+  assert.equal(tackBetween(45, 180, 0), false, 'to dead downwind');
+  assert.equal(tackBetween(350, 10, 0), true, 'across the wind near north');
+  assert.equal(tackBetween(80, 100, 90), true, 'wind from the east: north-east to south-east');
+});
+
+test('land buffer: a channel 445 m wide closes at a 250 m buffer and is sailed down its middle at 150 m', async () => {
+  // Two shores spanning the whole box: land north of lat 0.502 and south of lat 0.498, a 0.004° (445 m) channel with no
+  // way round; raster 0.0001° (11 m) so the conservative growth (buffer rounded up a cell, plus the shore's own cell)
+  // leaves about 110 m of water at 150 m and none at 250 m. Motor, calm.
+  const box = { west: -0.2, south: 0.3, east: 1.2, north: 0.7 };
+  const land = LandMask.fromPolygons([rect(1, -0.2, 0.502, 1.2, 0.7), rect(2, -0.2, 0.3, 1.2, 0.498)], box, 0.0001);
+  const [plan] = planLegs(
+    [
+      { lon: 0, lat: 0.5 },
+      { lon: 1, lat: 0.5 },
+    ],
+    'precise',
+    300
+  );
+  const open = land.withBuffer(150);
+  const { inp } = inputs(land, { landFor: () => open, landBufferM: 150, stages: 4 });
+  const r = await runLegPipeline(inp, plan, 0, [0, 0.5], T0);
+  for (const w of r.waypoints) {
+    assert.ok(!open.isLandExact(w.lon, w.lat), `waypoint ${w.lat}, ${w.lon} keeps 150 m from the shore`);
+    assert.ok(Math.abs(w.lat - 0.5) < 0.0007, `waypoint ${w.lat} in the channel's middle`);
+  }
+  const closed = land.withBuffer(250);
+  const { inp: inp2 } = inputs(land, { landFor: () => closed, landBufferM: 250, stages: 4 });
+  await assert.rejects(
+    () => runLegPipeline(inp2, plan, 0, [0, 0.5], T0),
+    (err: Error) => {
+      assert.match(err.message, /on land|boxed in|no live waypoints|crosses land/);
+      return true;
+    }
+  );
 });

@@ -92,6 +92,7 @@ export function buildContext(prop: PropagatorParams, args: ComputeRouteArgs): Se
     maxWindMs: args.maxWindMs,
     maxSwhM: args.maxSwhM,
     comfortWeight: args.comfortWeight,
+    tackPenaltyS: args.tackPenaltyS,
   };
   const hasLimit = args.maxWindMs !== undefined || args.maxSwhM !== undefined;
   const limitNote = hasLimit ? ' or over the wind/wave limit' : '';

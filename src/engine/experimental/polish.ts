@@ -21,7 +21,7 @@
  */
 
 import { haversineBearing, haversineDistanceM, projectAlongBearing } from '../../geo/geodesy';
-import type { LandMask } from '../../geo/landmask';
+import type { LandTest } from '../../geo/landmask';
 import type { Waypoint } from '../route';
 
 export const POLISH_OFFSETS_M = [2000, 1000, 500, 250];
@@ -40,7 +40,7 @@ export interface PolishResult {
  * `timeLeg(a, b)` sets b's time (and mode) from a's, returning false when
  * the leg cannot be sailed. The waypoints are moved and re-timed in place.
  */
-export function crossTrackPolish(wps: Waypoint[], land: LandMask, timeLeg: (a: Waypoint, b: Waypoint) => boolean): PolishResult {
+export function crossTrackPolish(wps: Waypoint[], land: LandTest, timeLeg: (a: Waypoint, b: Waypoint) => boolean): PolishResult {
   const n = wps.length;
   const res: PolishResult = { passes: 0, moved: 0, gainedS: 0 };
   if (n < 3) return res;

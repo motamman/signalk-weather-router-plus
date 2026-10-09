@@ -9,7 +9,7 @@
  * Selected per request (`router`), else by the routing.router setting.
  */
 
-import type { LandMask } from '../geo/landmask';
+import type { LandTest } from '../geo/landmask';
 import { ExperimentalPropagator } from './experimental/propagator';
 import { OceanPropagator } from './propagator';
 import type { Route } from './route';
@@ -23,6 +23,6 @@ export interface OpenWaterRouter {
   computeRoute(args: ComputeRouteArgs): Route;
 }
 
-export function makeRouter(kind: RouterKind, land: LandMask, opts: PropagatorOptions): OpenWaterRouter {
+export function makeRouter(kind: RouterKind, land: LandTest, opts: PropagatorOptions): OpenWaterRouter {
   return kind === 'refined' ? new ExperimentalPropagator(land, opts) : new OceanPropagator(land, opts);
 }

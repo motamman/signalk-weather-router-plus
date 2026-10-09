@@ -11,10 +11,11 @@
  *  - rmtree:   count and delete one directory tree (a superseded tile
  *              generation: hundreds of thousands of files);
  *  - regional: decode one signalk-grib-downloader run (decodeRegionalRun);
- *  - mesh:     route one leg on the chart mesh (engine/mesh): the tiles of
- *              the leg's box are about 1 GB of typed arrays for 6 M
- *              triangles (brain, 2026-10-08), which the route worker must
- *              not keep;
+ *  - mesh-leg: plan one leg on the chart mesh (plugin/meshlegtask.ts,
+ *              engine/mesh/legrun.ts): the tiles of the leg's box are
+ *              about 1 GB of typed arrays for 6 M triangles (brain,
+ *              2026-10-08), which the route worker must not keep; the
+ *              task streams its progress before its answer;
  *  - mesh-download: mirror one published mesh folder (plugin/meshes.ts)
  *              file by file into a folder, resumable, progress in
  *              `.progress.json` there.
@@ -25,13 +26,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { RegionalSource } from '../data/regional';
 import type { RegionalDecodeResult } from '../data/regionaldecode';
-import type { MeshRouteResult, MeshRules } from '../engine/mesh/route';
+import type { MeshLegEvent, MeshLegResult, MeshLegTask } from './meshlegtask';
 
 export type ChildTask =
   | { task: 'rmtree'; dir: string }
   | { task: 'regional'; src: RegionalSource; srcDir: string; dataDir: string; keepRuns: number }
-  | { task: 'mesh'; dir: string; start: [number, number]; end: [number, number]; rules: MeshRules }
+  | MeshLegTask
   | { task: 'mesh-download'; base: string; dest: string };
+
+/** A message a task sends before its answer (the mesh leg's progress and stage fronts). */
+export type ChildEvent = MeshLegEvent;
 
 export interface MeshDownloadResult {
   files: number;
@@ -46,8 +50,8 @@ export interface RmtreeResult {
 
 export type ChildTaskResult<T extends ChildTask> = T extends { task: 'rmtree' }
   ? RmtreeResult
-  : T extends { task: 'mesh' }
-    ? MeshRouteResult
+  : T extends { task: 'mesh-leg' }
+    ? MeshLegResult
     : T extends { task: 'mesh-download' }
       ? MeshDownloadResult
       : RegionalDecodeResult;
@@ -59,7 +63,12 @@ const isTs = __filename.endsWith('.ts');
  * on its error, exit or timeout. An aborted `signal` kills the child and
  * rejects.
  */
-export function runChildTask<T extends ChildTask>(task: T, timeoutMs = 30 * 60_000, signal?: AbortSignal): Promise<ChildTaskResult<T>> {
+export function runChildTask<T extends ChildTask>(
+  task: T,
+  timeoutMs = 30 * 60_000,
+  signal?: AbortSignal,
+  onEvent?: (e: ChildEvent) => void
+): Promise<ChildTaskResult<T>> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(new Error(`${task.task} child process cancelled`));
@@ -96,9 +105,13 @@ export function runChildTask<T extends ChildTask>(task: T, timeoutMs = 30 * 60_0
     child.stderr?.on('data', d => {
       if (stderr.length < 4000) stderr += String(d);
     });
-    child.on('message', (m: { ok: boolean; result?: ChildTaskResult<T>; error?: string }) =>
-      finish(() => (m.ok ? resolve(m.result as ChildTaskResult<T>) : reject(new Error(m.error ?? `${task.task} child process failed`))))
-    );
+    child.on('message', (m: { ok?: boolean; result?: ChildTaskResult<T>; error?: string; event?: ChildEvent }) => {
+      if (m.event) {
+        onEvent?.(m.event);
+        return;
+      }
+      finish(() => (m.ok ? resolve(m.result as ChildTaskResult<T>) : reject(new Error(m.error ?? `${task.task} child process failed`))));
+    });
     child.on('error', err => finish(() => reject(err)));
     child.on('exit', (code, signal) =>
       finish(() =>
@@ -235,10 +248,9 @@ async function runTask(t: ChildTask): Promise<unknown> {
       const { decodeRegionalRun } = await import('../data/regionaldecode');
       return decodeRegionalRun(t.src, t.srcDir, t.dataDir, t.keepRuns);
     }
-    case 'mesh': {
-      const { MeshStore } = await import('../engine/mesh/store');
-      const { meshRoute } = await import('../engine/mesh/route');
-      return meshRoute(MeshStore.open(t.dir), t.start, t.end, t.rules);
+    case 'mesh-leg': {
+      const { runMeshLegTask } = await import('./meshlegtask');
+      return runMeshLegTask(t, event => process.send!({ event }));
     }
     case 'mesh-download':
       return downloadMesh(t.base, t.dest);

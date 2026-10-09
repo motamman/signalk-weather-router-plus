@@ -11,7 +11,7 @@ import { alongTrackDistanceM, haversineBearing, haversineDistanceM, projectAlong
 import { simulateLegTime } from '../legsim';
 import { recomputePerWaypointMetadata, type Route, type RouteWarning, type Waypoint } from '../route';
 import { enrichWaypoints } from './enrich';
-import type { Terminal } from './terminal';
+import { MIN_FINAL_LEG_M, type Terminal } from './terminal';
 import type { Candidate, SearchContext } from './types';
 import type { SkeletonGuide } from './zones';
 
@@ -32,6 +32,19 @@ export function assembleRoute(ctx: SearchContext, guide: SkeletonGuide, stages: 
   chain.reverse();
   if (tackCand) chain.push(tackCand);
   if (finalCand) chain.push(finalCand);
+  // A candidate that landed on the destination (the stage step dividing
+  // the distance exactly) gets a final hop of millimetres: the route then
+  // ends with the same point twice and a zero-length leg (2026-10-08, a
+  // 330 m channel dead downwind in the pipeline tests). The hop is dropped
+  // and the candidate's waypoint takes the exact end instead.
+  let snapEnd: [number, number] | null = null;
+  if (finalCand && chain.length >= 2) {
+    const prev = chain[chain.length - 2];
+    if (haversineDistanceM(prev.lon, prev.lat, finalCand.lon, finalCand.lat) < MIN_FINAL_LEG_M) {
+      chain.pop();
+      snapEnd = [finalCand.lon, finalCand.lat];
+    }
+  }
 
   // Build waypoints.
   const wps: Waypoint[] = [];
@@ -110,6 +123,10 @@ export function assembleRoute(ctx: SearchContext, guide: SkeletonGuide, stages: 
     }
   });
 
+  if (snapEnd) {
+    wps[wps.length - 1].lon = snapEnd[0];
+    wps[wps.length - 1].lat = snapEnd[1];
+  }
   enrichWaypoints(wps, wind, current);
 
   const route: Route = {

@@ -18,6 +18,8 @@ export interface Waypoint {
   /** Course over ground into this waypoint, degrees true. */
   cogDeg: number;
   mode: Mode;
+  /** Charted depth under the waypoint, metres, from the chart mesh (mesh legs only). */
+  depthM?: number;
   twaDeg?: number;
   windMs?: number;
   /** Wind direction FROM, degrees true. */

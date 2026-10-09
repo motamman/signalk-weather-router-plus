@@ -144,6 +144,12 @@ export interface ResolvedConfig {
     headings: number;
     headingIncrementDeg: number;
     sailThreshMs: number;
+    /** Seconds lost per tack or gybe. */
+    tackPenaltyS: number;
+    /** Buffer from unusable water on mesh legs, metres (0 = none). */
+    navigableBufferM: number;
+    /** Buffer from the coastline, metres (0 = none). */
+    landBufferM: number;
     /** Polar rows closer to the wind than this many degrees are ignored (0 = as written). */
     noGoMinAngleDeg: number;
     maxWindMs: number | null;
@@ -409,6 +415,9 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       headings: r.headings,
       headingIncrementDeg: r.headingIncrement,
       sailThreshMs: r.sailThreshold,
+      tackPenaltyS: r.tackPenalty ?? 30,
+      navigableBufferM: r.navigableBuffer ?? 0,
+      landBufferM: r.landBuffer ?? 0,
       noGoMinAngleDeg: r.noGoMinAngle ?? 0,
       maxWindMs: r.maxWind ?? null,
       maxSwhM: r.maxSwh ?? null,

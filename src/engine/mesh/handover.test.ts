@@ -20,29 +20,58 @@ import { runLegPipeline, type LegPipelineInputs } from '../pipeline';
 import type { Route } from '../route';
 import { makeVessel } from '../../vessel/vessel';
 import { findHandover, OPEN_WATER_WIDTH_M, sliceCorridor, stitchLegParts } from './handover';
-import type { MeshLegRouter } from './leg';
+import type { MeshLegRunner } from './leg';
+import { runMeshLeg } from './legrun';
 
 const T0 = new Date('2026-01-01T00:00:00Z');
 
-/** A mesh covering every point west of `eastEdge`; routes as a straight line, narrow water everywhere. */
-function meshWestOf(eastEdge: number): { mesh: MeshLegRouter; calls: [number, number][][] } {
+/** A mesh covering every point west of `eastEdge`; routes as a straight line, narrow water everywhere, nothing blocked. */
+function meshWestOf(eastEdge: number): { mesh: MeshLegRunner; calls: [number, number][][] } {
   const calls: [number, number][][] = [];
+  const open = {
+    isLand: () => false,
+    isLandExact: () => false,
+    legCrossesLandExact: () => false,
+    legsCrossLandBulk: (la: ArrayLike<number>) => new Uint8Array(la.length),
+    depthAt: () => null,
+  };
   return {
     mesh: {
       covers: pts => pts.every(p => p[0] < eastEdge),
-      route: async (start, end) => {
+      leg: async a => {
+        const start = a.legStart;
+        const end = a.plan.end;
         calls.push([start, end]);
-        return {
-          ok: true,
-          path: [start, end],
-          widths: [
-            [100, 100],
-            [100, 100],
-          ],
-          lengthM: haversineDistanceM(start[0], start[1], end[0], end[1]),
-          costS: 1,
-          stats: { trianglesLoaded: 1, blocked: 0, expanded: 1, readMs: 0, prepMs: 0, searchMs: 0, funnelMs: 0 },
-        };
+        return runMeshLeg({
+          result: {
+            ok: true,
+            path: [start, end],
+            widths: [
+              [100, 100],
+              [100, 100],
+            ],
+            lengthM: haversineDistanceM(start[0], start[1], end[0], end[1]),
+            costS: 1,
+            stats: {
+              trianglesLoaded: 1,
+              blocked: 0,
+              expanded: 1,
+              readMs: 0,
+              prepMs: 0,
+              searchMs: 0,
+              funnelMs: 0,
+              padDeg: 0.5,
+              attempts: 1,
+              bufferM: 0,
+              buffered: 0,
+              bufferMs: 0,
+            },
+          },
+          land: open,
+          ...a,
+          wind: null,
+          current: new NoCurrent(),
+        });
       },
     },
     calls,
@@ -92,7 +121,7 @@ test('findHandover: the first sustained-open point after the last narrow one ins
   const narrow = corridorAlong(w.map(() => OPEN_WATER_WIDTH_M - 1));
   assert.equal(findHandover(narrow, 'start', mesh)!.index, 22);
   // From the end: a mesh covering the east.
-  const east: MeshLegRouter = { ...mesh, covers: pts => pts.every(p => p[0] > 0.5) };
+  const east: MeshLegRunner = { ...mesh, covers: pts => pts.every(p => p[0] > 0.5) };
   const wEnd = Array.from({ length: 51 }, (_x, i) => (i <= 40 ? 5000 : 800));
   const he = findHandover(corridorAlong(wEnd), 'end', east);
   assert.ok(he);
@@ -257,7 +286,7 @@ test('pipeline: a leg starting in a channel inside the mesh is routed on the mes
     300
   );
   const r = await runLegPipeline(inp, plan, 0, [160.7, 0], T0);
-  assert.equal(r.meshLeg, true);
+  assert.equal(r.meshLeg, true, messages.join('\n'));
   assert.equal(calls.length, 1, 'the mesh was asked once, for the part to the handover');
   const [meshStart, meshEnd] = calls[0];
   assert.deepEqual(meshStart, [160.7, 0]);

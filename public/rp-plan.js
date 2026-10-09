@@ -1968,8 +1968,8 @@ function _legCardHtml(f, i, cw) {
   // index weighted for that angle (the encounter index), by band.
   const seasStr = _seasHtml(p.next_seas_sector, p.next_seas_side, p.next_encounter_index);
 
-  // Depth: the plugin has no bathymetry, so `depth_m` is null and the
-  // card shows "—".
+  // Depth: the charted depth under the waypoint from the chart mesh on
+  // mesh legs (`depth_m`); null elsewhere, and the card shows "—".
   const depth = depthM != null ? fmtDepth(depthM) : '—';
 
   // Distance + time of the leg DEPARTING this waypoint

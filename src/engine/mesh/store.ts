@@ -121,8 +121,8 @@ export class MeshStore {
     return bboxContains({ west: t.bbox[0], south: t.bbox[1], east: t.bbox[2], north: t.bbox[3] }, lon, lat);
   }
 
-  /** Read every tile whose cell meets the box into one mesh (metres frame about the box's mid-latitude). */
-  load(box: BBox): LoadedMesh {
+  /** The tiles whose cells meet the box, sorted by first id. */
+  private tilesIn(box: BBox): MeshTileInfo[] {
     const [i0, j0] = this.tileIJ(box.west, box.south);
     const [i1, j1] = this.tileIJ(box.east, box.north);
     const infos: MeshTileInfo[] = [];
@@ -133,6 +133,19 @@ export class MeshStore {
       }
     // Sorted by first id so neighbours can be remapped by binary search.
     infos.sort((a, b) => a.first - b.first);
+    return infos;
+  }
+
+  /** How many triangles load(box) would read, from the index alone. */
+  countTriangles(box: BBox): number {
+    let n = 0;
+    for (const t of this.tilesIn(box)) n += t.n;
+    return n;
+  }
+
+  /** Read every tile whose cell meets the box into one mesh (metres frame about the box's mid-latitude). */
+  load(box: BBox): LoadedMesh {
+    const infos = this.tilesIn(box);
     let n = 0;
     const tiles = infos.map(info => {
       const t = { info, offset: n };

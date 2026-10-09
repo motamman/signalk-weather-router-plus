@@ -14,16 +14,65 @@ import type { PolarDiagram } from '../../vessel/polar';
 import type { VesselParams } from '../../vessel/vessel';
 import type { CurrentSource, WindSource } from '../environment';
 import { simulateLegTime, type SimOptions } from '../legsim';
+import type { LegPlan } from '../multileg';
+import type { ProgressFn } from '../progress';
+import type { PropagatorOptions } from '../propagator';
+import type { RouterKind } from '../router';
+import type { CorridorInput } from '../search/types';
+import { MAX_SCAN_M } from './width';
 import { enrichLegRanges, enrichWaypoints } from '../propagator';
 import { haversineDistanceM } from '../../geo/geodesy';
 import { recomputePerWaypointMetadata, type Route, type RouteWarning, type Waypoint } from '../route';
 import { recomputeTotals } from '../smoother';
-import type { MeshRouteResult, MeshRules } from './route';
+import type { MeshRules } from './route';
 
-export interface MeshLegRouter {
+/** What the pipeline hands over for a leg on the mesh (legrun.ts plans it where the mesh is loaded). */
+export interface MeshLegArgs {
+  plan: LegPlan;
+  legIndex: number;
+  legStart: [number, number];
+  legDeparture: Date;
+  tag: string;
+  multi: boolean;
+  rules: MeshRules;
+  vessel: VesselParams;
+  polar: PolarDiagram | null;
+  sim: SimOptions;
+  router?: RouterKind;
+  propagator: Omit<PropagatorOptions, 'stages'>;
+  stages: number;
+  /** RDP tolerance, metres (0 = off); the shortcut smoother and its time tolerance (ratio), as on coastline legs. */
+  simplifyM: number;
+  smoother: boolean;
+  smootherTolerance: number;
+  progress: ProgressFn;
+  shouldCancel: () => boolean;
+}
+
+/**
+ * The chart mesh for the pipeline: which legs it covers, and the whole leg
+ * planned on it (the plugin: in the child process holding the mesh,
+ * plugin/meshlegtask.ts; the tests: in-process). Null when the mesh cannot
+ * take the leg: the pipeline then routes it on the coastline search.
+ */
+export interface MeshLegRunner {
   /** Every point lies in the mesh (a tile exists and holds the point). */
   covers(points: [number, number][]): boolean;
-  route(start: [number, number], end: [number, number], rules: MeshRules): Promise<MeshRouteResult>;
+  leg(args: MeshLegArgs): Promise<Route | null>;
+}
+
+/**
+ * The mesh route as the open-water search's corridor (the parent planner's
+ * hybrid rule: the mesh route is the skeleton). Without it the search drew
+ * its own coarse skeleton on the coastline, which cut across the tip of
+ * Monomoy where the mesh route rounds it (2026-10-08, job 219300ca). The
+ * width is the water on both sides of the track from the mesh ray walk;
+ * where both sides reached its cap the water counts as open, so the search
+ * keeps its open-water freedom to leave the line.
+ */
+export function meshCorridor(pts: [number, number][], widths: [number, number][]): CorridorInput {
+  const widthM = Float64Array.from(widths, ([l, r]) => (l >= MAX_SCAN_M && r >= MAX_SCAN_M ? Infinity : l + r));
+  return { skeleton: pts.map(([lon, lat]) => ({ lon, lat })), widthM, source: 'the chart mesh route' };
 }
 
 /**

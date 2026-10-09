@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { funnel, type XY } from './funnel';
 import { meshAstar } from './astar';
-import { blockedTriangles, meshRoute } from './route';
+import { blockedTriangles, growBlocked, meshRoute } from './route';
 import { MAX_SCAN_M, passageWidths } from './width';
 import {
   FLAG_CHANNEL_MARK,
@@ -174,66 +174,75 @@ test('blocking rules: clearance, depth off a fairway, hazards, marks, structures
   assert.equal(b2[12], 0);
 });
 
+/** Write one tile file in the on-disk format: unit-square triangles, mult 1, no clearance, no hazard, flags 0; depth per triangle (default none). */
+function writeTile(dir: string, file: string, tris: number[][][], nb: number[][], rev: number[][], depths?: number[]): void {
+  const n = tris.length;
+  const buf = Buffer.alloc(32 + n * (48 + 12 + 16 + 3 + 1));
+  buf.write('WRPMESH1', 0, 'latin1');
+  buf.writeUInt32LE(n, 8);
+  let at = 32;
+  for (const t of tris)
+    for (const p of t)
+      for (const v of p) {
+        buf.writeDoubleLE(v, at);
+        at += 8;
+      }
+  for (const t of nb)
+    for (const v of t) {
+      buf.writeInt32LE(v, at);
+      at += 4;
+    }
+  for (let i = 0; i < n; i++) {
+    buf.writeFloatLE(1, at); // mult
+    at += 4;
+  }
+  for (let i = 0; i < n; i++) {
+    buf.writeFloatLE(depths ? depths[i] : NO_VALUE, at); // depth
+    at += 4;
+  }
+  for (let i = 0; i < n; i++) {
+    buf.writeFloatLE(NO_VALUE, at); // clear
+    at += 4;
+  }
+  for (let i = 0; i < n; i++) {
+    buf.writeFloatLE(NO_HAZARD, at);
+    at += 4;
+  }
+  for (const t of rev)
+    for (const v of t) {
+      buf.writeInt8(v, at);
+      at += 1;
+    }
+  at += n; // flags 0
+  assert.equal(at, buf.length);
+  fs.writeFileSync(path.join(dir, file), buf);
+}
+
+/** A 1° tile of the unit square at (i, j), split along its rising diagonal: lower triangle (ids first) and upper triangle (first + 1). */
+function squareTile(i: number, j: number): number[][][] {
+  return [
+    [
+      [i, j],
+      [i + 1, j],
+      [i + 1, j + 1],
+    ],
+    [
+      [i, j],
+      [i + 1, j + 1],
+      [i, j + 1],
+    ],
+  ];
+}
+
 test('tile files: written in the on-disk format, read back, joined and routed', () => {
   // Two 1° tiles side by side, each one square split in two, sharing the vertex column at lon 1.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-'));
   const K = 1;
-  const writeTile = (file: string, first: number, tris: number[][][], nb: number[][], rev: number[][]): void => {
-    const n = tris.length;
-    const buf = Buffer.alloc(32 + n * (48 + 12 + 16 + 3 + 1));
-    buf.write('WRPMESH1', 0, 'latin1');
-    buf.writeUInt32LE(n, 8);
-    let at = 32;
-    for (const t of tris)
-      for (const p of t)
-        for (const v of p) {
-          buf.writeDoubleLE(v, at);
-          at += 8;
-        }
-    for (const t of nb)
-      for (const v of t) {
-        buf.writeInt32LE(v, at);
-        at += 4;
-      }
-    for (let i = 0; i < n; i++) {
-      buf.writeFloatLE(1, at); // mult
-      at += 4;
-    }
-    for (let i = 0; i < n * 3; i++) {
-      buf.writeFloatLE(NO_VALUE, at); // depth, clear, and then hazv below
-      at += 4;
-    }
-    at -= n * 4;
-    for (let i = 0; i < n; i++) {
-      buf.writeFloatLE(NO_HAZARD, at);
-      at += 4;
-    }
-    for (const t of rev)
-      for (const v of t) {
-        buf.writeInt8(v, at);
-        at += 1;
-      }
-    at += n; // flags 0
-    assert.equal(at, buf.length);
-    fs.writeFileSync(path.join(dir, file), buf);
-    void first;
-  };
   // Tile A (ids 0, 1): square [0,1]×[0,1]; tile B (ids 2, 3): square [1,2]×[0,1]. A's lower triangle's right edge (k=1) meets B's upper triangle's left edge (k=2).
   writeTile(
+    dir,
     'a.bin',
-    0,
-    [
-      [
-        [0, 0],
-        [1, 0],
-        [1, 1],
-      ],
-      [
-        [0, 0],
-        [1, 1],
-        [0, 1],
-      ],
-    ],
+    squareTile(0, 0),
     [
       [-1, 3, 1],
       [0, -1, -1],
@@ -244,20 +253,9 @@ test('tile files: written in the on-disk format, read back, joined and routed', 
     ]
   );
   writeTile(
+    dir,
     'b.bin',
-    2,
-    [
-      [
-        [1, 0],
-        [2, 0],
-        [2, 1],
-      ],
-      [
-        [1, 0],
-        [2, 1],
-        [1, 1],
-      ],
-    ],
+    squareTile(1, 0),
     [
       [-1, -1, 3],
       [2, -1, 0],
@@ -304,6 +302,117 @@ test('tile files: written in the on-disk format, read back, joined and routed', 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('meshRoute: a route that must swing outside the box around its ends is found by widening the box, up to the triangle cap', () => {
+  // Four 1° tiles in a 2×2 block. Bottom row: A (0,0) and B (1,0); top row: D (0,1) and C (1,1). A's lower
+  // triangle (id 0, the only one touching B in the bottom row) is 1 m deep, so from A's upper triangle the
+  // only way to B is up through D and C: lat 1 to 2, outside the 0.5° box around ends at lat 0.45.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-'));
+  writeTile(
+    dir,
+    'a.bin',
+    squareTile(0, 0),
+    [
+      [-1, 3, 1],
+      [0, 4, -1],
+    ],
+    [
+      [-1, 2, 0],
+      [2, 0, -1],
+    ],
+    [1, NO_VALUE]
+  );
+  writeTile(
+    dir,
+    'b.bin',
+    squareTile(1, 0),
+    [
+      [-1, -1, 3],
+      [2, 6, 0],
+    ],
+    [
+      [-1, -1, 0],
+      [2, 0, 1],
+    ]
+  );
+  writeTile(
+    dir,
+    'd.bin',
+    squareTile(0, 1),
+    [
+      [1, 7, 5],
+      [4, -1, -1],
+    ],
+    [
+      [1, 2, 0],
+      [2, -1, -1],
+    ]
+  );
+  writeTile(
+    dir,
+    'c.bin',
+    squareTile(1, 1),
+    [
+      [3, -1, 7],
+      [6, -1, 4],
+    ],
+    [
+      [1, -1, 0],
+      [2, -1, 1],
+    ]
+  );
+  fs.writeFileSync(
+    path.join(dir, 'index.json'),
+    JSON.stringify({
+      version: 1,
+      west: 0,
+      south: 0,
+      east: 2,
+      north: 2,
+      tileDeg: 1,
+      xScale: 1,
+      triangles: 8,
+      tiles: [
+        { i: 0, j: 0, file: 'a.bin', first: 0, n: 2, bbox: [0, 0, 1, 1] },
+        { i: 1, j: 0, file: 'b.bin', first: 2, n: 2, bbox: [1, 0, 2, 1] },
+        { i: 0, j: 1, file: 'd.bin', first: 4, n: 2, bbox: [0, 1, 1, 2] },
+        { i: 1, j: 1, file: 'c.bin', first: 6, n: 2, bbox: [1, 1, 2, 2] },
+      ],
+    })
+  );
+  const store = MeshStore.open(dir);
+  assert.equal(store.countTriangles({ west: -0.25, south: -0.05, east: 1.75, north: 0.95 }), 4);
+  assert.equal(store.countTriangles({ west: -0.75, south: -0.55, east: 2.25, north: 1.45 }), 8);
+  const rules = { draughtM: 2, airDraftM: 18, motorSpeedMs: 1 };
+  const r = meshRoute(store, [0.25, 0.45], [1.25, 0.45], rules);
+  assert.ok(r.ok, r.ok ? '' : r.reason);
+  if (r.ok) {
+    assert.equal(r.stats.attempts, 2);
+    assert.equal(r.stats.padDeg, 1.0);
+    assert.equal(r.stats.trianglesLoaded, 8);
+    assert.ok(
+      r.path.some(p => p[1] >= 1),
+      'the route goes up through the top row'
+    );
+    assert.ok(r.path.every(p => p[1] <= 2 && p[0] >= 0 && p[0] <= 2));
+  }
+  // A buffer from unusable water: the start sits in the triangle next to the 1 m one, within any buffer.
+  const near = meshRoute(store, [0.25, 0.45], [1.25, 0.45], { ...rules, bufferM: 1000 });
+  assert.ok(!near.ok);
+  if (!near.ok) assert.equal(near.reason, 'start point is within the buffer ({length:1000}) of unusable water');
+  // With the cap under the wider box's 8 triangles the widening is refused and says so.
+  const capped = meshRoute(store, [0.25, 0.45], [1.25, 0.45], { ...rules, maxTriangles: 6 });
+  assert.ok(!capped.ok);
+  if (!capped.ok) {
+    assert.match(
+      capped.reason,
+      /^no route on the mesh within \{angle:0\.00872664625997164[0-9]*\} of the leg's ends; a box \{angle:0\.0174532925199432[0-9]*\} around them would read 8 triangles, over the 6 cap$/
+    );
+    assert.equal(capped.stats.attempts, 1);
+    assert.equal(capped.stats.padDeg, 0.5);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('passageWidths: water to each side of the track up to the first blocked triangle or the mesh edge', () => {
   // 10 × 6 m strip; rows 4 and 5 blocked over columns 3–6: a track along y = 1.5 sees 1.5 m of water to the
   // right (the bottom edge) everywhere, and to the left 4.5 m where open and 2.5 m under the blocked rows.
@@ -341,4 +450,35 @@ test('passageWidths: water to each side of the track up to the first blocked tri
     0
   );
   assert.ok(near(wb[0][0], MAX_SCAN_M) && near(wb[0][1], 100), `cap: ${wb[0]}`);
+});
+
+test('growBlocked: usable triangles within the buffer of a blocked boundary are blocked, by exact distance; a channel closes at twice the buffer', () => {
+  // 10 × 10 unit squares (1 m): column 5 blocked. Column 4 shares its edge (distance 0), column 3 is 1 m away, column 2 is 2 m away.
+  const m = gridMesh(10, 10);
+  const col = (cx: number): number[] => Array.from({ length: 10 }, (_v, cy) => (cy * 10 + cx) * 2).flatMap(t => [t, t + 1]);
+  const blockedCols = (cols: number[]): Uint8Array => {
+    const b = new Uint8Array(m.n);
+    for (const c of cols) for (const t of col(c)) b[t] = 1;
+    return b;
+  };
+  const b = blockedCols([5]);
+  const added = growBlocked(m, b, 1.5);
+  const colBlocked = (cx: number): boolean => col(cx).every(t => b[t] === 1);
+  const colFree = (cx: number): boolean => col(cx).every(t => b[t] === 0);
+  assert.ok(colBlocked(4) && colBlocked(6), 'the columns sharing the boundary');
+  assert.ok(colBlocked(3) && colBlocked(7), 'one metre away, inside 1.5 m');
+  assert.ok(colFree(2) && colFree(8), 'two metres away, outside 1.5 m');
+  assert.equal(added, 4 * 20);
+  assert.equal(growBlocked(m, blockedCols([5]), 0), 0, 'no buffer, nothing added');
+  // A 4 m channel between columns 2 and 7: closed at a 1.5 m buffer (both banks take two columns), open at 0.9 m.
+  const closed = blockedCols([2, 7]);
+  growBlocked(m, closed, 1.5);
+  assert.ok(
+    [3, 4, 5, 6].every(cx => col(cx).every(t => closed[t] === 1)),
+    'closed'
+  );
+  const open = blockedCols([2, 7]);
+  growBlocked(m, open, 0.9);
+  assert.ok(col(3).every(t => open[t] === 1) && col(6).every(t => open[t] === 1));
+  assert.ok(col(4).every(t => open[t] === 0) && col(5).every(t => open[t] === 0), 'the middle two columns stay open');
 });

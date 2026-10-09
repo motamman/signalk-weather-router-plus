@@ -12,7 +12,10 @@
   narrow bits are motored along the channel and the open water is sailed.
   Set the sail threshold to 0 and nothing is motored: the narrow bits are
   sailed along the channel too, and a stretch that cannot be sailed fails
-  the route and says so instead of quietly motoring it.
+  the route and says so instead of quietly motoring it. The sailed
+  stretches respect the chart too: no leg crosses water shallower than
+  your draft, a bridge lower than your height, or a charted rock, and
+  every waypoint shows the charted depth under it.
   A route that starts in a harbour and ends far outside the mesh is routed
   on the charts out to open water and handed over there. Routes the mesh
   cannot take fall back to the coastline routing you had before.

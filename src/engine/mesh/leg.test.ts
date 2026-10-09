@@ -16,8 +16,10 @@ import { ConstantWind, NoCurrent, NoWind, type CurrentSource } from '../environm
 import { planLegs } from '../multileg';
 import { PolarDiagram } from '../../vessel/polar';
 import { runLegPipeline, type LegPipelineInputs } from '../pipeline';
-import { classifySegments, type MeshLegRouter, meshRulesFor, routeFromMeshPath } from './leg';
+import { classifySegments, meshCorridor, type MeshLegRunner, meshRulesFor, routeFromMeshPath } from './leg';
+import { type MeshLegLand, runMeshLeg } from './legrun';
 import type { MeshRouteResult } from './route';
+import type { LegWind } from '../horizon';
 
 const T0 = new Date('2026-01-01T00:00:00Z');
 const BOAT = makeVessel({ motorSpeedMs: 3, draughtM: 2, airDraftM: 18 });
@@ -35,16 +37,60 @@ function rect(recordNumber: number, lon0: number, lat0: number, lon1: number, la
   };
 }
 
-const STATS = { trianglesLoaded: 10, blocked: 2, expanded: 5, readMs: 1, prepMs: 1, searchMs: 1, funnelMs: 0 };
+const STATS = {
+  trianglesLoaded: 10,
+  blocked: 2,
+  expanded: 5,
+  readMs: 1,
+  prepMs: 1,
+  searchMs: 1,
+  funnelMs: 0,
+  padDeg: 0.5,
+  attempts: 1,
+  bufferM: 0,
+  buffered: 0,
+  bufferMs: 0,
+};
+const BOX = { west: -1, south: -1, east: 2, north: 2 };
+/** The coastline the tests route on: one island south of the lat 0.5 line. */
+const COAST = LandMask.fromPolygons([rect(1, 0.3, -0.3, 0.7, 0.2)], BOX, 0.005);
 
-function fakeMesh(result: MeshRouteResult, covers = true): { mesh: MeshLegRouter; calls: unknown[] } {
+/** A mesh land for the in-process runner: the coastline mask, an extra blocked test, and a depth. */
+function fakeLand(
+  extra: (lonA: number, latA: number, lonB: number, latB: number) => boolean = () => false,
+  depthAt: (lon: number, lat: number) => number | null = () => null
+): MeshLegLand {
+  const point = (lon: number, lat: number): boolean => COAST.isLandExact(lon, lat) || extra(lon, lat, lon, lat);
+  const leg = (a: number, b: number, c: number, d: number): boolean => COAST.legCrossesLandExact(a, b, c, d) || extra(a, b, c, d);
+  return {
+    isLand: point,
+    isLandExact: point,
+    legCrossesLandExact: leg,
+    legsCrossLandBulk: (la, pa, lb, pb) => Uint8Array.from({ length: la.length }, (_v, k) => (leg(la[k], pa[k], lb[k], pb[k]) ? 1 : 0)),
+    depthAt,
+  };
+}
+
+interface FakeEnv {
+  wind?: LegWind | null;
+  land?: MeshLegLand;
+}
+
+/** The mesh runner the plugin's child process is, in-process: the search's answer is given, the leg is planned by legrun.ts. */
+function fakeMesh(result: MeshRouteResult, covers = true, env: FakeEnv = {}): { mesh: MeshLegRunner; calls: unknown[] } {
   const calls: unknown[] = [];
   return {
     mesh: {
       covers: () => covers,
-      route: async (start, end, rules) => {
-        calls.push({ start, end, rules });
-        return result;
+      leg: async a => {
+        calls.push({ start: a.legStart, end: a.plan.end, rules: a.rules });
+        return runMeshLeg({
+          result,
+          land: result.ok ? (env.land ?? fakeLand()) : null,
+          ...a,
+          wind: env.wind ?? null,
+          current: new NoCurrent(),
+        });
       },
     },
     calls,
@@ -52,19 +98,23 @@ function fakeMesh(result: MeshRouteResult, covers = true): { mesh: MeshLegRouter
 }
 
 /** A mesh answering with this path; widths default to open water everywhere. */
-function fakeMeshOk(path: [number, number][], widths?: [number, number][]): ReturnType<typeof fakeMesh> {
-  return fakeMesh({
-    ok: true,
-    path,
-    widths: widths ?? path.map(() => [4000, 4000] as [number, number]),
-    lengthM: 1,
-    costS: 1,
-    stats: STATS,
-  });
+function fakeMeshOk(path: [number, number][], widths?: [number, number][], env: FakeEnv = {}): ReturnType<typeof fakeMesh> {
+  return fakeMesh(
+    {
+      ok: true,
+      path,
+      widths: widths ?? path.map(() => [4000, 4000] as [number, number]),
+      lengthM: 1,
+      costS: 1,
+      stats: STATS,
+    },
+    true,
+    env
+  );
 }
 
-function inputs(mesh: MeshLegRouter | undefined, over: Partial<LegPipelineInputs> = {}): { inp: LegPipelineInputs; messages: string[] } {
-  const land = LandMask.fromPolygons([rect(1, 0.3, -0.3, 0.7, 0.2)], { west: -1, south: -1, east: 2, north: 2 }, 0.005);
+function inputs(mesh: MeshLegRunner | undefined, over: Partial<LegPipelineInputs> = {}): { inp: LegPipelineInputs; messages: string[] } {
+  const land = COAST;
   const messages: string[] = [];
   const inp: LegPipelineInputs = {
     waterGrid: null,
@@ -187,6 +237,28 @@ test('pipeline: a covered motoring leg is routed on the mesh, the coastline sear
   assert.ok(!messages.some(m => /^skeleton/.test(m)), 'the coastline search did not run');
 });
 
+test('meshCorridor: the mesh route is the search skeleton; the width is both sides of the track, open where both reached the scan cap', () => {
+  const c = meshCorridor(
+    [
+      [0, 0],
+      [0.1, 0],
+      [0.2, 0],
+    ],
+    [
+      [300, 500],
+      [4000, 4000],
+      [4000, 1200],
+    ]
+  );
+  assert.deepEqual(c.skeleton, [
+    { lon: 0, lat: 0 },
+    { lon: 0.1, lat: 0 },
+    { lon: 0.2, lat: 0 },
+  ]);
+  assert.deepEqual(Array.from(c.widthM!), [800, Infinity, 5200]);
+  assert.equal(c.source, 'the chart mesh route');
+});
+
 test('pipeline: a sailing leg motors the narrow part of the mesh route and sails the open water with the isochrone search', async () => {
   // Six points: a narrow passage over the first three (both shores 200 m), then open water to the end.
   const path: [number, number][] = [
@@ -221,6 +293,12 @@ test('pipeline: a sailing leg motors the narrow part of the mesh route and sails
     messages.some(m => /segment 2\/2: open water, .* the isochrone search made it \d+ waypoints/.test(m)),
     messages.join('\n')
   );
+  // The search's skeleton is the open segment of the mesh route (points 4 and 5), not a coarse A* of its own.
+  assert.ok(
+    messages.some(m => /^chart mesh segment 2\/2: skeleton: corridor from the chart mesh route, 2 points, \{distance:\d+\}$/.test(m)),
+    messages.join('\n')
+  );
+  assert.ok(!messages.some(m => /skeleton grid/.test(m)), messages.join('\n'));
   // The narrow part is the mesh polyline, motored, run out into open water (to point 4); the route goes on from there.
   assert.deepEqual(
     r.waypoints.slice(0, 5).map(w => [w.lon, w.lat, w.mode]),
@@ -269,7 +347,7 @@ test('pipeline: with a sail threshold of 0 the narrow passage is sailed along th
   const wind = Object.assign(new ConstantWind(12 * 0.514444, 90), {
     validRange: [T0, new Date(T0.getTime() + 48 * 3600e3)] as [Date, Date],
   });
-  const { mesh } = fakeMeshOk(path, widths);
+  const { mesh } = fakeMeshOk(path, widths, { wind });
   const { inp, messages } = inputs(mesh, {
     polar: PolarDiagram.parse(POLAR_CSV, ','),
     sim: { modePolicy: 'sail_max', sailThreshMs: 0, simStepM: 200 },
@@ -304,6 +382,51 @@ test('pipeline: with a sail threshold of 0 the narrow passage is sailed along th
   assert.ok(Math.abs(last.lon - 1) < 1e-6 && Math.abs(last.lat - 0.5) < 1e-6);
 });
 
+test('pipeline: the search keeps out of what the mesh blocks (a shoal the coastline does not know), and waypoints carry the charted depth', async () => {
+  // Open water on the coastline between lon 0 and 1 at lat 0.5. The mesh route runs straight; the mesh blocks a
+  // shoal: everything north of lat 0.5 between lon 0.3 and 0.7. Nothing in the coastline says so, so without the
+  // mesh as land the search would cut north freely; with it no waypoint and no leg may be in or across the shoal.
+  const path: [number, number][] = [
+    [0, 0.5],
+    [0.5, 0.45],
+    [1, 0.5],
+  ];
+  const inShoal = (lon: number, lat: number): boolean => lat > 0.5 && lon > 0.3 && lon < 0.7;
+  const shoal = (lonA: number, latA: number, lonB: number, latB: number): boolean => {
+    // Sampled every 20 m along the leg: enough for a test strip of 44 km.
+    const n = Math.max(2, Math.ceil(haversineDistanceM(lonA, latA, lonB, latB) / 20));
+    for (let k = 0; k <= n; k++) if (inShoal(lonA + ((lonB - lonA) * k) / n, latA + ((latB - latA) * k) / n)) return true;
+    return false;
+  };
+  const land = fakeLand(shoal, lon => (lon < 0.5 ? 12.5 : null));
+  const { mesh } = fakeMeshOk(path, undefined, { land });
+  const { inp, messages } = inputs(mesh, { sim: { modePolicy: 'sail_max', sailThreshMs: 2.5, simStepM: 200 } });
+  const r = await runLegPipeline(inp, PLAN, 0, [0, 0.5], T0);
+  assert.ok(
+    messages.some(m => /the isochrone search made it \d+ waypoints/.test(m)),
+    messages.join('\n')
+  );
+  for (const w of r.waypoints) assert.ok(!inShoal(w.lon, w.lat), `waypoint ${w.lat}, ${w.lon} is on the shoal`);
+  for (let i = 1; i < r.waypoints.length; i++) {
+    const a = r.waypoints[i - 1];
+    const b = r.waypoints[i];
+    assert.ok(!shoal(a.lon, a.lat, b.lon, b.lat), `leg ${i} crosses the shoal`);
+  }
+  assert.ok(
+    r.waypoints.some(w => w.lon > 0.3 && w.lon < 0.7),
+    'the route still passes the shoal'
+  );
+  // Depths: the land answers 12.5 m west of lon 0.5 and nothing east of it.
+  assert.ok(
+    messages.some(m => /^chart mesh: charted depth under \d+ of \d+ waypoints$/.test(m)),
+    messages.join('\n')
+  );
+  for (const w of r.waypoints) {
+    if (w.lon < 0.5) assert.equal(w.depthM, 12.5, `depth at ${w.lon}`);
+    else assert.equal(w.depthM, undefined, `no depth at ${w.lon}`);
+  }
+});
+
 test('pipeline: an open stretch whose search fails is not motored under sail_max: the route fails naming the segment', async () => {
   // Wind 10 m/s everywhere under a 5 m/s limit: every candidate of the search is over the limit, and so is every stretch of the mesh route itself.
   const path: [number, number][] = [
@@ -314,7 +437,7 @@ test('pipeline: an open stretch whose search fails is not motored under sail_max
   const wind = Object.assign(new ConstantWind(10, 90), {
     validRange: [T0, new Date(T0.getTime() + 48 * 3600e3)] as [Date, Date],
   });
-  const { mesh } = fakeMeshOk(path);
+  const { mesh } = fakeMeshOk(path, undefined, { wind });
   const { inp, messages } = inputs(mesh, {
     polar: PolarDiagram.parse(POLAR_CSV, ','),
     sim: { modePolicy: 'sail_max', sailThreshMs: 0, simStepM: 200, maxWindMs: 5 },
@@ -325,7 +448,7 @@ test('pipeline: an open stretch whose search fails is not motored under sail_max
     (err: Error) => {
       assert.match(
         err.message,
-        /^chart mesh segment 1\/1: the beat from 0\.5000, 0\.0000 towards 0\.6000, 0\.5000 cannot be tacked at 0\.5000, 0\.0000: every tack tried crossed land or could not be sailed under the sail_max policy; raise the sail threshold \(Route → Options\) so that stretch is motored, or route under motor$/
+        /^chart mesh segment 1\/1: the beat from 0\.5000, 0\.0000 towards 0\.6000, 0\.5000 cannot be tacked at 0\.5000, 0\.0000: every tack tried crossed land or could not be sailed under the sail_max policy, and the course itself cannot be sailed straight; raise the sail threshold \(Route → Options\) so that stretch is motored, or route under motor$/
       );
       return true;
     }
@@ -339,6 +462,35 @@ test('pipeline: an open stretch whose search fails is not motored under sail_max
     messages.join('\n')
   );
   assert.ok(!messages.some(m => /motor/.test(m) && !/route under motor/.test(m)), messages.join('\n'));
+});
+
+test("pipeline: a mesh leg's searched stretch is simplified and smoothed as a coastline leg is, with the mesh as land", async () => {
+  // Open water the whole way, searched (sail_max with no polar motors every move but still searches): the search's
+  // collinear waypoints along the straight mesh route are removed by the simplification, and the shortcut smoother
+  // is offered the rest. Under motor alone the mesh route is the route and nothing is searched.
+  const path: [number, number][] = [
+    [0, 0.5],
+    [0.5, 0.5],
+    [1, 0.5],
+  ];
+  const sail = { modePolicy: 'sail_max' as const, sailThreshMs: 2.5, simStepM: 200 };
+  const { mesh } = fakeMeshOk(path);
+  const plain = await runLegPipeline(inputs(fakeMeshOk(path).mesh, { sim: sail }).inp, PLAN, 0, [0, 0.5], T0);
+  const { inp, messages } = inputs(mesh, { sim: sail, simplifyM: 10, smoother: true, smootherTolerance: 0.05 });
+  const r = await runLegPipeline(inp, PLAN, 0, [0, 0.5], T0);
+  assert.ok(
+    messages.some(m =>
+      /^chart mesh segment 1\/1: simplified: \d+ waypoint\(s\) within \{length:10\} of a straight line, \d+ replaced by straight shortcuts; \d+ left$/.test(
+        m
+      )
+    ),
+    messages.join('\n')
+  );
+  assert.ok(r.waypoints.length < plain.waypoints.length, `${r.waypoints.length} waypoints after, ${plain.waypoints.length} before`);
+  assert.equal(r.validated, true);
+  const last = r.waypoints[r.waypoints.length - 1];
+  assert.ok(Math.abs(last.lon - 1) < 1e-6 && Math.abs(last.lat - 0.5) < 1e-6);
+  assert.ok(Math.abs(r.totalTimeS - plain.totalTimeS) / plain.totalTimeS < 0.06, `${r.totalTimeS} s vs ${plain.totalTimeS} s`);
 });
 
 test('pipeline: the mesh falls through to the coastline search when it finds no route or does not cover the leg', async () => {

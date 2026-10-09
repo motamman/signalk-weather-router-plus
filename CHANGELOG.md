@@ -60,6 +60,39 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Buffer from land** (Defaults → `routing.landBuffer`, metres, default
+  0): on a coastline leg the route keeps at least this far from the
+  shoreline. The land raster is grown by the buffer (`LandMask.withBuffer`,
+  a two-pass dilation; local patches the same) and the exact polygon tests
+  count a point within the buffer of a shoreline edge as land and a move
+  that comes within it as crossing land, so the search, the smoother and
+  the final check all keep it. A start or end closer than the buffer is
+  moved out to it (the 150 m clearance becomes the buffer when larger); a
+  corridor passage narrower than twice the buffer fails the route naming
+  the passage. On a mesh leg the mesh's own edge is not yet grown by it
+  (the growth of the blocked set is being reworked for speed).
+- **Buffer from unusable water** (Defaults → `routing.navigableBuffer`,
+  metres, default 0): on a chart-mesh leg the blocked set is grown once
+  per leg by exact distance from its boundary (`growBlocked` in
+  `src/engine/mesh/route.ts`: a usable triangle whose nearest point is
+  within the buffer of an edge between blocked and usable triangles is
+  blocked too), so the mesh route, the passage widths, the search, the
+  tack layout and the polish all keep that distance. A start or end
+  inside the buffer is refused with the distance; a passage narrower than
+  twice the buffer closes. The log reports the triangles added and the
+  time. The growth is one nearest-first flood over the triangles, which
+  misses a few tenths of a percent of the triangles within the buffer
+  (measured on brain, the exact walk being 3 to 12 times slower); the
+  exact alternative is described in the code.
+- **Tacking penalty** (Defaults → `routing.tackPenalty`, seconds, default
+  30): the time lost on every tack or gybe, charged by both routers. The
+  standard search charges it on a move that puts the wind on the other
+  side of the boat from its parent's heading (time and rank) and on the
+  final beat's tack; the refined router's layout uses the setting in place
+  of its 30 s constant.
+- **Min sail speed** on the Route tab's Plan sub-tab, beside Method,
+  Router and Smoothing (it was under Options → Sailing strategy); same
+  control, same request field (`sail_thresh_ms`), remembered per browser.
 - **Smoothing** on the Route tab's Plan (Default / On / Off): the
   request's `smoother`, beside Method and Router, remembered per browser.
   With the Refined router the shortcut smoother never runs (its polish
@@ -88,6 +121,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- On a chart-mesh leg the simplification and the shortcut smoother did
+  not run at all (they ran only after the coastline search, and the mesh
+  leg's planner, moved into the mesh process on 2026-10-08, had neither),
+  so the Smoothing choice did nothing there and even the Standard router's
+  route kept every search step. Each searched stretch of a mesh leg now
+  gets the same two steps as a coastline leg, with the mesh as land, so a
+  shortcut is taken only where the mesh allows it; the refined router's
+  stretches keep the smoother off, as before.
 - A mesh leg's open stretch whose search failed was motored whatever the
   request asked (job 1c1fda5b, 2026-10-08: 106 km around the outside of
   Cape Cod motored under sail_max with a sail threshold of 0). It now
@@ -98,18 +139,63 @@ uses [Semantic Versioning](https://semver.org/).
   under fastest it is walked choosing per step. With a sail threshold of
   0 the narrow passages are sailed along the mesh route the same way
   instead of motored.
+- **The sailed stretches of a mesh leg ignored charted depth** (job
+  20e5c6ef, 2026-10-08: off Monomoy the search cut across 2 m shoals and
+  put waypoints on them; it tested its legs against the coastline alone,
+  which has no depths and draws the island differently from the chart).
+  The whole mesh leg is now planned in the child process that holds the
+  mesh (`src/plugin/meshlegtask.ts`, `src/engine/mesh/legrun.ts`): the
+  search, the tack layout, the polish and the smoother test every move by
+  walking the mesh triangles (`src/engine/mesh/land.ts`, the walk that
+  measures passage widths), so no leg of a mesh route can cross a
+  triangle the boat cannot use. The child reads the forecast window, the
+  regional runs, the cached currents and the polar from disk (the worker
+  fetches on-demand current areas first, as before) and streams its
+  progress and stage fronts. The land checks the routers make are typed
+  on a `LandTest` interface the coastline raster and the mesh both
+  answer. A leg the mesh cannot take still falls back to the coastline
+  search; a leg that cannot be sailed as asked fails the route with the
+  reason, as before.
+- **Waypoint depth**: `depth_m`, always null until now, is the charted
+  depth of the mesh triangle under each waypoint of a mesh leg (a contour
+  corner reports the usable side); the itinerary shows it.
+- With the chart's shallows blocked, the refined router's tack layout
+  could not gybe inside the passage south of Monomoy (job a0a18bcb: a
+  channel narrower than the shortest tack, dead downwind) and failed the
+  route although the polar runs dead downwind. When no tack fits and the
+  real polar sails the course straight along a clear line, the course is
+  sailed straight; only a course the polar cannot sail fails.
+- A search candidate landing exactly on the destination (the stage step
+  dividing the distance) got a final hop of millimetres, so the route
+  ended with the same point twice and a zero-length leg; a final leg
+  under 1 m is dropped and the candidate's waypoint takes the exact end.
+- A mesh leg whose route must swing further out than half a degree beyond
+  the box around its ends was a silent "no route on the mesh" and fell back
+  to the coastline search (job aeedeb52, 2026-10-08: Block Island to the
+  canal's east end, the way round Nauset at 69.91°W outside a box ending
+  at 69.96°W). When the search finds no route the box is widened to 1°,
+  then 2°, and searched again, unless the wider box would read more than
+  16 M triangles (about 2.2 GB in the child process by arithmetic from
+  the array sizes; the first box of that job read 8.2 M, its 1° box
+  11.8 M by the index); the log says when the box was widened, and the
+  failure names the box and the cap.
+- The open-water search between two narrow passages of a mesh route drew
+  its own coarse skeleton on the coastline instead of using the mesh
+  route, as the hybrid rule says (job 219300ca, 2026-10-08: the coarse
+  skeleton cut across the tip of Monomoy, every first-stage candidate
+  towards it was on land, the one survivor went up the wrong side of the
+  island and the search was boxed in after 20 stages). The mesh route and
+  its passage widths are now the search's corridor (`meshCorridor` in
+  `src/engine/pipeline.ts`); water that reached the ray walk's 4 km cap
+  on both sides counts as open, so the search keeps its freedom to leave
+  the line. Measured on brain from the same start: 19 stages, arrival
+  13:58Z, where the coastline skeleton was boxed in.
 - The mesh funnel could emit a corner vertex twice when the crossed edges
   fan around it (a zero-length leg in the mesh route; the motored walk hid
   it, the tack layout refused it). A point equal to the last one emitted is
   skipped, as Recast's `appendVertex` does; the route's geometry is
   unchanged, with one point fewer where the Python experiment's funnel
   repeats one.
-- The search's stall detector measured progress as the straight-line
-  distance to the goal, so a front advancing around a peninsula (the same
-  job: 8 stages along the back of Cape Cod, the canal 38 km away across
-  it) was called boxed in. Progress now counts either that distance or the
-  distance left along the skeleton shrinking (`ProgressTracker` in
-  `src/engine/search/stages.ts`).
 - Apply the GSHHG L1/L2/L3/L4 land/water hierarchy to global water grids,
   route rasters, refined masks and exact polygon checks. The full global
   grid is rebuilt from all four levels; old overlay caches are invalidated.

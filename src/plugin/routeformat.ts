@@ -104,7 +104,7 @@ export function waypointProperties(wp: Waypoint): Record<string, unknown> {
     time: wp.time.toISOString(),
     sog_ms: round(wp.sogMs, 3),
     cog_deg: round(wp.cogDeg, 1),
-    depth_m: null,
+    depth_m: finite(wp.depthM) ? round(wp.depthM, 1) : null,
     mode: wp.mode,
   };
   if (finite(wp.twaDeg)) d.twa_deg = Math.round(wp.twaDeg);

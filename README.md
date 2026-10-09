@@ -689,7 +689,26 @@ and `vessel.air_draft_m`); the mesh is not used until both are set.
 - **Sailing modes:** the mesh route is the skeleton. Its narrow passages
   (both shores within 1 km of the track) are motored along it; each open
   stretch between them is sailed by the open-water router from the end of
-  one passage to the start of the next. With a sail threshold of 0 (never
+  one passage to the start of the next, with that stretch of the mesh
+  route and its passage widths as the search's corridor (water wider than
+  the 4 km scan on both sides counts as open). The whole leg is planned in
+  the process that holds the mesh: the search, the tack layout, the polish
+  and the smoother test every move by walking the mesh triangles it
+  crosses and stopping at the first one the boat cannot use (charted depth
+  under the draught + 0.5 m off a fairway, clearance under the air draft +
+  1 m, a rock or wreck shallower than that or uncharted, a mark, a
+  structure, an area to avoid), the same test the mesh route is built
+  with. That process reads the forecast window, the regional wind runs,
+  the cached currents (RTOFS, CMEMS SMOC, harmonics) and the polar from
+  the plugin's files; it never uses the network. With a buffer from
+  unusable water (Defaults) every usable triangle within that distance of
+  a blocked one is blocked for the leg, by exact distance from the
+  boundary, before anything is routed: the mesh route, the passage widths
+  and the sailed stretches all keep it, and a passage narrower than twice
+  the buffer closes (the mesh then finds no route, or widens its box).
+- **Depth:** each waypoint of a mesh leg carries the charted depth of the
+  triangle under it (`depth_m` in the GeoJSON, Depth in the itinerary); a
+  waypoint on a depth contour reports the usable side. With a sail threshold of 0 (never
   motor) the narrow passages are sailed along the mesh route too, tacked
   where the wind needs it (the tacks are checked against the coastline,
   not against the charted depths the mesh route keeps to). An open stretch
@@ -911,8 +930,7 @@ remaining distance never increases from one stage to the next.
 
 A search that stops making progress once its planned stages are used
 (three stages in a row without any candidate coming closer to the
-destination, in a straight line or along the skeleton, so a route
-wrapping a peninsula is progress; when the front is beating, a tenth or more of its water
+destination; when the front is beating, a tenth or more of its water
 candidates dead upwind, the check waits for the hard ceiling of planned
 stages plus half the configured count; progress is measured towards the
 deepest branch's next via, or the destination once every via is crossed)
@@ -1140,7 +1158,7 @@ the Signal K user's unit preferences. Saving needs a `readwrite` login.
 | `forecast` | horizon (72 h = 259200 s, 3–360 h; above 144 h only 00z/12z cycles qualify), check interval (60 min), cached cycles kept (2), extra fields (on), memory kept free (1 GB = 1e9 B) | horizon / extra fields / memory kept free reload the forecast; the interval restarts the timer |
 | `currents` | SMOC on, SMOC horizon (72 h = 259200 s, 6–240 h), SMOC step (3 h = 10800 s; 1 h or 3 h only), SMOC area half-width (15°, 2–30°), RTOFS on, RTOFS product (`west_atl`, …), RTOFS horizon (72 h), RTOFS step (3 h) | reloads currents |
 | `tides` | Copernicus Marine sea level on, tide map area half-width (15°, 1–30°), tide map horizon (24 h = 86400 s, 6–240 h) | reloads tides only |
-| `routing` | stages (20), subsectors (30), headings (30), heading increment (1°), sail threshold (4.9 kt), simulation step (200 m), land raster cell budget (25 M), allow canals (off), route simplification (10 m, 0 = off), shortcut smoother (off), comfort weight (1, 0 = off), shortcut may be slower by (0.05 = 5%), finished routes kept (50), max wind (none), max wave height (none) | applies to the next route |
+| `routing` | stages (20), subsectors (30), headings (30), heading increment (1°), sail threshold (4.9 kt), tacking penalty (30 s, charged per tack or gybe by both routers), buffer from land (0 m: the route keeps at least this far from the coastline; a start or end closer is moved out to it, a passage narrower than twice it closes), buffer from unusable water (0 m: on a mesh leg the route keeps at least this far from every triangle the boat cannot use), simulation step (200 m), land raster cell budget (25 M), allow canals (off), route simplification (10 m, 0 = off), shortcut smoother (off), comfort weight (1, 0 = off), shortcut may be slower by (0.05 = 5%), finished routes kept (50), max wind (none), max wave height (none) | applies to the next route |
 | `publish` | save to the Resources API (on), route name prefix (`WRP`), notifications (on) | applies to the next route |
 
 **Resource guard.** The decoded forecast is on disk, so the guard
@@ -1672,7 +1690,7 @@ Point `properties` (one feature per route point, in order):
 | `time` | string | ISO 8601 | time at the point |
 | `sog_ms` | number | m/s | speed over ground into the point (0 at the start) |
 | `cog_deg` | number | degrees true | course over ground into the point |
-| `depth_m` | null | | always null |
+| `depth_m` | m | | charted depth under the waypoint from the chart mesh, on mesh legs; null elsewhere |
 | `mode` | string | | `"sailing"` or `"motoring"` on the leg into the point |
 | `twa_deg` | integer | degrees | true wind angle, 0..180; when wind was sampled |
 | `wind_ms` | number | m/s | wind speed |

@@ -27,6 +27,7 @@
 import type { BBox } from './geodesy';
 import { wrapLon, unwrapLonNear } from './angles';
 import { bboxHeight, bboxWidth, lonOffsetFromWest, slerpSamples, haversineDistanceM } from './geodesy';
+import { M_PER_DEG } from './units';
 import { pointInShape, shorelinePaths, type ShapePolygon } from './shapefile';
 import { polygonCache } from './polygoncache';
 import { avoidAt, legHitsAvoid, type AvoidArea } from './avoid';
@@ -61,7 +62,23 @@ export interface LandMaskOptions {
   bufferDeg?: number;
 }
 
-export class LandMask {
+/**
+ * What the router asks of land: the four checks the search, the tack
+ * layout, the polish and the smoother make. The coastline raster
+ * (LandMask) answers them; so does the chart mesh (engine/mesh/land.ts).
+ */
+export interface LandTest {
+  /** Raster test: is the point unusable? */
+  isLand(lon: number, lat: number): boolean;
+  /** Exact test (polygons, or the mesh triangle): is the point unusable? */
+  isLandExact(lon: number, lat: number): boolean;
+  /** Exact test: does the straight path a→b touch anything unusable? */
+  legCrossesLandExact(lonA: number, latA: number, lonB: number, latB: number): boolean;
+  /** For each leg a→b: 1 when it crosses something unusable. */
+  legsCrossLandBulk(lonsA: ArrayLike<number>, latsA: ArrayLike<number>, lonsB: ArrayLike<number>, latsB: ArrayLike<number>): Uint8Array;
+}
+
+export class LandMask implements LandTest {
   readonly bbox: BBox;
   readonly resolutionDeg: number;
   readonly nx: number;
@@ -75,6 +92,8 @@ export class LandMask {
   private edgeCells = true;
   private boundaryPass = false;
   private fillValue = 1;
+  /** Keep at least this far from land, metres: the raster is grown by it and the exact tests measure to the shoreline (0 = none). */
+  readonly bufferM: number = 0;
 
   private constructor(
     shapes: ShapePolygon[],
@@ -160,6 +179,31 @@ export class LandMask {
   }
 
   /**
+   * This mask keeping `bufferM` metres from land: a new mask over the
+   * same polygons whose raster is the base raster grown by the buffer
+   * (every cell within it of a land cell is land; a local patch made
+   * later is grown the same way) and whose exact tests count a point
+   * within the buffer of a shoreline edge as land and a move that comes
+   * within it as crossing land. The raster stays conservative for the
+   * exact tests: a cell not grown is more than the buffer from any land.
+   * 0 or less: this mask itself.
+   */
+  withBuffer(bufferM: number): LandMask {
+    if (!(bufferM > 0)) return this;
+    const [kx, ky] = this.cellsFor(bufferM, this.resolutionDeg);
+    const raster = dilate(this.raster, this.nx, this.ny, kx, ky);
+    const m = new LandMask(this.shapes, this.bbox, this.resolutionDeg, raster, { nx: this.nx, ny: this.ny, edgeCells: this.edgeCells });
+    (m as { bufferM: number }).bufferM = bufferM;
+    return m;
+  }
+
+  /** Cells a buffer spans east-west and north-south at a resolution, conservative (the box's smallest cos(latitude)). */
+  private cellsFor(bufferM: number, resolutionDeg: number): [number, number] {
+    const cosLat = Math.max(0.05, Math.cos((Math.max(Math.abs(this.bbox.south), Math.abs(this.bbox.north)) * Math.PI) / 180));
+    return [Math.ceil(bufferM / (resolutionDeg * M_PER_DEG * cosLat)), Math.ceil(bufferM / (resolutionDeg * M_PER_DEG))];
+  }
+
+  /**
    * Raster-only mask fed one polygon at a time: `feed` calls `add` for
    * each polygon, which is rasterised and can then be dropped, so memory
    * is bounded by the largest single polygon rather than all of them.
@@ -223,7 +267,12 @@ export class LandMask {
     }
     const shapes = this.shapes.filter(s => s.maxLat >= pb.south && s.minLat <= pb.north);
     const m = LandMask.rasterStreamed(pb, res, add => shapes.forEach(add), { nx, ny });
-    const patch: LandPatch = { bbox: pb, resolutionDeg: res, nx, ny, raster: m.raster };
+    let praster = m.raster;
+    if (this.bufferM > 0) {
+      const [kx, ky] = this.cellsFor(this.bufferM, res);
+      praster = dilate(praster, nx, ny, kx, ky);
+    }
+    const patch: LandPatch = { bbox: pb, resolutionDeg: res, nx, ny, raster: praster };
     // Finest first, so lookups hit the finest patch covering a point.
     this.patches.push(patch);
     this.patches.sort((a, b) => a.resolutionDeg - b.resolutionDeg);
@@ -523,7 +572,37 @@ export class LandMask {
       const idx = this.cellIndex(lon, lat);
       if (idx >= 0 && this.raster[idx] === 0 && !this.inAnyPatch(lon, lat)) return false;
     }
-    return this.isLandPolygons(lon, lat);
+    return this.isLandPolygons(lon, lat) || (this.bufferM > 0 && this.shoreWithin(lon, lat, this.bufferM));
+  }
+
+  /** Is any shoreline edge within `distM` of the point? (A local flat metric: fine for the buffer's few hundred metres.) */
+  shoreWithin(lon: number, lat: number, distM: number): boolean {
+    const cosLat = Math.max(0.05, Math.cos((lat * Math.PI) / 180));
+    const dLat = distM / M_PER_DEG;
+    const dLon = dLat / cosLat;
+    for (const s of this.shapes) {
+      if (s.maxLon < lon - dLon || s.minLon > lon + dLon || s.maxLat < lat - dLat || s.minLat > lat + dLat) continue;
+      for (const ring of s.rings) {
+        if (ring.maxLon < lon - dLon || ring.minLon > lon + dLon || ring.maxLat < lat - dLat || ring.minLat > lat + dLat) continue;
+        const c = ring.coords;
+        const m = c.length / 2;
+        for (let i = 0, j = m - 1; i < m; j = i++) {
+          const ax = c[2 * j];
+          const ay = c[2 * j + 1];
+          const bx = c[2 * i];
+          const by = c[2 * i + 1];
+          if (
+            Math.max(ax, bx) < lon - dLon ||
+            Math.min(ax, bx) > lon + dLon ||
+            Math.max(ay, by) < lat - dLat ||
+            Math.min(ay, by) > lat + dLat
+          )
+            continue;
+          if (pointSegmentM(lon, lat, ax, ay, bx, by, cosLat) <= distM) return true;
+        }
+      }
+    }
+    return false;
   }
 
   /** Point-in-polygon over every loaded shape (no raster shortcut). */
@@ -618,6 +697,10 @@ export class LandMask {
     if (inside && this.edgeCells && this.shapes.length && !this.legCrossesRaster(lonA, latA, lonB, latB)) return false;
     if (!this.shapes.length) return this.legCrossesRaster(lonA, latA, lonB, latB);
     if (this.isLandPolygons(lonA, latA) || this.isLandPolygons(lonB, latB)) return true;
+    // The buffer: every edge within it of the move, searched in a box grown by it.
+    const cosLatB = Math.max(0.05, Math.cos((((latA + latB) / 2) * Math.PI) / 180));
+    const dLatB = this.bufferM > 0 ? this.bufferM / M_PER_DEG : 0;
+    const dLonB = dLatB / cosLatB;
     const { lons, lats } = greatCirclePieces(lonA, latA, lonB, latB);
     for (let k = 0; k + 1 < lons.length; k++) {
       const x1 = lons[k];
@@ -631,9 +714,10 @@ export class LandMask {
       const minY = Math.min(y1, y2);
       const maxY = Math.max(y1, y2);
       for (const s of this.shapes) {
-        if (s.maxLon < minX || s.minLon > maxX || s.maxLat < minY || s.minLat > maxY) continue;
+        if (s.maxLon < minX - dLonB || s.minLon > maxX + dLonB || s.maxLat < minY - dLatB || s.minLat > maxY + dLatB) continue;
         for (const ring of s.rings) {
-          if (ring.maxLon < minX || ring.minLon > maxX || ring.maxLat < minY || ring.minLat > maxY) continue;
+          if (ring.maxLon < minX - dLonB || ring.minLon > maxX + dLonB || ring.maxLat < minY - dLatB || ring.minLat > maxY + dLatB)
+            continue;
           const c = ring.coords;
           const m = c.length / 2;
           for (let i = 0, j = m - 1; i < m; j = i++) {
@@ -641,8 +725,15 @@ export class LandMask {
             const ay = c[2 * j + 1];
             const bx = c[2 * i];
             const by = c[2 * i + 1];
-            if (Math.max(ax, bx) < minX || Math.min(ax, bx) > maxX || Math.max(ay, by) < minY || Math.min(ay, by) > maxY) continue;
+            if (
+              Math.max(ax, bx) < minX - dLonB ||
+              Math.min(ax, bx) > maxX + dLonB ||
+              Math.max(ay, by) < minY - dLatB ||
+              Math.min(ay, by) > maxY + dLatB
+            )
+              continue;
             if (segmentsTouch(x1, y1, x2, y2, ax, ay, bx, by)) return true;
+            if (dLatB > 0 && segmentsWithinM(x1, y1, x2, y2, ax, ay, bx, by, cosLatB) <= this.bufferM) return true;
           }
         }
       }
@@ -709,7 +800,7 @@ function bboxCovers(outer: BBox, inner: BBox): boolean {
 const PIECE_MAX_M = 1000;
 
 /** The great circle a→b as points ≤ PIECE_MAX_M apart (end points included). */
-function greatCirclePieces(lonA: number, latA: number, lonB: number, latB: number): { lons: Float64Array; lats: Float64Array } {
+export function greatCirclePieces(lonA: number, latA: number, lonB: number, latB: number): { lons: Float64Array; lats: Float64Array } {
   const d = haversineDistanceM(lonA, latA, lonB, latB);
   const n = Math.max(2, Math.ceil(d / PIECE_MAX_M) + 1);
   const lons = new Float64Array(n);
@@ -768,6 +859,73 @@ export function walkGrid(
     t = tNext;
   }
   return false;
+}
+
+/**
+ * The raster grown by kx cells east-west and ky north-south: a cell is
+ * set when any cell within that window is. Two passes with a running
+ * count, O(cells).
+ */
+export function dilate(raster: Uint8Array, nx: number, ny: number, kx: number, ky: number): Uint8Array {
+  if (kx <= 0 && ky <= 0) return raster.slice();
+  const tmp = new Uint8Array(raster.length);
+  for (let j = 0; j < ny; j++) {
+    const base = j * nx;
+    let count = 0;
+    for (let i = -kx; i < nx; i++) {
+      const add = i + kx;
+      if (add < nx && raster[base + add]) count++;
+      const drop = i - kx - 1;
+      if (drop >= 0 && raster[base + drop]) count--;
+      if (i >= 0 && count > 0) tmp[base + i] = 1;
+    }
+  }
+  const out = new Uint8Array(raster.length);
+  for (let i = 0; i < nx; i++) {
+    let count = 0;
+    for (let j = -ky; j < ny; j++) {
+      const add = j + ky;
+      if (add < ny && tmp[add * nx + i]) count++;
+      const drop = j - ky - 1;
+      if (drop >= 0 && tmp[drop * nx + i]) count--;
+      if (j >= 0 && count > 0) out[j * nx + i] = 1;
+    }
+  }
+  return out;
+}
+
+/** Distance in metres from a point to a segment, all in degrees, on a flat metric with the given cos(latitude). */
+function pointSegmentM(px: number, py: number, ax: number, ay: number, bx: number, by: number, cosLat: number): number {
+  const sx = M_PER_DEG * cosLat;
+  const sy = M_PER_DEG;
+  const vx = (bx - ax) * sx;
+  const vy = (by - ay) * sy;
+  const wx = (px - ax) * sx;
+  const wy = (py - ay) * sy;
+  const l2 = vx * vx + vy * vy;
+  let t = l2 > 0 ? (wx * vx + wy * vy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(wx - t * vx, wy - t * vy);
+}
+
+/** Distance in metres between two segments that do not touch: the least of the four end-to-segment distances. */
+function segmentsWithinM(
+  p1x: number,
+  p1y: number,
+  p2x: number,
+  p2y: number,
+  q1x: number,
+  q1y: number,
+  q2x: number,
+  q2y: number,
+  cosLat: number
+): number {
+  return Math.min(
+    pointSegmentM(p1x, p1y, q1x, q1y, q2x, q2y, cosLat),
+    pointSegmentM(p2x, p2y, q1x, q1y, q2x, q2y, cosLat),
+    pointSegmentM(q1x, q1y, p1x, p1y, p2x, p2y, cosLat),
+    pointSegmentM(q2x, q2y, p1x, p1y, p2x, p2y, cosLat)
+  );
 }
 
 /** Do segments p1–p2 and q1–q2 intersect or touch? */

@@ -21,7 +21,8 @@
  * start and left the whole bay to the coastline search.
  *
  * Why the HANDOVER_SCAN_M cap: the mesh part is searched by a child that
- * reads every mesh tile within 0.5° of the part's two ends, about 1 GB
+ * reads every mesh tile within 0.5° of the part's two ends (wider when
+ * that box holds no route, route.ts), about 1 GB
  * for the 6.5 M triangles of a 50 km leg (brain, 2026-10-08, Cape Cod
  * Canal); a mesh part twice as long would not fit a Raspberry Pi beside
  * Signal K. The cap is this plugin's, not the parent planner's.
@@ -31,7 +32,7 @@ import { haversineDistanceM } from '../../geo/geodesy';
 import type { Corridor } from '../corridor';
 import { recomputePerWaypointMetadata, type Route, type RouteWarning, type Waypoint } from '../route';
 import { recomputeTotals } from '../smoother';
-import type { MeshLegRouter } from './leg';
+import type { MeshLegRunner } from './leg';
 
 /** Across-track water this wide (2 × the parent's 1000 m per side) is open water. */
 export const OPEN_WATER_WIDTH_M = 2000;
@@ -49,7 +50,7 @@ export interface Handover {
 export function findHandover(
   corridor: Pick<Corridor, 'skeleton' | 'widthM'>,
   covered: 'start' | 'end',
-  mesh: MeshLegRouter
+  mesh: MeshLegRunner
 ): Handover | null {
   const sk = corridor.skeleton;
   const n = sk.length;

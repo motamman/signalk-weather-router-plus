@@ -701,6 +701,12 @@
   </select>
   <div id="smootherNote" class="ctl-hint" hidden>Built into the Refined router.</div>
 
+  <!-- Minimum sailing speed: below it the boat motors (0 = never motor). Moved here from Options (2026-10-08, the owner's request). -->
+  <div class="sail-only">
+  <label for="sailThresh" title="Below this boat speed under sail the router motors instead. 0 means never motor: every stretch is sailed, and a stretch that cannot be sailed fails the route and says so.">Min sail speed: <span id="sailThreshLabel">5.0</span> <span class="unitOf" data-for="sailThreshLabel"></span></label>
+  <input type="range" id="sailThresh" min="0" max="5.2" step="0.1" value="2.6" aria-label="Minimum sailing speed">
+  </div>
+
   <button id="findRoute" disabled>Find Route</button>
   <label style="display:block;font-size:11px;cursor:pointer;margin-top:var(--s-1);" title="Draw the router's search on the map while a route computes: the front of each stage and the best path so far. Off by default; the same switch is in Layers → Base."><input type="checkbox" id="frontToggleRoute" style="width:auto;margin-right:4px;">Show decision lines (the router's search)</label>
   <button id="resetBtn" style="width:100%;padding:7px;margin-top:var(--s-1);background:var(--surface-2);color:var(--text);border:1px solid var(--border-hard);border-radius:var(--r-sm);cursor:pointer;font-size:var(--f-sm);transition:background var(--t-quick);">Clear all</button>
@@ -767,10 +773,6 @@
     <option value="fastest">Fastest (motor when faster)</option>
     <option value="motor">Motor Only</option>
   </select>
-
-  <label>Min sail speed: <span id="sailThreshLabel">5.0</span> <span class="unitOf" data-for="sailThreshLabel"></span></label>
-  <div class="ctl-hint">Below this speed, skip sailing and motor instead. Lower = more sailing segments.</div>
-  <input type="range" id="sailThresh" min="0" max="5.2" step="0.1" value="2.6" aria-label="Minimum sailing speed">
 
   <label>Max wind: <input type="number" id="maxWind" min="0" step="1" placeholder="none" style="width:5em;" aria-label="Maximum wind speed"> <span class="unitOf" data-q="speed"></span></label>
   <div class="ctl-hint">Legs where the forecast wind is above this are not allowed. Empty = no limit.</div>

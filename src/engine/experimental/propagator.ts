@@ -32,21 +32,21 @@
 
 import { norm360 } from '../../geo/angles';
 import { DEG, haversineBearing, haversineDistanceM, projectAlongBearing } from '../../geo/geodesy';
-import type { LandMask } from '../../geo/landmask';
+import type { LandTest } from '../../geo/landmask';
 import { ConvexPolar } from '../../vessel/convexpolar';
 import type { PolarDiagram } from '../../vessel/polar';
 import type { VesselParams } from '../../vessel/vessel';
 import { NoCurrent, NoWind, type CurrentSource, type WindSource } from '../environment';
 import { RouteError } from '../errors';
-import { simulateLegTime, type LegSimResult, type SimOptions } from '../legsim';
+import { DEFAULT_TACK_PENALTY_S, simulateLegTime, type LegSimResult, type SimOptions } from '../legsim';
 import { enrichLegRanges, enrichWaypoints, OceanPropagator } from '../propagator';
 import { recomputePerWaypointMetadata, type Route, type Waypoint } from '../route';
 import type { ComputeRouteArgs, PropagatorOptions } from '../search/types';
 import { recomputeTotals } from '../smoother';
 import { crossTrackPolish } from './polish';
 
-/** Seconds lost per tack or gybe. */
-export const TACK_PENALTY_S = 30;
+/** Seconds lost per tack or gybe when the request sets none (legsim.ts). */
+export const TACK_PENALTY_S = DEFAULT_TACK_PENALTY_S;
 /** The longest tack laid out: the wind is re-read at each tack's start, so this bounds how stale it gets (this plugin's choice, 5 nm). */
 export const TACK_MAX_M = 9260;
 /** Tacks are shortened for land or an unsailable heading down to this; below it the leg fails. */
@@ -86,7 +86,7 @@ export class ExperimentalPropagator {
   private readonly base: OceanPropagator;
 
   constructor(
-    private readonly land: LandMask,
+    private readonly land: LandTest,
     opts: PropagatorOptions
   ) {
     this.base = new OceanPropagator(land, opts);
@@ -171,6 +171,7 @@ export class ExperimentalPropagator {
         maxWindMs: args.maxWindMs,
         maxSwhM: args.maxSwhM,
         comfortWeight: args.comfortWeight,
+        tackPenaltyS: args.tackPenaltyS,
       },
       who,
       advice,
@@ -196,7 +197,7 @@ export class ExperimentalPropagator {
     args.onProgress?.(
       0,
       0,
-      `experimental: convex polar: ${split} leg(s) laid out as tacks (${tacks} tack point(s), {time:${TACK_PENALTY_S}} each, tacks at most {distance:${TACK_MAX_M}}); arrival ${out[out.length - 1].time.toISOString().slice(0, 16).replace('T', ' ')} UTC`
+      `experimental: convex polar: ${split} leg(s) laid out as tacks (${tacks} tack point(s), {time:${env.sim.tackPenaltyS ?? TACK_PENALTY_S}} each, tacks at most {distance:${TACK_MAX_M}}); arrival ${out[out.length - 1].time.toISOString().slice(0, 16).replace('T', ' ')} UTC`
     );
     return env;
   }
@@ -217,7 +218,7 @@ export class ExperimentalPropagator {
     b.mode = r.dominantMode === 'sailing' ? 'sailing' : 'motoring';
     if (r.sailingSeconds > 0 && r.motoringSeconds > 0) b.arrivingSplit = [r.sailingSeconds, r.motoringSeconds];
     else delete b.arrivingSplit;
-    b.time = new Date(a.time.getTime() + r.seconds * 1000 + (b.tack ? TACK_PENALTY_S * 1000 : 0));
+    b.time = new Date(a.time.getTime() + r.seconds * 1000 + (b.tack ? (env.sim.tackPenaltyS ?? TACK_PENALTY_S) * 1000 : 0));
     return true;
   }
 
@@ -254,7 +255,7 @@ export class ExperimentalPropagator {
       const p: Waypoint = {
         lon: tLon,
         lat: tLat,
-        time: new Date(at.time.getTime() + (r.seconds + (tack ? TACK_PENALTY_S : 0)) * 1000),
+        time: new Date(at.time.getTime() + (r.seconds + (tack ? (env.sim.tackPenaltyS ?? TACK_PENALTY_S) : 0)) * 1000),
         sogMs: 0,
         cogDeg: 0,
         mode: r.dominantMode === 'sailing' ? 'sailing' : 'motoring',
@@ -317,10 +318,18 @@ export class ExperimentalPropagator {
           }
         }
       }
-      if (!placed)
+      if (!placed) {
+        // No tack fits (a channel narrower than the shortest tack, with
+        // the chart's shallows on both sides): the course itself, when the
+        // real polar sails it and the straight leg is clear. The hull's
+        // two-heading mix is the faster option, not the only one: dead
+        // downwind in a 200 m channel the boat runs straight (2026-10-08,
+        // job a0a18bcb, the passage south of Monomoy).
+        if (!this.land.legCrossesLandExact(at.lon, at.lat, b.lon, b.lat) && this.sailable(at, b.lon, b.lat, env) !== null) return pts;
         throw new RouteError(
-          `${env.who}: the beat from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} towards ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be tacked at ${at.lat.toFixed(4)}, ${at.lon.toFixed(4)}: every tack tried crossed land or could not be sailed under the ${env.sim.modePolicy} policy; ${env.advice}`
+          `${env.who}: the beat from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} towards ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be tacked at ${at.lat.toFixed(4)}, ${at.lon.toFixed(4)}: every tack tried crossed land or could not be sailed under the ${env.sim.modePolicy} policy, and the course itself cannot be sailed straight; ${env.advice}`
         );
+      }
       pts.push(placed);
       at = placed;
     }

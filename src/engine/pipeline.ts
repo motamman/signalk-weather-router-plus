@@ -20,21 +20,12 @@ import type { WaterGrid } from '../geo/watergrid';
 import type { PolarDiagram } from '../vessel/polar';
 import type { VesselParams } from '../vessel/vessel';
 import { CorridorError, mergeVias, planCorridor, type ChainVia, type Corridor } from './corridor';
-import { NoWind, type CurrentSource, type WindSource } from './environment';
-import { ExperimentalPropagator } from './experimental/propagator';
+import { NoWind, type CurrentSource } from './environment';
+import { RouteError } from './errors';
+import { forecastHorizonNote, type LegWind } from './horizon';
 import type { ModePolicy } from './legsim';
 import { findHandover, sliceCorridor, stitchLegParts } from './mesh/handover';
-import {
-  classifySegments,
-  type MeshLegRouter,
-  type MeshSegment,
-  meshRulesFor,
-  MIN_OPEN_SEGMENT_M,
-  pathLengthM,
-  routeFromMeshPath,
-  stitchMeshSegments,
-} from './mesh/leg';
-import type { MeshRouteResult } from './mesh/route';
+import { type MeshLegRunner, meshRulesFor } from './mesh/leg';
 import { legLabel, type LegPlan } from './multileg';
 import { DEFAULT_ROUTER, makeRouter, type RouterKind } from './router';
 import { enrichLegRanges, enrichWaypoints, RouteCancelled, ViasNotCrossedError, type PropagatorOptions } from './propagator';
@@ -42,16 +33,13 @@ import type { ProgressFn } from './progress';
 import { recomputePerWaypointMetadata, type Route, type StageFront } from './route';
 import { rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother } from './smoother';
 
-/** A forecast for a leg: a wind source that knows the range of time it covers. */
-export interface LegWind extends WindSource {
-  validRange: [Date, Date];
-}
+export type { LegWind } from './horizon';
 
 export interface LegPipelineInputs {
   /** The global water grid for the corridor search, or null (per-route skeleton inside the box). */
   waterGrid: WaterGrid | null;
-  /** The chart mesh, when one is configured: a motoring leg it covers is routed on it instead of the corridor search. */
-  mesh?: MeshLegRouter;
+  /** The chart mesh, when one is configured: a leg it covers is planned on it (mesh/legrun.ts) instead of the coastline search. */
+  mesh?: MeshLegRunner;
   allowCanals: boolean;
   /** The land mask for a box (the corridor's box, or the box around the leg's ends). */
   landFor: (bbox: BBox) => LandMask;
@@ -61,7 +49,15 @@ export interface LegPipelineInputs {
   router?: RouterKind;
   vessel: VesselParams;
   polar: PolarDiagram | null;
-  sim: { modePolicy: ModePolicy; sailThreshMs: number; simStepM: number; maxWindMs?: number; maxSwhM?: number; comfortWeight?: number };
+  sim: {
+    modePolicy: ModePolicy;
+    sailThreshMs: number;
+    simStepM: number;
+    maxWindMs?: number;
+    maxSwhM?: number;
+    comfortWeight?: number;
+    tackPenaltyS?: number;
+  };
   /** RDP tolerance, metres (0 = off); the shortcut smoother and its time tolerance (ratio). */
   simplifyM: number;
   smoother: boolean;
@@ -81,27 +77,20 @@ export interface LegPipelineInputs {
   log?: (message: string) => void;
   /** Areas to avoid (Signal K notes), for the mesh (the land mask carries them for the coastline search). */
   avoidAreas?: { lon: number; lat: number; radiusM: number }[];
+  /** On a mesh leg, keep at least this far from every blocked triangle (metres; 0 or absent: none). */
+  meshBufferM?: number;
+  /** Keep at least this far from the coastline (metres; 0 or absent: none); the land masks from landFor already keep it, this is for the passage check. */
+  landBufferM?: number;
 }
 
-/** The forecast's last step against the leg's arrival: the horizon fields and the warning when the leg runs past it. */
-function forecastHorizonNote(inp: LegPipelineInputs, plan: LegPlan, r: Route, legWind: LegWind | null): void {
-  if (!legWind) return;
-  const lastValid = legWind.validRange[1].getTime();
-  r.forecastValidToMs = lastValid;
-  const arrival = r.waypoints[r.waypoints.length - 1].time.getTime();
-  if (arrival > lastValid) {
-    r.forecastHorizonExceededS = (arrival - lastValid) / 1000;
-    const beyond = r.waypoints.filter(w => w.time.getTime() > lastValid).length;
-    const limited = inp.sim.maxWindMs !== undefined || inp.sim.maxSwhM !== undefined;
-    if (limited) r.limitsBeyondForecast = true;
-    inp.progress(
-      0,
-      0,
-      `WARNING: ${inp.multi ? `${legLabel(plan)} ` : ''}arrival is {time:${((arrival - lastValid) / 1000).toFixed(0)}} after the last forecast step (${legWind.validRange[1].toISOString().slice(0, 16).replace('T', ' ')} UTC); the last ${beyond} leg${beyond === 1 ? '' : 's'} ran on conditions held at that step${limited ? ', and the wind/wave limit was checked against those held conditions' : ''}. A longer forecast horizon (Defaults) covers more of the passage`
-    );
-  }
-}
-
+/**
+ * A leg both ends of which the mesh covers: planned on the mesh (the
+ * runner: the child process holding it in the plugin, in-process in the
+ * tests), with the forecast and current areas loaded here first (the
+ * worker fetches on-demand current areas over the network; the mesh
+ * process reads only disk). Null when the mesh cannot take the leg: the
+ * caller routes it on the coastline search, unchanged.
+ */
 async function meshLeg(
   inp: LegPipelineInputs,
   plan: LegPlan,
@@ -122,161 +111,45 @@ async function meshLeg(
     0,
     `${tag}chart mesh: routing on charted depths (draught {depth:${r.rules.draughtM}}, air draft {length:${r.rules.airDraftM}})`
   );
-  // The leg's box, for the currents the segments are timed with (motor mode reads no forecast).
   const bbox = bboxFromLonLat([legStart[0], plan.end[0]], [legStart[1], plan.end[1]], 0.5);
-  const legWind = await inp.loadAreas(bbox, multi ? `${tag}area` : 'route area');
-  const { source: current, names: currentNames } = inp.currents();
+  await inp.loadAreas(bbox, multi ? `${tag}area` : 'route area');
+  const { names: currentNames } = inp.currents();
   if (currentNames && plan.index === 0) progress(0, 0, `currents: ${currentNames.join(' > ')}`);
-  // The mesh search runs as a child task; its failure (timeout, crash)
-  // is a warning and the coastline search takes the leg. The areas just
-  // loaded go before that fallback loads its own: loadAreas replaces the
-  // window without releasing the one before.
-  let res: MeshRouteResult;
+  let route: Route | null;
   try {
-    res = await inp.mesh!.route(legStart, plan.end, { ...r.rules, avoid: inp.avoidAreas });
+    route = await inp.mesh!.leg({
+      plan,
+      legIndex,
+      legStart,
+      legDeparture,
+      tag,
+      multi,
+      rules: { ...r.rules, avoid: inp.avoidAreas, ...(inp.meshBufferM !== undefined ? { bufferM: inp.meshBufferM } : {}) },
+      vessel: inp.vessel,
+      polar: inp.polar,
+      sim: inp.sim,
+      router: inp.router,
+      propagator: inp.propagator,
+      stages,
+      simplifyM: inp.simplifyM,
+      smoother: inp.smoother,
+      smootherTolerance: inp.smootherTolerance,
+      progress,
+      shouldCancel,
+    });
   } catch (err) {
     if (shouldCancel() || err instanceof RouteCancelled) throw new RouteCancelled();
-    progress(0, 0, `WARNING: ${tag}chart mesh: the mesh search failed (${(err as Error).message}); using the coastline search instead`);
+    // A leg that cannot be made as asked (a stretch that cannot be sailed under the policy) fails the route with that reason.
+    if (err instanceof RouteError) throw err;
+    progress(0, 0, `WARNING: ${tag}chart mesh: the mesh leg failed (${(err as Error).message}); using the coastline search instead`);
     inp.releaseAreas?.();
     return null;
   }
   if (shouldCancel()) throw new RouteCancelled();
-  const st = res.stats;
-  const timing = `${st.trianglesLoaded} triangles read in {time:${(st.readMs + st.prepMs) / 1000}}, ${st.blocked} blocked, search {time:${st.searchMs / 1000}} (${st.expanded} edges)`;
-  if (!res.ok) {
-    progress(0, 0, `WARNING: ${tag}chart mesh: ${res.reason} (${timing}); using the coastline search instead`);
+  if (!route) {
     inp.releaseAreas?.();
     return null;
   }
-  progress(0, 0, `${tag}chart mesh: {distance:${res.lengthM.toFixed(0)}}, ${res.path.length} points; ${timing}`);
-  // The parent planner's hybrid rule: the mesh route is the skeleton; under
-  // motor it is the route; otherwise its narrow passages (both shores
-  // within CONSTRAINED_WIDTH_M) are motored along the mesh and the open
-  // water between them is sailed by the isochrone search from one
-  // passage's end to the next one's start.
-  const wind = legWind ?? new NoWind();
-  const motor = inp.sim.modePolicy === 'motor';
-  // Sail only: sail_max with a threshold of 0 never motors (legsim.ts), so
-  // the narrow passages are sailed along the mesh route too (2026-10-08,
-  // the owner's decision); above 0 they are motored as the parent does.
-  const sailOnly = inp.sim.modePolicy === 'sail_max' && inp.sim.sailThreshMs <= 0 && inp.polar !== null;
-  const segs: MeshSegment[] = motor
-    ? [{ type: 'constrained', start: 0, end: res.path.length - 1 }]
-    : classifySegments(res.path, res.widths);
-  if (!motor)
-    progress(
-      0,
-      0,
-      `${tag}chart mesh: ${segs.length} segment(s): ${segs.filter(s => s.type === 'constrained').length} narrow (${sailOnly ? 'sailed along the mesh route, the sail threshold being 0' : 'motored along the mesh route'}), ${segs.filter(s => s.type === 'open').length} open water (isochrone search)`
-    );
-  let landCache: LandMask | null = null;
-  const landOnce = (): LandMask => (landCache ??= inp.landFor(bbox));
-  /**
-   * A segment along the mesh route itself, under the request's policy: a
-   * narrow passage, an open stretch too short to search, or one whose
-   * search failed. Under sail_max it is laid out as the refined router
-   * lays out its legs (tacks where the wind there and then needs them,
-   * motor only below a positive threshold); it fails the route when a
-   * stretch cannot be sailed, never motors instead (2026-10-08, job
-   * 1c1fda5b: a failed search motored 106 km under a sail threshold of 0).
-   * Under fastest the walk picks per step; narrow passages are motored
-   * unless the request is sail only. The tacks are checked against the
-   * coastline, not against the charted depths the mesh route keeps to.
-   */
-  const alongMesh = (seg: MeshSegment, pts: [number, number][], at: Date, label: string, lenM: number): Route | null => {
-    const sailed = seg.type === 'open' ? inp.sim.modePolicy === 'sail_max' && inp.polar !== null : sailOnly;
-    if (sailed) {
-      const lay = new ExperimentalPropagator(landOnce(), { ...inp.propagator, stages });
-      const part = lay.sailPolyline(pts, at, {
-        vessel: inp.vessel,
-        polar: inp.polar!,
-        wind: legWind ?? undefined,
-        current,
-        sim: inp.sim,
-        who: label,
-        advice: 'raise the sail threshold (Route → Options) so that stretch is motored, or route under motor',
-        onProgress: (s: number, tot: number, m: string) => progress(s, tot, `${label}: ${m}`),
-      });
-      progress(
-        0,
-        0,
-        `${label}: ${seg.type === 'open' ? 'open water' : 'narrow passage'}, sailed along the mesh route: {distance:${lenM.toFixed(0)}}, {time:${part.totalTimeS}} (sailing {time:${part.sailingTimeS}})`
-      );
-      return part;
-    }
-    const policy: ModePolicy = seg.type === 'open' && !motor ? inp.sim.modePolicy : 'motor';
-    const part = routeFromMeshPath(pts, at, inp.vessel, inp.polar, wind, current, { ...inp.sim, modePolicy: policy });
-    if (part && !motor)
-      progress(
-        0,
-        0,
-        `${label}: ${seg.type === 'open' ? `open water under ${policy},` : 'narrow passage, motored along the mesh route,'} {distance:${lenM.toFixed(0)}}, {time:${part.totalTimeS}}`
-      );
-    return part;
-  };
-  const parts: Route[] = [];
-  let at = legDeparture;
-  for (let si = 0; si < segs.length; si++) {
-    const seg = segs[si];
-    const pts = res.path.slice(seg.start, seg.end + 1);
-    const lenM = pathLengthM(pts);
-    const label = `${tag}chart mesh segment ${si + 1}/${segs.length}`;
-    let part: Route | null = null;
-    if (seg.type === 'open' && lenM >= MIN_OPEN_SEGMENT_M && !motor) {
-      const last = seg.end === res.path.length - 1;
-      const prop = makeRouter(inp.router ?? DEFAULT_ROUTER, landOnce(), { ...inp.propagator, stages });
-      try {
-        part = prop.computeRoute({
-          start: pts[0],
-          end: pts[pts.length - 1],
-          departureTime: at,
-          vessel: inp.vessel,
-          polar: inp.polar,
-          wind: legWind ?? undefined,
-          current,
-          modePolicy: inp.sim.modePolicy,
-          sailThreshMs: inp.sim.sailThreshMs,
-          maxWindMs: inp.sim.maxWindMs,
-          maxSwhM: inp.sim.maxSwhM,
-          comfortWeight: inp.sim.comfortWeight,
-          forecastEndMs: legWind ? legWind.validRange[1].getTime() : undefined,
-          simStepM: inp.sim.simStepM,
-          arrivalRadiusM: last ? plan.arrivalRadiusM : undefined,
-          snapToExact: last ? plan.snapToExact : true,
-          onProgress: (s: number, tot: number, m: string) => progress(s, tot, `${label}: ${m}`),
-          onFrontier: inp.onFrontier ? (front: StageFront) => inp.onFrontier!(legIndex, front) : undefined,
-          shouldCancel,
-        });
-        progress(
-          0,
-          0,
-          `${label}: open water, {distance:${lenM.toFixed(0)}} along the mesh route; the isochrone search made it ${part.waypoints.length} waypoints, {time:${part.totalTimeS}} (sailing {time:${part.sailingTimeS}})`
-        );
-      } catch (err) {
-        if (shouldCancel() || err instanceof RouteCancelled) throw new RouteCancelled();
-        progress(
-          0,
-          0,
-          `WARNING: ${label}: open water, but the isochrone search failed (${(err as Error).message}); following the mesh route instead under ${inp.sim.modePolicy}`
-        );
-        part = null;
-      }
-    }
-    if (!part) {
-      part = alongMesh(seg, pts, at, label, lenM);
-      if (!part) {
-        progress(0, 0, `WARNING: ${label}: cannot be made against the current; using the coastline search for the leg instead`);
-        inp.releaseAreas?.();
-        return null;
-      }
-    }
-    parts.push(part);
-    at = part.waypoints[part.waypoints.length - 1].time;
-  }
-  const route = parts.length === 1 ? parts[0] : stitchMeshSegments(parts, wind);
-  route.meshLeg = true;
-  forecastHorizonNote(inp, plan, route, legWind);
-  if (currentNames) route.currentSources = currentNames;
   if (multi)
     inp.log?.(
       `${tag}${route.waypoints.length} waypoints, ${(route.totalDistanceM / NM_M).toFixed(1)} nm, ${(route.totalTimeS / HOUR_S).toFixed(1)} h, ${Date.now() - t} ms (chart mesh)`
@@ -414,6 +287,19 @@ function corridorFor(inp: LegPipelineInputs, chain: [number, number][], tag: str
         `${tag}corridor: {distance:${corridor.lengthM.toFixed(0)}}, A* {time:${cst.astarMs / 1000}} (${cst.expanded} cells), ${cst.refines} local refinement(s), ${cst.reroutes} re-route(s)`
       );
       for (const v of corridor.autoVias) progress(0, 0, `${tag}corridor: auto via at ${v.name}, width {distance:${v.widthM.toFixed(0)}}`);
+      // A passage narrower than twice the land buffer cannot be passed with the buffer kept on both sides.
+      if (inp.landBufferM && inp.landBufferM > 0) {
+        let narrowest = -1;
+        for (let i = 0; i < corridor.widthM.length; i++)
+          if (corridor.widthM[i] < 2 * inp.landBufferM && (narrowest < 0 || corridor.widthM[i] < corridor.widthM[narrowest])) narrowest = i;
+        if (narrowest >= 0) {
+          const p = corridor.skeleton[narrowest];
+          const via = corridor.autoVias.find(v => v.widthM < 2 * inp.landBufferM!);
+          throw new RouteError(
+            `the passage ${via ? `at ${via.name}` : `at ${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}`} is {length:${corridor.widthM[narrowest].toFixed(0)}} wide, narrower than twice the land buffer ({length:${inp.landBufferM}}); lower the buffer (Defaults) or route round it with a waypoint`
+          );
+        }
+      }
     } catch (err) {
       if (shouldCancel()) throw new RouteCancelled();
       if (!(err instanceof CorridorError) || err.fatal) throw err;
@@ -484,6 +370,7 @@ async function openWaterLeg(
     maxWindMs: inp.sim.maxWindMs,
     maxSwhM: inp.sim.maxSwhM,
     comfortWeight: inp.sim.comfortWeight,
+    tackPenaltyS: inp.sim.tackPenaltyS,
     forecastEndMs: legWind ? legWind.validRange[1].getTime() : undefined,
     simStepM: inp.sim.simStepM,
     vias: vias.length ? vias : undefined,
@@ -549,7 +436,13 @@ async function openWaterLeg(
   // The wind/wave range of each leg, for the briefing cards: a smoothed
   // leg can span many hours, where one end-of-leg sample misleads.
   enrichLegRanges(r, legWind ?? new NoWind());
-  forecastHorizonNote(inp, plan, r, legWind);
+  forecastHorizonNote(
+    r,
+    legWind,
+    inp.sim.maxWindMs !== undefined || inp.sim.maxSwhM !== undefined,
+    inp.multi ? `${legLabel(plan)} ` : '',
+    inp.progress
+  );
   if (currentNames) r.currentSources = currentNames;
   if (corridorFallback) r.corridorFallback = true;
   if (multi)
