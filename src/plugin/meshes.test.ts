@@ -95,7 +95,8 @@ function serve(
       res.writeHead(200, { 'content-length': st.size });
       if (req.method === 'HEAD') res.end();
       else if (hold && p.endsWith('.bin')) void hold().then(() => fs.createReadStream(p).pipe(res));
-      else if (holdCatalog && p.endsWith(path.join('charts', 'mesh', 'index.json'))) void holdCatalog().then(() => fs.createReadStream(p).pipe(res));
+      else if (holdCatalog && p.endsWith(path.join('charts', 'mesh', 'index.json')))
+        void holdCatalog().then(() => fs.createReadStream(p).pipe(res));
       else fs.createReadStream(p).pipe(res);
     });
     srv.listen(0, '127.0.0.1', () => {
@@ -294,8 +295,8 @@ test('MeshManager.refresh: during a pass whose catalogue read is still in flight
     assert.equal(st.catalog_error, null);
     assert.equal(st.catalog_updated, '2026-10-09T06:43:40Z');
     await pass;
-    await mgr.reconcile(); // the pass refresh queued after it: nothing left to download
-    assert.equal(hits.catalog, 2, 'one read per pass, shared by the refresh');
+    await mgr.reconcile(); // the pass refresh queued after it (before `run`, on its own signal), then this one
+    assert.equal(hits.catalog, 3, 'one read per pass; the refresh added none');
     assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'ready');
   } finally {
     release();
