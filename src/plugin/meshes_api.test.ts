@@ -33,7 +33,14 @@ test('POST /api/meshes/refresh: read-write only; awaits the read; answers the li
   const r = routes.get('POST /api/meshes/refresh')!;
   assert.equal(r.access, 'readwrite');
   let out: unknown = null;
-  const res = { status: () => res, json: (b: unknown) => { out = b; return res; }, setHeader: () => res };
+  const res = {
+    status: () => res,
+    json: (b: unknown) => {
+      out = b;
+      return res;
+    },
+    setHeader: () => res,
+  };
   await r.h({ query: {} }, res);
   assert.equal(reads, 1);
   assert.deepEqual(out, { catalog_error: null, meshes: [{ name: '01CGD' }] });

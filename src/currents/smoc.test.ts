@@ -1,8 +1,6 @@
 import { test } from 'node:test';
-import { HOUR_S } from '../geo/units';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   alignedSteps,
@@ -19,7 +17,6 @@ import {
   timeIndex,
   SMOC_PRIORITY,
   type SmocRun,
-  type SmocSettings,
 } from './smoc';
 import { CurrentStack } from './stack';
 import { FILL_RADIUS_CELLS, filledCell, sampleFieldPairFilled } from './coastfill';
@@ -27,8 +24,7 @@ import { RtofsCurrentSource } from './rtofs';
 import type { CurrentSourceLike } from './types';
 import { type ChunkScratch, decodeChunk, parseArrayMeta, parseCfTimeUnits, parseConsolidated } from '../data/zarr';
 import { sampleField, type FieldGrid } from '../data/forecast';
-import { T0, NT, H, uTrue, vTrue, isLand, f4, Mock, makeMock, URLS, SETTINGS, tmpDir } from './smoc.mock.test';
-
+import { T0, NT, H, uTrue, vTrue, isLand, Mock, makeMock, URLS, SETTINGS, tmpDir } from './smoc.mock.test';
 
 async function setup(): Promise<{ mock: Mock; client: SmocClient; run: SmocRun; dir: string }> {
   const mock = makeMock();
@@ -538,7 +534,10 @@ test('smoc: a provisional run is cached in its own directory, readable without t
   await offline.ensure(box, steps, { reason: 'mesh leg' });
   assert.equal(mock.total(), n, 'served from the provisional directory');
   assert.deepEqual(offline.at(-5, 50, new Date(T0 + 7 * H)), src.at(-5, 50, new Date(T0 + 7 * H)));
-  assert.deepEqual(client.cachedRuns().map(r => [r.key, r.settled]), [[prov.key, false]]);
+  assert.deepEqual(
+    client.cachedRuns().map(r => [r.key, r.settled]),
+    [[prov.key, false]]
+  );
   // The update finishes: the settled run of the same key reads nothing from the provisional directory.
   mock.stacUpdating = false;
   const settled = await client.probe(prov);
@@ -548,7 +547,13 @@ test('smoc: a provisional run is cached in its own directory, readable without t
   const fresh = new SmocCurrentSource(settled, SETTINGS, client);
   await fresh.ensure(box, steps, { reason: 'route' });
   assert.ok(mock.total() > n, 'downloaded again for the settled run');
-  assert.deepEqual(client.cachedRuns().map(r => [r.key, r.settled]), [[prov.key, true], [prov.key, false]]);
+  assert.deepEqual(
+    client.cachedRuns().map(r => [r.key, r.settled]),
+    [
+      [prov.key, true],
+      [prov.key, false],
+    ]
+  );
   // Replacing the provisional run drops its directory; a prune keeping the settled run would too.
   client.dropProvisionalRun(prov.key);
   assert.ok(!fs.existsSync(path.join(dir, prov.key + '.provisional')));

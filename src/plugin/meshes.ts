@@ -13,6 +13,12 @@
  * mesh; the previous copy, if any, serves until then. A mesh unticked in
  * the config is deleted.
  *
+ * A local mesh (the `meshDir` folder you manage yourself) with the same
+ * name as a published one: whichever was built later is used (localWins:
+ * the sidecar's build date against the catalogue's or the marker's; a
+ * local mesh without a date loses). It stops the download only when it is
+ * the newer, and the router opens only the newer copy (meshesToOpen).
+ *
  * The catalogue is read at start and once a day; a mesh whose catalogue
  * `build_date` is newer than its marker's is downloaded again. Downloads
  * run one at a time in a child process (childtask.ts `mesh-download`),
@@ -71,6 +77,15 @@ export interface MeshRow {
   ticked: boolean;
   /** A mesh the router opens (false: switched off in the config, kept on disk). */
   enabled: boolean;
+  /**
+   * The copy the router opens for this name: the download or a local
+   * folder of the same name (whichever was built later; see localWins),
+   * or null when there is neither.
+   */
+  using: 'download' | 'local' | null;
+  /** A local folder with the same name as this catalogue mesh, and its build date (null: none, or no sidecar). */
+  local_dir: string | null;
+  local_build_date: string | null;
   state: MeshState;
   /** Files copied so far and in total, while downloading. */
   progress: { files: number; total: number; bytes: number } | null;
@@ -134,6 +149,48 @@ export function describeMesh(m: CatalogMesh): string {
   return parts.filter(Boolean).join(' · ');
 }
 
+/**
+ * Whether a local mesh is used instead of a published (catalogue or
+ * downloaded) copy of the same name: when it was built at the same time or
+ * later. A local mesh without a build date (no sidecar) never wins; a
+ * published copy without one always loses to a dated local mesh.
+ */
+export function localWins(localBuildDate: string | null, publishedBuildDate: string | null): boolean {
+  const l = localBuildDate ? Date.parse(localBuildDate) : NaN;
+  if (Number.isNaN(l)) return false;
+  const p = publishedBuildDate ? Date.parse(publishedBuildDate) : NaN;
+  return Number.isNaN(p) || l >= p;
+}
+
+/**
+ * The meshes a route opens, downloaded ones first: every ready download
+ * and every local mesh, except one switched off in the config, and, where
+ * a download and a local mesh share a name, only the newer of the two
+ * (localWins). A route uses the first of these that covers a leg.
+ */
+export function meshesToOpen(
+  downloaded: { name: string; dirs: string[]; build_date: string | null }[],
+  local: { name: string; dirs: string[]; build_date: string | null }[],
+  disabled: string[]
+): { name: string; dirs: string[]; source: 'download' | 'local' }[] {
+  const localByName = new Map(local.map(m => [m.name, m]));
+  const downloadedByName = new Map(downloaded.map(m => [m.name, m]));
+  const out: { name: string; dirs: string[]; source: 'download' | 'local' }[] = [];
+  for (const m of downloaded) {
+    if (disabled.includes(m.name)) continue;
+    const l = localByName.get(m.name);
+    if (l && localWins(l.build_date, m.build_date)) continue;
+    out.push({ name: m.name, dirs: m.dirs, source: 'download' });
+  }
+  for (const m of local) {
+    if (disabled.includes(m.name)) continue;
+    const d = downloadedByName.get(m.name);
+    if (d && !localWins(m.build_date, d.build_date)) continue;
+    out.push({ name: m.name, dirs: m.dirs, source: 'local' });
+  }
+  return out;
+}
+
 export function readMarker(dir: string): MeshMarker | null {
   try {
     return JSON.parse(fs.readFileSync(path.join(dir, MARKER_FILE), 'utf8')) as MeshMarker;
@@ -164,14 +221,23 @@ export function meshClusterDirs(dir: string): string[] {
  * from its index (extent, triangles); the s57Work sidecar
  * `<name>_mesh.json` beside it adds the chart and build dates when present.
  */
-export function localMeshes(
-  meshDir: string | null
-): { name: string; dir: string; dirs: string[]; description: string; error: string | null }[] {
+export interface LocalMesh {
+  name: string;
+  dir: string;
+  dirs: string[];
+  description: string;
+  /** The sidecar's `build_date`, or null without a sidecar (or one without the date). */
+  build_date: string | null;
+  error: string | null;
+}
+
+export function localMeshes(meshDir: string | null): LocalMesh[] {
   if (!meshDir) return [];
-  const one = (name: string, dir: string): { name: string; dir: string; dirs: string[]; description: string; error: string | null } => {
+  const one = (name: string, dir: string): LocalMesh => {
     const dirs = meshClusterDirs(dir);
-    if (!dirs.length) return { name, dir, dirs, description: '', error: 'no index.json or meshes.json' };
+    if (!dirs.length) return { name, dir, dirs, description: '', build_date: null, error: 'no index.json or meshes.json' };
     const parts: string[] = [];
+    let buildDate: string | null = null;
     try {
       let tri = 0;
       let west = Infinity;
@@ -201,11 +267,14 @@ export function localMeshes(
       if (side) {
         const s = JSON.parse(fs.readFileSync(side, 'utf8')) as { build_date?: string; chart_build_date?: string | null };
         if (s.chart_build_date) parts.push(`chart ${s.chart_build_date.slice(0, 10)}`);
-        if (s.build_date) parts.push(`mesh ${s.build_date.slice(0, 10)}`);
+        if (s.build_date) {
+          parts.push(`mesh ${s.build_date.slice(0, 10)}`);
+          buildDate = s.build_date;
+        }
       }
-      return { name, dir, dirs, description: `local: ${dir} · ${parts.join(' · ')}`, error: null };
+      return { name, dir, dirs, description: `local: ${dir} · ${parts.join(' · ')}`, build_date: buildDate, error: null };
     } catch (err) {
-      return { name, dir, dirs, description: `local: ${dir}`, error: (err as Error).message };
+      return { name, dir, dirs, description: `local: ${dir}`, build_date: buildDate, error: (err as Error).message };
     }
   };
   try {
@@ -224,24 +293,34 @@ export function localMeshes(
       })
       .map(d => one(path.basename(d).replace(/_mesh$/, ''), d));
   } catch (err) {
-    return [{ name: path.basename(meshDir), dir: meshDir, dirs: [], description: `local: ${meshDir}`, error: (err as Error).message }];
+    return [
+      {
+        name: path.basename(meshDir),
+        dir: meshDir,
+        dirs: [],
+        description: `local: ${meshDir}`,
+        build_date: null,
+        error: (err as Error).message,
+      },
+    ];
   }
 }
 
-/** The ready meshes under a store directory: every folder with a complete marker. */
-export function readyMeshDirs(storeDir: string): { name: string; dirs: string[] }[] {
+/** The ready meshes under a store directory: every folder with a complete marker (its build date from the marker). */
+export function readyMeshDirs(storeDir: string): { name: string; dirs: string[]; build_date: string | null }[] {
   let names: string[];
   try {
     names = fs.readdirSync(storeDir).filter(n => !n.startsWith('.') && !n.endsWith('.new'));
   } catch {
     return [];
   }
-  const out: { name: string; dirs: string[] }[] = [];
+  const out: { name: string; dirs: string[]; build_date: string | null }[] = [];
   for (const n of names.sort()) {
     const dir = path.join(storeDir, n);
-    if (!readMarker(dir)) continue;
+    const marker = readMarker(dir);
+    if (!marker) continue;
     const dirs = meshClusterDirs(dir);
-    if (dirs.length) out.push({ name: n, dirs });
+    if (dirs.length) out.push({ name: n, dirs, build_date: marker.build_date ?? null });
   }
   return out;
 }
@@ -364,16 +443,19 @@ export class MeshManager {
       }
       this.removing.delete(n);
     }
-    // Ticked meshes: missing or older than the catalogue → download, one at a time. A local mesh's name is not one.
-    const localNames = new Set(localMeshes(this.meshDir).map(m => m.name));
+    // Ticked meshes: missing or older than the catalogue → download, one at a time. A local mesh of the
+    // same name stops the download only when it was built at the same time or later (localWins); a ticked
+    // name that is only a local mesh (ticked in an earlier panel) is not a catalogue mesh.
+    const localByName = new Map(localMeshes(this.meshDir).map(m => [m.name, m]));
     for (const n of this.ticked) {
       if (signal.aborted) return;
-      if (localNames.has(n)) continue;
+      const local = localByName.get(n);
       const entry = this.catalog?.meshes.find(m => m.name === n);
       if (!entry) {
-        if (this.catalog) this.errors.set(n, 'not in the catalogue');
+        if (this.catalog && !local) this.errors.set(n, 'not in the catalogue');
         continue;
       }
+      if (local && localWins(local.build_date, entry.build_date)) continue;
       const marker = readMarker(path.join(this.storeDir, n));
       if (marker && marker.build_date === entry.build_date) continue;
       await this.download(entry, signal);
@@ -475,10 +557,17 @@ export class MeshManager {
     }
   }
 
-  /** Every mesh the catalogue lists (and any on disk the catalogue no longer has), with its state. */
+  /**
+   * Every mesh the catalogue lists (and any on disk the catalogue no longer
+   * has), with its state, then the local meshes. A local mesh with the same
+   * name as a catalogue or downloaded one is not a row of its own: that
+   * row carries it (local_dir, local_build_date) and says which copy the
+   * router opens (using; meshesToOpen).
+   */
   status(): MeshesStatus {
     const local = localMeshes(this.meshDir);
     const localNames = new Set(local.map(m => m.name));
+    const localByName = new Map(local.map(m => [m.name, m]));
     // A local mesh's name in the download list (ticked in an earlier panel) is not a catalogue mesh.
     const names = new Set<string>([
       ...(this.catalog?.meshes.map(m => m.name) ?? []),
@@ -496,6 +585,15 @@ export class MeshManager {
       else if (this.errors.has(name)) state = 'error';
       else if (marker && entry && marker.build_date !== entry.build_date) state = 'update';
       else if (marker) state = 'ready';
+      const l = localByName.get(name);
+      const usable = l && !l.error ? l : null;
+      const using: MeshRow['using'] = usable
+        ? marker && !localWins(usable.build_date, marker.build_date)
+          ? 'download'
+          : 'local'
+        : marker
+          ? 'download'
+          : null;
       rows.push({
         name,
         title: DISTRICT_NAMES[name] ?? name,
@@ -503,6 +601,9 @@ export class MeshManager {
         source: 'catalog',
         ticked,
         enabled: !this.disabled.includes(name),
+        using,
+        local_dir: l?.dir ?? null,
+        local_build_date: l?.build_date ?? null,
         state,
         progress: state === 'downloading' ? this.progressOf(name) : null,
         catalog_build_date: entry?.build_date ?? null,
@@ -511,8 +612,9 @@ export class MeshManager {
         error: this.errors.get(name) ?? null,
       });
     }
-    // Local meshes (the folder managed by hand), after the catalogue's.
+    // Local meshes (the folder managed by hand), after the catalogue's; one named like a row above is in that row.
     for (const m of local) {
+      if (names.has(m.name)) continue;
       rows.push({
         name: m.name,
         title: DISTRICT_NAMES[m.name] ?? m.name,
@@ -520,6 +622,9 @@ export class MeshManager {
         source: 'local',
         ticked: true,
         enabled: !this.disabled.includes(m.name),
+        using: m.error ? null : 'local',
+        local_dir: m.dir,
+        local_build_date: m.build_date,
         state: m.error ? 'error' : 'ready',
         progress: null,
         catalog_build_date: null,

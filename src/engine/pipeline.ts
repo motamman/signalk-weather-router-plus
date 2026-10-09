@@ -19,12 +19,12 @@ import type { LandMask } from '../geo/landmask';
 import type { WaterGrid } from '../geo/watergrid';
 import type { PolarDiagram } from '../vessel/polar';
 import type { VesselParams } from '../vessel/vessel';
-import { CorridorError, mergeVias, planCorridor, type ChainVia, type Corridor } from './corridor';
+import { CorridorError, mergeVias, planCorridor, SHORE_CLEAR_M, type ChainVia, type Corridor } from './corridor';
 import { NoWind, type CurrentSource } from './environment';
 import { RouteError } from './errors';
 import { forecastHorizonNote, type LegWind } from './horizon';
 import type { ModePolicy } from './legsim';
-import { findHandover, sliceCorridor, stitchLegParts } from './mesh/handover';
+import { findHandover, HANDOVER_SCAN_M, sliceCorridor, stitchLegParts } from './mesh/handover';
 import { type MeshLegRunner, meshRulesFor } from './mesh/leg';
 import { type DrawbridgeChoice, MESH_BOX_PAD_MAX_DEG } from './mesh/route';
 import { legLabel, type LegPlan } from './multileg';
@@ -189,7 +189,8 @@ export async function runLegPipeline(
   // The chart mesh first: a leg inside it is routed on charted depths,
   // clearances and obstructions (narrow water motored, open water by the
   // selected router); a leg with one end inside it is routed on the mesh
-  // as far as open water and handed over to the coastline search there;
+  // as far as open water clear of the shore (mesh/handover.ts) and handed
+  // over to the coastline search there;
   // anything the mesh cannot take falls through to the coastline search
   // below, unchanged.
   if (inp.mesh) {
@@ -233,14 +234,18 @@ async function meshHandoverLeg(
     progress(
       0,
       0,
-      `${tag}chart mesh: the leg leaves the mesh and its ${covered} is already in open water; the coastline search takes the whole leg`
+      `${tag}chart mesh: the leg leaves the mesh and its ${covered} is already in open water at least {distance:${SHORE_CLEAR_M}} from land; the coastline search takes the whole leg`
     );
     return null;
   }
   progress(
     0,
     0,
-    `${tag}chart mesh: the leg leaves the mesh; its ${covered === 'start' ? 'first' : 'last'} {distance:${h.distanceM.toFixed(0)}} to open water at ${h.point[1].toFixed(4)}, ${h.point[0].toFixed(4)} is routed on the mesh, the rest on the coastline search`
+    `${tag}chart mesh: the leg leaves the mesh; its ${covered === 'start' ? 'first' : 'last'} {distance:${h.distanceM.toFixed(0)}} ` +
+      (h.reason === 'clear'
+        ? `to open water at least {distance:${SHORE_CLEAR_M}} from land`
+        : `(the most the mesh part takes, {distance:${HANDOVER_SCAN_M}}, or the mesh's edge; not yet clear of land there)`) +
+      ` at ${h.point[1].toFixed(4)}, ${h.point[0].toFixed(4)} is routed on the mesh, the rest on the coastline search`
   );
   const exactAt = (end: [number, number]): LegPlan => ({ ...plan, end, snapToExact: true, arrivalRadiusM: undefined });
   if (covered === 'start') {

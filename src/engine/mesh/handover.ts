@@ -4,14 +4,24 @@
  * and the two parts joined into one leg.
  *
  * The handover point is found on the corridor (the water-grid skeleton,
- * with the across-track water width at each point): walking from the
- * covered end through the points inside the mesh, at most
- * HANDOVER_SCAN_M along the corridor, the LAST narrow point (width under
- * OPEN_WATER_WIDTH_M, the parent planner's rule: both shores within a
- * kilometre) is found; the handover is the first point after it that is
- * open and stays open over the next point, or the last scanned covered
- * point when none is. No narrow point in the scanned stretch means the
- * leg starts (or ends) in open water and there is no mesh part.
+ * with the across-track water width and the distance to the nearest land
+ * at each point): walking from the covered end through the points inside
+ * the mesh, at most HANDOVER_SCAN_M along the corridor, the LAST narrow
+ * point (width under OPEN_WATER_WIDTH_M, the parent planner's rule: both
+ * shores within a kilometre) is found; the handover is the first point
+ * after it that is clear (open, and no land within SHORE_CLEAR_M) and
+ * stays clear over the next point, or the last scanned covered point when
+ * none is (reason 'scan-limit'). A covered end that is itself clear, with
+ * no narrow point after it, means the leg starts (or ends) in open water
+ * away from the shore and there is no mesh part.
+ *
+ * Why the distance to land as well as the width: the width sees two
+ * shores only. A start 3.4 km off a straight open coast (Lake Superior's
+ * south shore, 2026-10-09, jobs 92491f9c and 19b1d80a; the distance to
+ * GSHHG full-resolution land) reads as open water across the
+ * track, so the whole leg went to the coastline search and its charted
+ * shoals near the shore were never seen. SHORE_CLEAR_M was 2 km at
+ * first, which still left that start (3.4 km out) without a mesh part.
  *
  * Why the last narrow point and not the first open one: most harbours
  * are a wide basin with a narrow mouth. Newport (2026-10-08, the
@@ -29,7 +39,7 @@
  */
 
 import { haversineDistanceM } from '../../geo/geodesy';
-import type { Corridor } from '../corridor';
+import { SHORE_CLEAR_M, type Corridor } from '../corridor';
 import { recomputePerWaypointMetadata, type Route, type RouteDrawbridge, type RouteWarning, type Waypoint } from '../route';
 import { recomputeTotals } from '../smoother';
 import type { MeshLegRunner } from './leg';
@@ -45,10 +55,12 @@ export interface Handover {
   point: [number, number];
   /** Skeleton length from the covered end to the handover, metres. */
   distanceM: number;
+  /** 'clear': open water at least SHORE_CLEAR_M from land; 'scan-limit': none within HANDOVER_SCAN_M (or the mesh), the last point scanned. */
+  reason: 'clear' | 'scan-limit';
 }
 
 export function findHandover(
-  corridor: Pick<Corridor, 'skeleton' | 'widthM'>,
+  corridor: Pick<Corridor, 'skeleton' | 'widthM' | 'shoreM'>,
   covered: 'start' | 'end',
   mesh: MeshLegRunner
 ): Handover | null {
@@ -57,6 +69,7 @@ export function findHandover(
   if (n < 2) return null;
   const order = covered === 'start' ? [...Array(n).keys()] : [...Array(n).keys()].reverse();
   const open = (i: number): boolean => corridor.widthM[i] >= OPEN_WATER_WIDTH_M;
+  const clear = (i: number): boolean => open(i) && corridor.shoreM[i] >= SHORE_CLEAR_M;
   // The covered points within reach, in walking order, with the distance to each.
   const scanned: number[] = [];
   const dist: number[] = [];
@@ -68,20 +81,22 @@ export function findHandover(
     scanned.push(i);
     dist.push(d);
   }
+  if (!scanned.length) return null;
   let lastNarrow = -1;
   for (let k = 0; k < scanned.length; k++) if (!open(scanned[k])) lastNarrow = k;
-  if (lastNarrow < 0) return null;
   let hk = scanned.length - 1;
+  let reason: Handover['reason'] = 'scan-limit';
   for (let k = lastNarrow + 1; k < scanned.length; k++) {
     const next = k + 1 < scanned.length ? scanned[k + 1] : k + 1 < n ? order[k + 1] : -1;
-    if (open(scanned[k]) && (next < 0 || open(next))) {
+    if (clear(scanned[k]) && (next < 0 || clear(next))) {
       hk = k;
+      reason = 'clear';
       break;
     }
   }
   if (hk === 0) return null;
   const h = scanned[hk];
-  return { index: h, point: [sk[h].lon, sk[h].lat], distanceM: dist[hk] };
+  return { index: h, point: [sk[h].lon, sk[h].lat], distanceM: dist[hk], reason };
 }
 
 /** The corridor from the handover on (`after`) or up to it (`before`), with the automatic vias on that part. */
@@ -90,6 +105,7 @@ export function sliceCorridor(c: Corridor, index: number, part: 'after' | 'befor
   const hi = part === 'after' ? c.skeleton.length - 1 : index;
   const skeleton = c.skeleton.slice(lo, hi + 1);
   const widthM = c.widthM.slice(lo, hi + 1);
+  const shoreM = c.shoreM.slice(lo, hi + 1);
   let lengthM = 0;
   for (let i = 1; i < skeleton.length; i++)
     lengthM += haversineDistanceM(skeleton[i - 1].lon, skeleton[i - 1].lat, skeleton[i].lon, skeleton[i].lat);
@@ -109,7 +125,7 @@ export function sliceCorridor(c: Corridor, index: number, part: 'after' | 'befor
     const i = nearest(v.lon, v.lat);
     return i >= lo && i <= hi;
   });
-  return { ...c, skeleton, widthM, lengthM, autoVias };
+  return { ...c, skeleton, widthM, shoreM, lengthM, autoVias };
 }
 
 /** Two parts of one leg, the second starting where and when the first ended: one Route. */

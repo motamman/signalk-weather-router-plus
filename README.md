@@ -730,10 +730,14 @@ and `vessel.air_draft_m`); the mesh is not used until both are set.
   positive threshold), walked under fastest; when it cannot be sailed the
   route fails naming the segment rather than motoring it.
 - **One end outside the mesh:** the leg runs on the mesh as far as the
-  first open-water point after the last narrow passage within 50 km of
-  the covered end, and the coastline search takes it from there (the
-  corridor cut at that point). A leg already in open water at its covered
-  end has no mesh part.
+  first point after the last narrow passage that is open water with no
+  land within 5 km (and stays so at the next point), within 50 km of the
+  covered end, and the coastline search takes it from there (the corridor
+  cut at that point). A start off an open coast is therefore routed on
+  the mesh until it is 5 km out; a leg whose covered end is already open
+  water 5 km from any land has no mesh part. A leg still near land
+  after 50 km hands over there (the mesh part's memory limit), and the log
+  says so.
 - Anything the mesh cannot take (a start in a blocked triangle, no route)
   is logged as a WARNING and the leg runs on the coastline search as
   before. The mesh search runs in a child process that exits with the

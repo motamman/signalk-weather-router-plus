@@ -61,6 +61,11 @@ export const STEP_PER_WIDTH = 4;
 export const MIN_STEP_M = 1000;
 /** Rays for the width profile stop at this distance each side, metres. */
 const WIDTH_RAY_CAP_M = 30_000;
+/**
+ * The shore-distance profile looks this far, metres: a point with no land
+ * within it is clear of the shore (the mesh handover's test, mesh/handover.ts).
+ */
+export const SHORE_CLEAR_M = 5000;
 /** Narrow stretches are refined until the passage spans at least this many raster cells (down to MIN_PATCH_RES). */
 export const PATCH_CELLS_ACROSS = 10;
 /** Skeleton stretches narrower than this are re-traced on the route raster (fine A*), metres. */
@@ -86,6 +91,8 @@ export interface Corridor {
   skeleton: { lon: number; lat: number }[];
   /** Across-track water width at each skeleton point, metres (Infinity = wider than 2 × the ray cap). */
   widthM: Float64Array;
+  /** Distance from each skeleton point to the nearest land on the route raster, metres (Infinity = none within SHORE_CLEAR_M). */
+  shoreM: Float64Array;
   /** Skeleton length, metres. */
   lengthM: number;
   /** Route raster box. */
@@ -575,6 +582,54 @@ export function widthProfile(land: LandMask, pts: { lon: number; lat: number }[]
   return out;
 }
 
+/**
+ * Distance from each point to the nearest land, metres: every raster cell
+ * within `capM` of the point is sampled (a lattice of half the raster's
+ * cell size there, so no cell is skipped: a small island between two
+ * directions is seen), ring by ring outward, stopping once the ring's
+ * nearest sample is farther than the nearest land found. Infinity when
+ * no land lies within `capM`. Unlike the width profile this sees a single
+ * shore: a point 500 m off a straight open coast reads 500 m here and
+ * open water in the width profile.
+ */
+export function shoreProfile(land: LandMask, pts: { lon: number; lat: number }[], capM = SHORE_CLEAR_M): Float64Array {
+  const out = new Float64Array(pts.length);
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const stepDeg = land.resolutionAt(p.lon, p.lat) * 0.5;
+    const cosLat = Math.max(0.05, Math.cos(p.lat * DEG));
+    const stepX = Math.max(10, stepDeg * M_PER_DEG * cosLat);
+    const stepY = Math.max(10, stepDeg * M_PER_DEG);
+    const nx = Math.ceil(capM / stepX);
+    const ny = Math.ceil(capM / stepY);
+    const rings = Math.max(nx, ny);
+    let nearest = Infinity;
+    const probe = (dx: number, dy: number): void => {
+      if (Math.abs(dx) > nx || Math.abs(dy) > ny) return;
+      const d = Math.hypot(dx * stepX, dy * stepY);
+      if (d > capM || d >= nearest) return;
+      if (land.isLand(wrapLon(p.lon + dx * stepDeg), p.lat + dy * stepDeg)) nearest = d;
+    };
+    // Ring r: the lattice samples at Chebyshev index r (its perimeter only).
+    for (let r = 0; r <= rings && r * Math.min(stepX, stepY) < nearest; r++) {
+      if (r === 0) {
+        probe(0, 0);
+        continue;
+      }
+      for (let k = -r; k <= r; k++) {
+        probe(k, -r);
+        probe(k, r);
+      }
+      for (let k = -r + 1; k <= r - 1; k++) {
+        probe(-r, k);
+        probe(r, k);
+      }
+    }
+    out[i] = nearest;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------
 // Planner
 
@@ -805,7 +860,8 @@ export function planCorridor(grid: WaterGrid, chain: [number, number][], opts: C
   // 5. Automatic vias.
   const stepM = lengthM / Math.max(1, opts.stages);
   const autoVias = findAutoVias(grid, path, segStart, chain, stepM, land);
-  return { skeleton, widthM, lengthM, bbox: landBox, land, autoVias, stats };
+  const shoreM = shoreProfile(land, skeleton);
+  return { skeleton, widthM, shoreM, lengthM, bbox: landBox, land, autoVias, stats };
 }
 
 /**

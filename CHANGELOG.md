@@ -169,6 +169,29 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A leg starting (or ending) just off an open coast inside a chart mesh
+  never used the mesh**: the mesh handover looked only for narrow water
+  (both shores within 2 km across the track), so a start 3.4 km off a
+  straight coast (Lake Superior's south shore, 2026-10-09, distance to
+  GSHHG full-resolution land) read as open water and the coastline search
+  took the whole leg, with no charted depths, shoals or hazards near the
+  shore. The handover now also needs
+  the corridor to be clear of land: the first point after the last narrow
+  one with no land within 5 km (`SHORE_CLEAR_M`; 2 km was tried first and
+  left a start 3.4 km off the same shore to the coastline search; a new
+  per-point distance to land on the corridor, `Corridor.shoreM`), staying
+  clear at the next point. Within the 50 km scan cap as before; a leg still near land at the
+  cap hands over there, and the log says which (`Handover.reason`).
+- **A local chart mesh blocked a newer published mesh of the same name**:
+  a ticked catalogue mesh whose name matched a mesh in the `meshDir`
+  folder was never downloaded, however new the published build, and the
+  router always tried a downloaded copy before a local one, older or not.
+  Now the newer of the two is used (`localWins`): the local mesh's
+  sidecar `build_date` against the catalogue's (for the download) or the
+  marker's (for the router, `meshesToOpen`); a local mesh without a
+  sidecar date loses. The plugin panel shows one row per name, saying
+  which copy is routed on (`using`, `local_dir`, `local_build_date` in
+  `GET /api/meshes`), and its Use box covers both copies.
 - **Mesh legs had no CMEMS SMOC currents while the Copernicus run was
   provisional** (its store update still being written, hours at a time):
   the chunk cache on disk was written only for a settled run, and the

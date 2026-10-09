@@ -12,8 +12,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { haversineDistanceM } from '../../geo/geodesy';
 import { LandMask } from '../../geo/landmask';
+import type { ShapePolygon } from '../../geo/shapefile';
 import { buildWaterGrid } from '../../geo/watergrid_build';
-import type { Corridor } from '../corridor';
+import { SHORE_CLEAR_M, shoreProfile, type Corridor } from '../corridor';
 import { NoCurrent } from '../environment';
 import { planLegs } from '../multileg';
 import { runLegPipeline, type LegPipelineInputs } from '../pipeline';
@@ -79,14 +80,15 @@ function meshWestOf(eastEdge: number): { mesh: MeshLegRunner; calls: [number, nu
   };
 }
 
-/** A straight corridor along lat 0 from lon 0 to lon 1, points every 0.02° (2.2 km), with the given widths. */
-function corridorAlong(widths: number[]): Corridor {
+/** A straight corridor along lat 0 from lon 0 to lon 1, points every 0.02° (2.2 km), with the given widths and distances to land (default: no land within reach). */
+function corridorAlong(widths: number[], shore: number[] = widths.map(() => Infinity)): Corridor {
   const skeleton = widths.map((_w, i) => ({ lon: i * 0.02, lat: 0 }));
   let lengthM = 0;
   for (let i = 1; i < skeleton.length; i++) lengthM += haversineDistanceM(skeleton[i - 1].lon, 0, skeleton[i].lon, 0);
   return {
     skeleton,
     widthM: Float64Array.from(widths),
+    shoreM: Float64Array.from(shore),
     lengthM,
     bbox: { west: -1, south: -1, east: 2, north: 1 },
     land: LandMask.fromPolygons([], { west: -1, south: -1, east: 2, north: 1 }, 0.05),
@@ -129,12 +131,133 @@ test('findHandover: the first sustained-open point after the last narrow one ins
   assert.equal(he.index, 40);
 });
 
+test('findHandover: open water near the shore is not a handover; the first point clear of land (and staying clear) is', () => {
+  const { mesh } = meshWestOf(0.6); // covers indices 0..29
+  const open = Array.from({ length: 51 }, () => 5000);
+  // An open-coast start: open across the track everywhere, land within 500 m for the first four points.
+  const coast = findHandover(
+    corridorAlong(
+      open,
+      open.map((_x, i) => (i < 4 ? 500 : Infinity))
+    ),
+    'start',
+    mesh
+  );
+  assert.ok(coast);
+  assert.equal(coast.index, 4);
+  assert.equal(coast.reason, 'clear');
+  // One clear point between near-shore ones does not count: the handover is where it stays clear.
+  const blip = findHandover(
+    corridorAlong(
+      open,
+      open.map((_x, i) => (i < 6 && i !== 3 ? 800 : Infinity))
+    ),
+    'start',
+    mesh
+  );
+  assert.equal(blip!.index, 6);
+  // A harbour mouth then a near-shore stretch: past the last narrow point AND clear of land.
+  const widths = open.map((_x, i) => (i <= 5 ? 900 : 5000));
+  const shore = open.map((_x, i) => (i <= 9 ? 1000 : Infinity));
+  assert.equal(findHandover(corridorAlong(widths, shore), 'start', mesh)!.index, 10);
+  // Already clear at the start (and after): no mesh part.
+  assert.equal(
+    findHandover(
+      corridorAlong(
+        open,
+        open.map(() => SHORE_CLEAR_M)
+      ),
+      'start',
+      mesh
+    ),
+    null
+  );
+  // Hugging the coast beyond the scan: the last scanned point (index 22 at 2.2 km spacing), said so.
+  const hug = findHandover(
+    corridorAlong(
+      open,
+      open.map(() => 800)
+    ),
+    'start',
+    mesh
+  );
+  assert.equal(hug!.index, 22);
+  assert.equal(hug!.reason, 'scan-limit');
+});
+
+test('shoreProfile: the distance to the nearest land in any direction, Infinity beyond the reach', () => {
+  // Land south of lat 0; points north of it at 0.005° (556 m), 0.01° (1.1 km) and 0.05° (5.6 km).
+  const south: ShapePolygon = {
+    recordNumber: 1,
+    minLon: -1,
+    minLat: -1,
+    maxLon: 1,
+    maxLat: 0,
+    rings: [{ coords: Float64Array.from([-1, -1, 1, -1, 1, 0, -1, 0, -1, -1]), minLon: -1, minLat: -1, maxLon: 1, maxLat: 0 }],
+  };
+  const land = LandMask.fromPolygons([south], { west: -1, south: -1, east: 1, north: 1 }, 0.0005);
+  const d = shoreProfile(land, [
+    { lon: 0, lat: 0.005 },
+    { lon: 0, lat: 0.01 },
+    { lon: 0, lat: 0.05 },
+  ]);
+  assert.ok(Math.abs(d[0] - 556) < 60, `${d[0]}`);
+  assert.ok(Math.abs(d[1] - 1112) < 60, `${d[1]}`);
+  assert.equal(d[2], Infinity);
+});
+
+test('shoreProfile: a small island between two sampling directions is seen, not missed', () => {
+  // A 150 m island about 3 km from the point at bearing 11°, between the 0° and 22.5° rays of a 16-ray scan.
+  const cLon = 0.00526;
+  const cLat = 0.02646;
+  const hw = 0.00067;
+  const islet: ShapePolygon = {
+    recordNumber: 1,
+    minLon: cLon - hw,
+    minLat: cLat - hw,
+    maxLon: cLon + hw,
+    maxLat: cLat + hw,
+    rings: [
+      {
+        coords: Float64Array.from([
+          cLon - hw,
+          cLat - hw,
+          cLon + hw,
+          cLat - hw,
+          cLon + hw,
+          cLat + hw,
+          cLon - hw,
+          cLat + hw,
+          cLon - hw,
+          cLat - hw,
+        ]),
+        minLon: cLon - hw,
+        minLat: cLat - hw,
+        maxLon: cLon + hw,
+        maxLat: cLat + hw,
+      },
+    ],
+  };
+  const land = LandMask.fromPolygons([islet], { west: -0.1, south: -0.1, east: 0.1, north: 0.1 }, 0.0005);
+  assert.ok(land.isLand(cLon, cLat), 'the islet is on the raster');
+  const d = shoreProfile(land, [
+    { lon: 0, lat: 0 },
+    { lon: 0, lat: -0.05 },
+  ]);
+  const expected = haversineDistanceM(0, 0, cLon, cLat - hw);
+  assert.notEqual(d[0], Infinity, 'islet seen');
+  assert.ok(Math.abs(d[0] - expected) < 80, `${d[0]} vs ${expected}`);
+  // 8.5 km away: beyond the reach.
+  assert.equal(d[1], Infinity);
+});
+
 test('sliceCorridor keeps the part on one side of the handover with its automatic vias', () => {
   const c = corridorAlong(Array.from({ length: 51 }, () => 5000));
   const after = sliceCorridor(c, 15, 'after');
   assert.equal(after.skeleton.length, 36);
   assert.deepEqual(after.skeleton[0], { lon: 0.3, lat: 0 });
   assert.equal(after.widthM.length, 36);
+  assert.equal(after.shoreM.length, 36);
   assert.deepEqual(
     after.autoVias.map(v => v.name),
     ['far narrows']
@@ -307,6 +430,60 @@ test('pipeline: a leg starting in a channel inside the mesh is routed on the mes
   assert.ok(
     r.waypoints.some(w => Math.abs(w.lon - meshEnd[0]) < 1e-9),
     'the handover point is a waypoint'
+  );
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('pipeline: a leg starting just off a straight open coast inside the mesh is routed on the mesh until clear of the shore', async () => {
+  // Land south of lat 0 (an open, straight coast); the start 0.005° (556 m) north of it, the end 1.5° out at sea.
+  // Across the track (east–west, along the coast) the water is open, so the width alone saw no reason for a
+  // mesh part (as off Lake Superior's south shore, jobs 92491f9c and 19b1d80a); the shore is 556 m away, so there is one now.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-handover-coast-'));
+  const shp = path.join(tmp, 'coast.shp');
+  writeShapefile(shp, [[[158, -1, 163, -1, 163, 0, 158, 0]]]);
+  const grid = buildWaterGrid([shp], { region: { west: 158, east: 163, south: -1, north: 2 } });
+  const { mesh: base, calls } = meshWestOf(999);
+  const mesh: MeshLegRunner = { ...base, covers: pts => pts.every(p => p[1] < 0.5) };
+  const messages: string[] = [];
+  const inp: LegPipelineInputs = {
+    waterGrid: grid,
+    mesh,
+    allowCanals: false,
+    landFor: b => LandMask.fromShapefiles([shp], b, { resolutionDeg: 0.002 }),
+    stages: 12,
+    propagator: { subsectors: 20, headings: 30 },
+    vessel: makeVessel({ motorSpeedMs: 3, draughtM: 2, airDraftM: 18 }),
+    polar: null,
+    sim: { modePolicy: 'motor', sailThreshMs: 2.5, simStepM: 200 },
+    simplifyM: 0,
+    smoother: false,
+    smootherTolerance: 0.05,
+    loadAreas: async () => null,
+    currents: () => ({ source: new NoCurrent(), names: null }),
+    multi: false,
+    progress: (_s, _t, m) => messages.push(m),
+    shouldCancel: () => false,
+  };
+  const [plan] = planLegs(
+    [
+      { lon: 160.5, lat: 0.005 },
+      { lon: 160.5, lat: 1.5 },
+    ],
+    'precise',
+    300
+  );
+  const r = await runLegPipeline(inp, plan, 0, [160.5, 0.005], T0);
+  assert.equal(r.meshLeg, true, messages.join('\n'));
+  assert.equal(calls.length, 1, 'the mesh was asked once, for the part to the handover');
+  const [meshStart, meshEnd] = calls[0];
+  assert.deepEqual(meshStart, [160.5, 0.005]);
+  const offM = haversineDistanceM(meshEnd[0], meshEnd[1], meshEnd[0], 0);
+  assert.ok(offM >= SHORE_CLEAR_M && meshEnd[1] < 0.5, `handover ${offM.toFixed(0)} m off the coast, inside the mesh`);
+  assert.ok(
+    messages.some(m =>
+      /chart mesh: the leg leaves the mesh; its first \{distance:\d+\} to open water at least \{distance:5000\} from land/.test(m)
+    ),
+    messages.join('\n')
   );
   fs.rmSync(tmp, { recursive: true, force: true });
 });

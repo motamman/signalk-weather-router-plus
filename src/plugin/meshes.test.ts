@@ -14,8 +14,10 @@ import * as path from 'node:path';
 import {
   describeMesh,
   localMeshes,
+  localWins,
   meshBaseUrl,
   meshClusterDirs,
+  meshesToOpen,
   MeshManager,
   readMarker,
   readyMeshDirs,
@@ -62,8 +64,8 @@ test('readyMeshDirs: a complete marker makes a mesh ready; clusters are listed f
   fs.writeFileSync(path.join(multi, '.wrp-mesh.json'), JSON.stringify({ name: '14CGD', build_date: 'y' }));
   fs.mkdirSync(path.join(store, '07CGD.new'));
   assert.deepEqual(readyMeshDirs(store), [
-    { name: '01CGD', dirs: [one] },
-    { name: '14CGD', dirs: [path.join(multi, 'w158n20'), path.join(multi, 'w145n13')] },
+    { name: '01CGD', dirs: [one], build_date: 'x' },
+    { name: '14CGD', dirs: [path.join(multi, 'w158n20'), path.join(multi, 'w145n13')], build_date: 'y' },
   ]);
   assert.deepEqual(meshClusterDirs(one), [one]);
   fs.rmSync(store, { recursive: true, force: true });
@@ -142,7 +144,7 @@ test('MeshManager: downloads a ticked mesh, marks it ready, re-downloads a newer
     assert.equal(marker.files, 2);
     assert.equal(marker.bytes, 2000);
     assert.equal(fs.statSync(path.join(store, '01CGD', 'mesh_002_002.bin')).size, 1000);
-    assert.deepEqual(readyMeshDirs(store), [{ name: '01CGD', dirs: [path.join(store, '01CGD')] }]);
+    assert.deepEqual(readyMeshDirs(store), [{ name: '01CGD', dirs: [path.join(store, '01CGD')], build_date: '2026-10-08T15:55:27Z' }]);
     // A newer build in the catalogue: update, then re-download replaces the copy.
     publish(root, '2026-10-09T00:00:00Z', 1200);
     await mgr.reconcile();
@@ -304,5 +306,89 @@ test('MeshManager.refresh: during a pass whose catalogue read is still in flight
     close();
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(store, { recursive: true, force: true });
+  }
+});
+
+test('localWins: a local mesh is used over a published copy of the same name only when built at the same time or later', () => {
+  assert.equal(localWins('2026-10-09T10:10:54Z', '2026-10-09T00:27:16Z'), true, 'local newer');
+  assert.equal(localWins('2026-10-09T00:27:16Z', '2026-10-09T00:27:16Z'), true, 'same build');
+  assert.equal(localWins('2026-10-08T00:00:00Z', '2026-10-09T00:27:16Z'), false, 'published newer');
+  assert.equal(localWins(null, '2026-10-09T00:27:16Z'), false, 'local without a date loses');
+  assert.equal(localWins(null, null), false);
+  assert.equal(localWins('2026-10-08T00:00:00Z', null), true, 'a dated local beats an undated copy');
+});
+
+test('meshesToOpen: downloads first; where a download and a local mesh share a name, only the newer; Use off drops both', () => {
+  const dl = (name: string, build_date: string | null) => ({ name, dirs: [`/store/${name}`], build_date });
+  const loc = (name: string, build_date: string | null) => ({ name, dirs: [`/mine/${name}`], build_date });
+  const names = (r: ReturnType<typeof meshesToOpen>) => r.map(m => `${m.source}:${m.name}`);
+  // Different names: both, downloads first.
+  assert.deepEqual(names(meshesToOpen([dl('01CGD', '2026-10-09T00:27:16Z')], [loc('mesh-bin', null)], [])), [
+    'download:01CGD',
+    'local:mesh-bin',
+  ]);
+  // Same name, download newer: the download only.
+  assert.deepEqual(names(meshesToOpen([dl('09CGD', '2026-10-10T00:00:00Z')], [loc('09CGD', '2026-10-09T10:10:54Z')], [])), [
+    'download:09CGD',
+  ]);
+  // Same name, local newer: the local folder only.
+  assert.deepEqual(names(meshesToOpen([dl('09CGD', '2026-10-09T00:00:00Z')], [loc('09CGD', '2026-10-09T10:10:54Z')], [])), ['local:09CGD']);
+  // Same name, local without a date: the download.
+  assert.deepEqual(names(meshesToOpen([dl('09CGD', '2026-10-09T00:00:00Z')], [loc('09CGD', null)], [])), ['download:09CGD']);
+  // Use switched off: neither copy.
+  assert.deepEqual(names(meshesToOpen([dl('09CGD', '2026-10-09T00:00:00Z')], [loc('09CGD', '2026-10-09T10:10:54Z')], ['09CGD'])), []);
+});
+
+test('MeshManager: a local mesh of the same name stops the download only when it is the newer; one panel row says which copy is used', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-meshsrv-'));
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-meshstore-'));
+  const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-mine-'));
+  // A local 01CGD in a folder of meshes, with a sidecar giving its build date.
+  fs.mkdirSync(path.join(mine, '01CGD_mesh'));
+  fs.writeFileSync(
+    path.join(mine, '01CGD_mesh', 'index.json'),
+    JSON.stringify({ version: 1, west: 0, south: 0, east: 2, north: 1, tileDeg: 1, xScale: 1, triangles: 2, tiles: [] })
+  );
+  const sidecar = (build_date: string | null): void =>
+    build_date === null
+      ? fs.rmSync(path.join(mine, '01CGD_mesh.json'), { force: true })
+      : fs.writeFileSync(path.join(mine, '01CGD_mesh.json'), JSON.stringify({ build_date }));
+  publish(root, '2026-10-09T00:27:16Z', 400);
+  const { url, close } = await serve(root);
+  const mgr = new MeshManager(() => {});
+  const row = () => {
+    const rows = mgr.status().meshes.filter(r => r.name === '01CGD');
+    assert.equal(rows.length, 1, `one row for the name: ${JSON.stringify(rows)}`);
+    return rows[0];
+  };
+  try {
+    // Local newer than the catalogue: no download; the row routes on the local copy.
+    sidecar('2026-10-09T10:10:54Z');
+    mgr.configure(url + 'charts/mesh/index.json', ['01CGD'], store, [], mine);
+    await mgr.reconcile();
+    assert.equal(readMarker(path.join(store, '01CGD')), null, 'not downloaded');
+    assert.equal(row().using, 'local');
+    assert.equal(row().local_dir, path.join(mine, '01CGD_mesh'));
+    assert.equal(row().local_build_date, '2026-10-09T10:10:54Z');
+    assert.equal(row().error, null);
+    // A newer build published: downloaded despite the local folder, and the row routes on the download.
+    publish(root, '2026-10-11T00:00:00Z', 400);
+    await mgr.reconcile();
+    assert.equal(readMarker(path.join(store, '01CGD'))!.build_date, '2026-10-11T00:00:00Z');
+    assert.equal(row().state, 'ready');
+    assert.equal(row().using, 'download');
+    // A local folder without a date never stops a download nor wins.
+    fs.rmSync(path.join(store, '01CGD'), { recursive: true, force: true });
+    sidecar(null);
+    await mgr.reconcile();
+    assert.equal(readMarker(path.join(store, '01CGD'))!.build_date, '2026-10-11T00:00:00Z');
+    assert.equal(row().using, 'download');
+    assert.equal(row().local_build_date, null);
+  } finally {
+    mgr.stop();
+    close();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(store, { recursive: true, force: true });
+    fs.rmSync(mine, { recursive: true, force: true });
   }
 });

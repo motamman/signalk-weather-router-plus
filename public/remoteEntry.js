@@ -327,6 +327,23 @@ var signalk_weather_router_plus = (function () {
       if (r.state === 'removing') return statusDot('warn', 'removing…');
       return statusDot('off', on ? 'not on this server yet; downloads after Save' : 'not on this server');
     }
+    // A catalogue row with a local folder of the same name: which copy the router opens, and why.
+    function usingNote(r) {
+      if (r.source !== 'catalog' || !r.local_dir) return null;
+      var localDate = r.local_build_date ? 'mesh ' + r.local_build_date.slice(0, 10) : 'no build date';
+      var text;
+      if (r.using === 'local') {
+        text = r.disk_build_date
+          ? 'Routing on your local copy (' + localDate + '): built later than the download.'
+          : 'Routing on your local copy (' + localDate + ') until a newer published copy is downloaded.';
+      } else if (r.using === 'download') {
+        text = 'Your local copy (' + localDate + ') is older: routing on the download.';
+      } else {
+        // using === null: the local folder cannot be opened and there is no download.
+        text = 'Your local copy (' + localDate + ') cannot be used' + (r.error ? ': ' + r.error : '') + '; nothing to route on for this mesh.';
+      }
+      return h('small', { className: 'text-muted d-block' }, text);
+    }
     function chk(id, on, enabled, onChange) {
       return h('input', { className: 'form-check-input', type: 'checkbox', id: id, checked: !!on, disabled: !enabled, onChange: function (e) { onChange(e.target.checked); } });
     }
@@ -339,6 +356,8 @@ var signalk_weather_router_plus = (function () {
           h('tbody', null, meshRows.map(function (r) {
             var local = r.source === 'local';
             var on = local || ticked.indexOf(r.name) >= 0;
+            // Use applies to a downloaded copy and to a local folder of the same name alike.
+            var usable = on || !!r.local_dir;
             var use = disabled.indexOf(r.name) < 0;
             var parts = String(r.description || '').split(' · ');
             var covers = local ? (parts[1] || '') : (parts[0] || '');
@@ -348,9 +367,9 @@ var signalk_weather_router_plus = (function () {
               h('td', null, h('small', null, covers)),
               h('td', null, h('small', null, dates || '—')),
               h('td', null, h('small', null, r.bytes ? gb(r.bytes) : '—')),
-              h('td', null, meshStatus(r, on)),
+              h('td', null, meshStatus(r, on), usingNote(r)),
               h('td', { className: 'text-center' }, local ? h('small', { className: 'text-muted' }, '—') : chk('wrp-mesh-dl-' + r.name, on, true, function (v) { toggleMesh(r.name, v); })),
-              h('td', { className: 'text-center' }, chk('wrp-mesh-use-' + r.name, on && use, on, function (v) { toggleEnabled(r.name, v); })));
+              h('td', { className: 'text-center' }, chk('wrp-mesh-use-' + r.name, usable && use, usable, function (v) { toggleEnabled(r.name, v); })));
           }))))
       : h('p', { className: 'small text-muted' }, meshes ? (meshes.catalog_error ? 'No meshes to show: the catalogue could not be read (' + meshes.catalog_error + ').' : 'The catalogue lists no meshes, and no local folder is set.') : 'Mesh list unavailable until the plugin answers.');
     var catalogNote = meshes

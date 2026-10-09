@@ -45,14 +45,15 @@ import { runChildTask } from '../childtask';
 import type { MeshLegTask } from '../meshlegtask';
 import { regionalRunsFor } from './regionalwind';
 import { smocSettings } from './currents';
-import { localMeshes, readyMeshDirs } from '../meshes';
+import { localMeshes, meshesToOpen, readyMeshDirs } from '../meshes';
 import { beamFor, DEFAULT_SEARCH } from '../../engine/search/presets';
 
 /**
  * The chart meshes for this route, or undefined when there are none: the
  * downloaded ones with a complete marker under the store directory
  * (plugin/meshes.ts; a multi-cluster mesh is one store per cluster) and
- * the folder configured by hand. Only each mesh's index (one small JSON)
+ * the folder configured by hand (where the two share a name, the newer
+ * copy: meshes.ts meshesToOpen). Only each mesh's index (one small JSON)
  * is read here; a leg is covered when one mesh covers all its points, and
  * that leg is planned whole in a child process holding that mesh
  * (plugin/meshlegtask.ts), which exits with the leg, so its tile arrays
@@ -77,16 +78,10 @@ function meshLegRunner(
       progress(`WARNING: chart mesh ${name} not used: ${(err as Error).message}`);
     }
   };
-  if (cfg.mesh.storeDir)
-    for (const m of readyMeshDirs(cfg.mesh.storeDir)) {
-      if (cfg.mesh.disabled.includes(m.name)) continue; // downloaded but switched off in the config
-      for (const d of m.dirs) open(m.name, d);
-    }
-  // The folder managed by hand: one mesh, or a folder of them; the same Use switch applies.
-  for (const m of localMeshes(cfg.meshDir)) {
-    if (cfg.mesh.disabled.includes(m.name)) continue;
-    for (const d of m.dirs) open(m.name, d);
-  }
+  // Downloaded meshes first, then the folder managed by hand (one mesh, or a folder of them); the same
+  // Use switch applies to both, and where the two share a name only the newer copy is opened.
+  const downloaded = cfg.mesh.storeDir ? readyMeshDirs(cfg.mesh.storeDir) : [];
+  for (const m of meshesToOpen(downloaded, localMeshes(cfg.meshDir), cfg.mesh.disabled)) for (const d of m.dirs) open(m.name, d);
   if (!stores.length) return undefined;
   const meshFor = (points: [number, number][]): (typeof stores)[number] | undefined => stores.find(s => meshCovers(s.store, points));
   const useForecast = !request.no_forecast && request.mode !== 'motor';
@@ -498,7 +493,14 @@ export async function route(
     const pipeline: LegPipelineInputs = {
       waterGrid: st.waterGrid,
       router,
-      mesh: meshLegRunner(st, cfg, id, request, m => progress(0, 0, m), () => smocLeg),
+      mesh: meshLegRunner(
+        st,
+        cfg,
+        id,
+        request,
+        m => progress(0, 0, m),
+        () => smocLeg
+      ),
       avoidAreas: avoid.map(a => ({ lon: a.lon, lat: a.lat, radiusM: a.radiusM })),
       meshBufferM: cfg.routing.navigableBufferM,
       drawbridges: request.drawbridges ?? cfg.routing.drawbridges,
