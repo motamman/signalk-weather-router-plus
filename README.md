@@ -372,7 +372,10 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   from the boat's position through the remaining waypoints and offers it
   in a banner (Accept, Dismiss). SIMULATE sails a simulated boat along
   the route at a chosen speed-up, with **Start**, **Stop** and **Rewind to
-  start**, and draws its track. Both run only while the page is open; the
+  start**, and draws its track. In both the map keeps the boat centred
+  while **Follow the boat** (Live vessel panel) is ticked; dragging the
+  map unticks it, and ticking it or the centre-on-boat button follows
+  again. Both run only while the page is open; the
   re-plan is not published and does not change Freeboard's active course.
 
   ![Planning: start, destination and waypoints on the map, with the click menu open](public/screenshots/02-planning.jpg)

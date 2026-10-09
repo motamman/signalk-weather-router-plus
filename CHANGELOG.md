@@ -8,6 +8,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Follow the boat** (Live vessel panel, LIVE and SIMULATE): a checkbox,
+  on by default, that keeps the map centred on the boat. A real drag of
+  the map (more than 10 px) unticks it; before, any pointer movement with
+  the button down, a wobbling tap included, stopped the following silently
+  and only the centre-on-boat button or restarting the mode resumed it.
+  Ticking the box, the centre-on-boat button, or starting LIVE or SIMULATE
+  follows again.
 - **Read the catalogue now** (plugin panel, Chart meshes → Where meshes
   come from): `POST /api/meshes/refresh` (read-write) reads the mesh
   catalogue at once, answers with the mesh list as `GET /api/meshes` does,

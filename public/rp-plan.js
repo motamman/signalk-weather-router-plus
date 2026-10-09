@@ -3425,13 +3425,30 @@ popup.on('change:position', () => {
   showSimFactor();
 
   // LIVE / SIMULATE: the map stays centred on the boat (the real one in
-  // LIVE, the simulated one in SIMULATE) until the user drags it; the
-  // "Centre the map on the boat" button, or starting LIVE / SIMULATE again,
-  // follows it again. Zooming keeps following.
-  let following = true;
-  map.on('pointerdrag', () => { if (liveMode) following = false; });
+  // LIVE, the simulated one in SIMULATE) while "Follow the boat" is ticked.
+  // A real drag of the map (further than FOLLOW_DRAG_PX from where the
+  // pointer went down, so a tap that wobbles does not count) unticks it;
+  // ticking it, the "Centre the map on the boat" button, or starting LIVE /
+  // SIMULATE, follows again. Zooming keeps following.
+  const followBox = document.getElementById('followBoat');
+  const FOLLOW_DRAG_PX = 10;   // the same movement the long press treats as a pan (CANCEL_PX)
+  let followDragStart = null;  // pixel of the last pointerdown on the map
+  map.getViewport().addEventListener('pointerdown', e => {
+    const rect = map.getViewport().getBoundingClientRect();
+    followDragStart = [e.clientX - rect.left, e.clientY - rect.top];
+  });
+  map.on('pointerdrag', e => {
+    if (!liveMode || !followDragStart || !e.pixel) return;
+    const dx = e.pixel[0] - followDragStart[0], dy = e.pixel[1] - followDragStart[1];
+    if (dx * dx + dy * dy > FOLLOW_DRAG_PX * FOLLOW_DRAG_PX) setFollowing(false);
+  });
+  function setFollowing(on) {
+    if (followBox) followBox.checked = on;
+    if (on && liveMode && lastSnap && lastSnap.lat != null && lastSnap.lon != null) centreOnBoat([lastSnap.lon, lastSnap.lat]);
+  }
+  if (followBox) followBox.addEventListener('change', () => setFollowing(followBox.checked));
   function centreOnBoat(lonLat) {
-    if (following) map.getView().setCenter(ol.proj.fromLonLat(lonLat));
+    if (!followBox || followBox.checked) map.getView().setCenter(ol.proj.fromLonLat(lonLat));
   }
 
   // LIVE works from the boat's own position: it is available only when the
@@ -3490,7 +3507,7 @@ popup.on('change:position', () => {
     liveMode = true;
     simMode = simulate;
     simRunning = false;   // SIMULATE waits for Start
-    following = true;
+    setFollowing(true);
     resetPassage();
     if (simulate) {
       simTrack = createTrackRecorder(TRACK_EPSILON_M);
@@ -3996,7 +4013,7 @@ popup.on('change:position', () => {
         .then(snap => {
           if (snap.lat == null || snap.lon == null) throw new Error('no position');
           renderMarker(snap);
-          following = true;   // LIVE / SIMULATE: follow the boat again
+          setFollowing(true);   // LIVE / SIMULATE: follow the boat again
           map.getView().animate({ center: ol.proj.fromLonLat([snap.lon, snap.lat]), duration: 400 });
           btn.title = 'Centre the map on the boat (Signal K position)';
         })
