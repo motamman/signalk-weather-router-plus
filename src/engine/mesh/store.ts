@@ -13,7 +13,11 @@
  *   neighbours int32[n*3]    global triangle ids (contiguous per tile), -1 = none
  *   mult       float32[n]    shore penalty × depth penalty
  *   depth      float32[n]    charted depth, -999 = unknown
- *   clear      float32[n]    vertical clearance, -999 = none
+ *   clear      float32[n]    vertical clearance, -999 = none: a fixed span's charted
+ *                            clearance; an opening bridge's (flags bit 7) OPEN
+ *                            clearance, -999 when none is charted (the mesh build of
+ *                            2026-10-08); the lowest where overhead cables, pipelines
+ *                            or conveyors share the triangle
  *   hazv       float32[n]    a hazard's charted depth (VALSOU); -1e9 = a hazard
  *                            with none charted, 1e9 = no hazard
  *   rev        int8[n*3]     index of the shared edge on the neighbour's side
@@ -31,6 +35,8 @@ export const FLAG_CHANNEL_MARK = 8;
 export const FLAG_STRUCTURE = 16;
 export const FLAG_FAIRWAY = 32;
 export const FLAG_DREDGED = 64;
+/** An opening bridge (bascule, swing, lift, draw, transporter): `clear` is its open clearance (the mesh build of 2026-10-08; older tiles never set it). */
+export const FLAG_OPENING_BRIDGE = 128;
 
 /** Marker for "no value" in the depth and clearance columns. */
 export const NO_VALUE = -999;

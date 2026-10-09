@@ -58,7 +58,8 @@ const COAST = LandMask.fromPolygons([rect(1, 0.3, -0.3, 0.7, 0.2)], BOX, 0.005);
 /** A mesh land for the in-process runner: the coastline mask, an extra blocked test, and a depth. */
 function fakeLand(
   extra: (lonA: number, latA: number, lonB: number, latB: number) => boolean = () => false,
-  depthAt: (lon: number, lat: number) => number | null = () => null
+  depthAt: (lon: number, lat: number) => number | null = () => null,
+  bridges: MeshLegLand['openingBridgesAlong'] = () => []
 ): MeshLegLand {
   const point = (lon: number, lat: number): boolean => COAST.isLandExact(lon, lat) || extra(lon, lat, lon, lat);
   const leg = (a: number, b: number, c: number, d: number): boolean => COAST.legCrossesLandExact(a, b, c, d) || extra(a, b, c, d);
@@ -68,6 +69,7 @@ function fakeLand(
     legCrossesLandExact: leg,
     legsCrossLandBulk: (la, pa, lb, pb) => Uint8Array.from({ length: la.length }, (_v, k) => (leg(la[k], pa[k], lb[k], pb[k]) ? 1 : 0)),
     depthAt,
+    openingBridgesAlong: bridges,
   };
 }
 
@@ -229,6 +231,7 @@ test('pipeline: a covered motoring leg is routed on the mesh, the coastline sear
     airDraftM: 18,
     motorSpeedMs: 3,
     avoid: [{ lon: 0.5, lat: 0.4, radiusM: 500 }],
+    openingBridges: 'open',
   });
   assert.ok(
     messages.some(m => /^chart mesh: \{distance:1\}, 3 points/.test(m)),
@@ -491,6 +494,53 @@ test("pipeline: a mesh leg's searched stretch is simplified and smoothed as a co
   const last = r.waypoints[r.waypoints.length - 1];
   assert.ok(Math.abs(last.lon - 1) < 1e-6 && Math.abs(last.lat - 0.5) < 1e-6);
   assert.ok(Math.abs(r.totalTimeS - plain.totalTimeS) / plain.totalTimeS < 0.06, `${r.totalTimeS} s vs ${plain.totalTimeS} s`);
+});
+
+test('pipeline: an opening bridge on the route is reported with its clearance and the wait shifts every later waypoint; avoid reaches the mesh rules', async () => {
+  const path: [number, number][] = [
+    [0, 0.5],
+    [0.5, 0.5],
+    [1, 0.5],
+  ];
+  // The bridge: any move crossing lon 0.5 passes under it; open clearance 25 m.
+  const bridge = (lonA: number, latA: number, lonB: number, latB: number): { lon: number; lat: number; clearM: number | null }[] =>
+    (lonA - 0.5) * (lonB - 0.5) < 0 ? [{ lon: 0.5, lat: (latA + latB) / 2, clearM: 25 }] : [];
+  const land = fakeLand(undefined, undefined, bridge);
+  const base = { sim: { modePolicy: 'sail_max' as const, sailThreshMs: 2.5, simStepM: 200 } };
+  const noWait = await runLegPipeline(
+    inputs(fakeMeshOk(path, undefined, { land }).mesh, { ...base, drawbridges: 'ask', bridgeWaitS: 0 }).inp,
+    PLAN,
+    0,
+    [0, 0.5],
+    T0
+  );
+  assert.ok(noWait.drawbridges && noWait.drawbridges.length === 1, JSON.stringify(noWait.drawbridges));
+  assert.equal(noWait.drawbridges![0].clearM, 25);
+  const k = noWait.drawbridges![0].legIndex;
+  assert.ok(k >= 1 && k < noWait.waypoints.length);
+  const { mesh, calls } = fakeMeshOk(path, undefined, { land });
+  const { inp, messages } = inputs(mesh, { ...base, drawbridges: 'ask', bridgeWaitS: 600 });
+  const waited = await runLegPipeline(inp, PLAN, 0, [0, 0.5], T0);
+  assert.ok(
+    messages.some(m =>
+      /^chart mesh: the route passes under 1 opening bridge\(s\): [\d.]+, [\d.]+ \(open clearance \{length:25\}\); \{time:600\} waited at each; re-plan with Drawbridges = Avoid to keep clear of them$/.test(
+        m
+      )
+    ),
+    messages.join('\n')
+  );
+  assert.equal((calls[0] as { rules: { openingBridges?: string } }).rules.openingBridges, 'open');
+  // Every waypoint from the crossing on is 600 s later; the ones before are not.
+  for (let i = 0; i < waited.waypoints.length; i++) {
+    const dt = (waited.waypoints[i].time.getTime() - noWait.waypoints[i].time.getTime()) / 1000;
+    assert.ok(Math.abs(dt - (i >= k ? 600 : 0)) < 1, `waypoint ${i}: ${dt} s later`);
+  }
+  assert.ok(Math.abs(waited.totalTimeS - noWait.totalTimeS - 600) < 1);
+  // Avoid: the rule reaches the mesh search, and nothing is reported.
+  const avoid = fakeMeshOk(path, undefined, { land });
+  const r = await runLegPipeline(inputs(avoid.mesh, { ...base, drawbridges: 'avoid' }).inp, PLAN, 0, [0, 0.5], T0);
+  assert.equal((avoid.calls[0] as { rules: { openingBridges?: string } }).rules.openingBridges, 'avoid');
+  assert.equal(r.drawbridges, undefined);
 });
 
 test('pipeline: the mesh falls through to the coastline search when it finds no route or does not cover the leg', async () => {

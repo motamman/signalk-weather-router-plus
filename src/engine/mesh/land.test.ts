@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MeshLand } from './land';
-import { fromMeshXY, type LoadedMesh, M_PER_DEG_MESH, NO_HAZARD, NO_VALUE } from './store';
+import { FLAG_OPENING_BRIDGE, fromMeshXY, type LoadedMesh, M_PER_DEG_MESH, NO_HAZARD, NO_VALUE } from './store';
 
 /**
  * A W × H grid of unit squares (side `side` metres), each split on its
@@ -139,4 +139,30 @@ test('MeshLand: depth at a contour corner reports the usable side; a blocked poi
   assert.equal(land.legCrossesLandExact(a[0], a[1], up[0], up[1]), false);
   assert.equal(land.legCrossesLandExact(a[0], a[1], down[0], down[1]), true);
   void M_PER_DEG_MESH;
+});
+
+test('MeshLand: the opening bridges a move passes under, one per bridge, with the charted open clearance', () => {
+  const side = 100;
+  const m = gridMesh(10, 3, side);
+  // A bridge over column 3 (both triangles, all rows) with 30 m open clearance, and one over column 7 with none charted.
+  for (let cy = 0; cy < 3; cy++)
+    for (const cx of [3, 7])
+      for (const t of [(cy * 10 + cx) * 2, (cy * 10 + cx) * 2 + 1]) {
+        m.flags[t] |= FLAG_OPENING_BRIDGE;
+        m.clear[t] = cx === 3 ? 30 : NO_VALUE;
+      }
+  const land = new MeshLand(m, new Uint8Array(m.n), 250);
+  const a = fromMeshXY(m, 0.5 * side, 1.5 * side);
+  const b = fromMeshXY(m, 9.5 * side, 1.5 * side);
+  const found = land.openingBridgesAlong(a[0], a[1], b[0], b[1]);
+  assert.equal(found.length, 2, JSON.stringify(found));
+  assert.equal(found[0].clearM, 30);
+  assert.equal(found[1].clearM, null);
+  assert.ok(found[0].lon < found[1].lon, 'in order along the move');
+  // A move that stops short of the second bridge sees one; one entirely in open water sees none.
+  const c = fromMeshXY(m, 5.5 * side, 1.5 * side);
+  assert.equal(land.openingBridgesAlong(a[0], a[1], c[0], c[1]).length, 1);
+  const d = fromMeshXY(m, 0.5 * side, 2.5 * side);
+  const e = fromMeshXY(m, 1.5 * side, 2.5 * side);
+  assert.equal(land.openingBridgesAlong(d[0], d[1], e[0], e[1]).length, 0);
 });

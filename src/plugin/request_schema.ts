@@ -5,6 +5,7 @@
  * worker all read this table (docs/plans/structural-cleanup.md, phase 4.1).
  */
 
+import { DRAWBRIDGE_CHOICES } from '../engine/mesh/route';
 import { DEFAULT_ARRIVAL_RADIUS_M, MAX_ARRIVAL_RADIUS_M, validateLegOptions } from '../engine/multileg';
 import { ROUTER_KINDS } from '../engine/router';
 import { SEARCH_PRESETS } from '../engine/search/presets';
@@ -83,6 +84,12 @@ export const ROUTE_REQUEST_FIELDS: Record<string, RouteFieldSpec> = {
     description: 'RDP simplification tolerance in metres (0 = off); overrides routing.simplify',
   },
   smoother: { type: 'boolean', description: 'Run the shortcut smoother; overrides routing.smoother' },
+  drawbridges: {
+    type: 'enum',
+    values: DRAWBRIDGE_CHOICES,
+    description:
+      'Opening bridges on chart-mesh legs: ask (plan as open and report the ones crossed in the summary), open (plan as open), avoid (never pass one); default from the routing.drawbridges setting',
+  },
   smoother_tolerance: {
     type: 'number',
     ...settingRange('routing.smootherTolerance'),

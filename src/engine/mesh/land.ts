@@ -15,7 +15,7 @@
  */
 
 import type { LandTest } from '../../geo/landmask';
-import { type LoadedMesh, NO_VALUE, toMeshXY } from './store';
+import { FLAG_OPENING_BRIDGE, fromMeshXY, type LoadedMesh, NO_VALUE, toMeshXY } from './store';
 import { rayWalk } from './width';
 
 /** Index cell size, metres in the mesh frame: a few triangles a cell on a chart mesh (triangles are tens of metres). */
@@ -163,6 +163,81 @@ export class MeshLand implements LandTest {
     const t = this.triangleAt(lon, lat, true);
     if (t < 0 || this.m.depth[t] === NO_VALUE) return null;
     return this.m.depth[t];
+  }
+
+  /**
+   * Every triangle the straight move a→b (mesh frame) passes through, in
+   * order, blocked or not, starting with the one under a; stops where the
+   * move leaves the mesh. The walk of width.ts rayWalk, reporting each
+   * triangle.
+   */
+  forEachTriangleAlong(ax: number, ay: number, bx: number, by: number, fn: (tri: number) => void): void {
+    const { x, y, neighbours: NB } = this.m;
+    let cur = this.locate(ax, ay, true);
+    if (cur < 0) return;
+    const len = Math.hypot(bx - ax, by - ay);
+    if (len <= 0) {
+      fn(cur);
+      return;
+    }
+    const dx = (bx - ax) / len;
+    const dy = (by - ay) / len;
+    let entry = -1;
+    let s = 0;
+    for (let iter = 0; iter < 100000; iter++) {
+      fn(cur);
+      let bestS = Infinity;
+      let bestK = -1;
+      for (let k = 0; k < 3; k++) {
+        if (k === entry) continue;
+        const a = cur * 3 + k;
+        const b = cur * 3 + ((k + 1) % 3);
+        const ex = x[b] - x[a];
+        const ey = y[b] - y[a];
+        if (ex * dy - ey * dx >= 0) continue;
+        const den = dx * ey - dy * ex;
+        if (Math.abs(den) < 1e-18) continue;
+        const wx = x[a] - ax;
+        const wy = y[a] - ay;
+        const sHit = (wx * ey - wy * ex) / den;
+        const u = (wx * dy - wy * dx) / den;
+        if (u < -1e-7 || u > 1 + 1e-7) continue;
+        if (sHit < s - 1e-9) continue;
+        if (sHit < bestS) {
+          bestS = sHit;
+          bestK = k;
+        }
+      }
+      if (bestK < 0 || bestS >= len) return;
+      const n = NB[cur * 3 + bestK];
+      if (n < 0) return;
+      s = Math.max(bestS, s);
+      entry = this.m.rev[cur * 3 + bestK];
+      cur = n;
+    }
+  }
+
+  /**
+   * The opening bridges the move a→b passes under: one entry per run of
+   * bridge triangles, at the first one's centroid, with the charted open
+   * clearance (null when none is charted).
+   */
+  openingBridgesAlong(lonA: number, latA: number, lonB: number, latB: number): { lon: number; lat: number; clearM: number | null }[] {
+    const [ax, ay] = toMeshXY(this.m, lonA, latA);
+    const [bx, by] = toMeshXY(this.m, lonB, latB);
+    const out: { lon: number; lat: number; clearM: number | null }[] = [];
+    let inBridge = false;
+    this.forEachTriangleAlong(ax, ay, bx, by, t => {
+      const on = (this.m.flags[t] & FLAG_OPENING_BRIDGE) !== 0;
+      if (on && !inBridge) {
+        const cx = (this.m.x[t * 3] + this.m.x[t * 3 + 1] + this.m.x[t * 3 + 2]) / 3;
+        const cy = (this.m.y[t * 3] + this.m.y[t * 3 + 1] + this.m.y[t * 3 + 2]) / 3;
+        const [lon, lat] = fromMeshXY(this.m, cx, cy);
+        out.push({ lon, lat, clearM: this.m.clear[t] === NO_VALUE ? null : this.m.clear[t] });
+      }
+      inBridge = on;
+    });
+    return out;
   }
 
   isLand(lon: number, lat: number): boolean {

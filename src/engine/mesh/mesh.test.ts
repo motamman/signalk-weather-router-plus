@@ -28,6 +28,7 @@ import {
   MeshStore,
   NO_HAZARD,
   NO_VALUE,
+  FLAG_OPENING_BRIDGE,
 } from './store';
 
 /**
@@ -481,4 +482,29 @@ test('growBlocked: usable triangles within the buffer of a blocked boundary are 
   growBlocked(m, open, 0.9);
   assert.ok(col(3).every(t => open[t] === 1) && col(6).every(t => open[t] === 1));
   assert.ok(col(4).every(t => open[t] === 0) && col(5).every(t => open[t] === 0), 'the middle two columns stay open');
+});
+
+test('blocking rules: opening bridges pass under their open clearance by default, are blocked under avoid; a fixed span with no charted height passes', () => {
+  const m = gridMesh(4, 1);
+  // Triangles 0,1: an opening bridge with no charted open clearance; 2,3: an opening bridge with 41.1 m open;
+  // 4,5: a fixed span with no charted height; 6,7: a fixed span at 12 m.
+  for (const t of [0, 1, 2, 3]) m.flags[t] |= FLAG_OPENING_BRIDGE;
+  m.clear.set([NO_VALUE, NO_VALUE, 41.1, 41.1, NO_VALUE, NO_VALUE, 12, 12]);
+  const low = { draughtM: 2, airDraftM: 20, motorSpeedMs: 1 };
+  assert.deepEqual(
+    Array.from(blockedTriangles(m, low)),
+    [0, 0, 0, 0, 0, 0, 1, 1],
+    'default: opening bridges pass, the 12 m span blocks a 20 m air draft'
+  );
+  assert.deepEqual(
+    Array.from(blockedTriangles(m, { ...low, openingBridges: 'avoid' })),
+    [1, 1, 1, 1, 0, 0, 1, 1],
+    'avoid: every opening bridge blocked'
+  );
+  const tall = { draughtM: 2, airDraftM: 45, motorSpeedMs: 1 };
+  assert.deepEqual(
+    Array.from(blockedTriangles(m, tall)),
+    [0, 0, 1, 1, 0, 0, 1, 1],
+    'a 45 m air draft: the 41.1 m open clearance blocks, no charted height passes'
+  );
 });

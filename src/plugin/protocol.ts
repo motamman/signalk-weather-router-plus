@@ -14,6 +14,7 @@
  * Everything crossing the boundary is structured-cloneable.
  */
 
+import type { DrawbridgeChoice } from '../engine/mesh/route';
 import type { AvoidArea } from '../geo/avoid';
 import type { ResolvedConfig, SelfDesign } from './config';
 import type { ModePolicy } from '../engine/legsim';
@@ -59,6 +60,8 @@ export interface RouteRequest {
   simplify_m?: number;
   /** Run the shortcut smoother; default from routing.smoother. */
   smoother?: boolean;
+  /** Opening bridges on chart-mesh legs: ask (plan as open and report the ones crossed), open, or avoid; default from routing.drawbridges. */
+  drawbridges?: DrawbridgeChoice;
   /** Smoother time tolerance, ratio; default from routing.smootherTolerance. */
   smoother_tolerance?: number;
   name?: string;
@@ -123,6 +126,9 @@ export interface RouteSummary {
   regional_wind?: { name: string; run: string; share: number }[];
   /** At least one leg was routed on the chart mesh (charted depths and obstructions) instead of the coastline search. */
   mesh?: true;
+  /** Opening bridges the route passes under (mesh legs), and the rule that applied. */
+  drawbridges?: { lat: number; lon: number; clear_m: number | null; leg_index: number }[];
+  drawbridges_rule?: DrawbridgeChoice;
   /** The open-water router that ran. */
   router?: RouterKind;
   /** The search method the route ran with. */

@@ -167,6 +167,14 @@ export function routeToGeoJSON(route: Route): Record<string, unknown> {
     smoother_drops: route.smootherDrops ?? 0,
   };
   if (route.forecastCycle) props.forecast_cycle = route.forecastCycle;
+  if (route.drawbridges && route.drawbridges.length) {
+    props.drawbridges = route.drawbridges.map(b => ({
+      lat: round(b.lat, 6),
+      lon: round(b.lon, 6),
+      clear_m: b.clearM === null ? null : round(b.clearM, 1),
+      leg_index: b.legIndex,
+    }));
+  }
   if (route.autoVias && route.autoVias.length) {
     props.auto_vias = route.autoVias.map(v => ({
       name: v.name,

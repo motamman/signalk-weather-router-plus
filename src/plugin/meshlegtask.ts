@@ -24,7 +24,7 @@ import type { SimOptions } from '../engine/legsim';
 import { MeshLand } from '../engine/mesh/land';
 import type { MeshLegArgs } from '../engine/mesh/leg';
 import { runMeshLeg } from '../engine/mesh/legrun';
-import { type MeshRules, searchMesh } from '../engine/mesh/route';
+import { type DrawbridgeChoice, type MeshRules, searchMesh } from '../engine/mesh/route';
 import { MeshStore } from '../engine/mesh/store';
 import type { LegPlan } from '../engine/multileg';
 import type { PropagatorOptions } from '../engine/propagator';
@@ -56,6 +56,8 @@ export interface MeshLegTask {
   simplifyM: number;
   smoother: boolean;
   smootherTolerance: number;
+  drawbridges: DrawbridgeChoice;
+  bridgeWaitS: number;
   /** The decoded run and the area to read, or null for calm wind (motor, or no forecast). */
   forecast: { runDir: string; area: BBox; params: string[] } | null;
   /** Regional runs root and the global grid spacing, or null when regional wind is off. */
@@ -104,6 +106,8 @@ export async function runMeshLegTask(t: MeshLegTask, emit: (e: MeshLegEvent) => 
     simplifyM: t.simplifyM,
     smoother: t.smoother,
     smootherTolerance: t.smootherTolerance,
+    drawbridges: t.drawbridges,
+    bridgeWaitS: t.bridgeWaitS,
     progress,
     shouldCancel: () => false, // cancel kills the process (childtask.ts)
   };

@@ -1264,12 +1264,12 @@ function _savePlan() {
 function _initRouteChoices() {
   // Values an earlier panel saved under the old names.
   const renamed = { search: { wide: 'moderate', finer: 'maximum' }, router: { experimental: 'refined' } };
-  for (const [id, key] of [['search', 'rp:search'], ['router', 'rp:router']]) {
+  for (const [id, key] of [['search', 'rp:search'], ['router', 'rp:router'], ['drawbridges', 'rp:drawbridges']]) {
     const el = document.getElementById(id);
     if (!el) continue;
     let saved = null;
     try { saved = localStorage.getItem(key); } catch (_) {}
-    if (saved && renamed[id][saved]) saved = renamed[id][saved];
+    if (saved && renamed[id] && renamed[id][saved]) saved = renamed[id][saved];
     if (saved && [...el.options].some(o => o.value === saved)) el.value = saved;
     el.addEventListener('change', () => { try { localStorage.setItem(key, el.value); } catch (_) {} });
   }
@@ -2109,6 +2109,8 @@ function buildRoutePayload(overrides) {
   const pub = document.getElementById('publishSel').value;
   if (pub === 'true') body.publish = true; else if (pub === 'false') body.publish = false;
   const sm = document.getElementById('smootherSel');
+  const db = document.getElementById('drawbridges');
+  if (db && db.value) body.drawbridges = db.value;
   if (body.router === 'refined') body.smoother = false;
   else if (sm && sm.value === 'true') body.smoother = true; else if (sm && sm.value === 'false') body.smoother = false;
   if (document.getElementById('noCurrents').checked) body.no_currents = true;
@@ -2294,6 +2296,29 @@ function _jobOnDone(job, d) {
   const elapsed = ((Date.now() - job.t0) / 1000).toFixed(1);
   appendLog('Route complete! (' + elapsed + 's)', 'done');
   if (d && d.summary) appendLog('summary: ' + (fmtDist(d.summary.total_distance_m) || '') + ', ' + (fmtTime(d.summary.total_time_s) || '') + ', ' + d.summary.waypoint_count + ' waypoints' + (d.summary.polar ? ', polar ' + d.summary.polar : '') + (d.summary.polar_performance != null && UI_UNITS.ratio ? ' at ' + _fmt(d.summary.polar_performance, 'ratio') : '') + (d.summary.mesh ? ', on the chart mesh' : '') + (d.summary.router ? ', router ' + d.summary.router : '') + (d.summary.search && d.summary.search !== 'normal' ? ', search ' + d.summary.search : ''));
+  // Opening bridges the route passes under: say so; under Ask, offer the re-plan avoiding them.
+  if (d && d.summary && d.summary.drawbridges && d.summary.drawbridges.length) {
+    const list = d.summary.drawbridges.map(b => b.lat.toFixed(4) + ', ' + b.lon.toFixed(4) + (b.clear_m == null ? ' (open clearance not charted)' : ' (open clearance ' + fmtDepth(b.clear_m) + ')')).join('; ');
+    appendLog('drawbridges: the route passes under ' + d.summary.drawbridges.length + ' opening bridge(s): ' + list, 'warn');
+    const hint = document.getElementById('planHint');
+    if (hint && d.summary.drawbridges_rule === 'ask') {
+      hint.innerHTML = '';
+      const p = document.createElement('div');
+      p.textContent = 'This route passes under ' + d.summary.drawbridges.length + ' drawbridge(s): ' + list + '. Keep it, or re-plan avoiding them?';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = 'Re-plan avoiding drawbridges';
+      btn.style.marginTop = '6px';
+      btn.addEventListener('click', () => {
+        const sel = document.getElementById('drawbridges');
+        if (sel) { sel.value = 'avoid'; try { localStorage.setItem('rp:drawbridges', 'avoid'); } catch (_) {} }
+        hint.innerHTML = '';
+        document.getElementById('findRoute').click();
+      });
+      hint.appendChild(p);
+      hint.appendChild(btn);
+    }
+  }
   modalStatus.textContent = 'Done in ' + elapsed + 's';
   statusEl.textContent = '';
   RouteProgress.done(elapsed);

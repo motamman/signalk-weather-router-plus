@@ -117,6 +117,8 @@ function meshLegRunner(
         simplifyM: a.simplifyM,
         smoother: a.smoother,
         smootherTolerance: a.smootherTolerance,
+        drawbridges: a.drawbridges,
+        bridgeWaitS: a.bridgeWaitS,
         forecast:
           useForecast && st.run ? { runDir: st.run.dir, area: expandBBox(bbox, ROUTE_FORECAST_MARGIN_DEG), params: ROUTE_PARAMS } : null,
         regional:
@@ -482,6 +484,8 @@ export async function route(
       mesh: meshLegRunner(st, cfg, id, request, m => progress(0, 0, m)),
       avoidAreas: avoid.map(a => ({ lon: a.lon, lat: a.lat, radiusM: a.radiusM })),
       meshBufferM: cfg.routing.navigableBufferM,
+      drawbridges: request.drawbridges ?? cfg.routing.drawbridges,
+      bridgeWaitS: cfg.routing.bridgeWaitS,
       allowCanals: cfg.routing.allowCanals,
       landFor: b =>
         landMaskFor(st, b, cfg.routing.landRasterMaxCells, cfg.landShapefiles).withBuffer(cfg.routing.landBufferM).withAvoid(avoid),
@@ -592,6 +596,10 @@ export async function route(
       summary.precision = request.precision ?? DEFAULT_PRECISION;
     }
     if (result.meshLeg) summary.mesh = true;
+    if (result.drawbridges?.length) {
+      summary.drawbridges = result.drawbridges.map(b => ({ lat: b.lat, lon: b.lon, clear_m: b.clearM, leg_index: b.legIndex }));
+      summary.drawbridges_rule = request.drawbridges ?? cfg.routing.drawbridges;
+    }
     summary.router = router;
     summary.search = search;
     if (result.corridorFallback) {

@@ -708,7 +708,17 @@ and `vessel.air_draft_m`); the mesh is not used until both are set.
   the buffer closes (the mesh then finds no route, or widens its box).
 - **Depth:** each waypoint of a mesh leg carries the charted depth of the
   triangle under it (`depth_m` in the GeoJSON, Depth in the itinerary); a
-  waypoint on a depth contour reports the usable side. With a sail threshold of 0 (never
+  waypoint on a depth contour reports the usable side.
+- **Opening bridges:** the mesh marks bascule, swing, lift, draw and
+  transporter bridges (flag bit 7) and stores their open clearance, or
+  none when the chart gives none. The clearance rule (air draft + 1 m)
+  applies to that open clearance. The Drawbridges choice (Plan tab, or
+  the Defaults setting) is ask, open or avoid: ask plans the route as if
+  they open and, when the finished route passes under one, lists the
+  bridges in the summary and the log and the web app offers a re-plan
+  avoiding them; avoid blocks every opening bridge; the wait setting adds
+  time at each one passed. A mesh built before 2026-10-08 has no bit 7
+  and its bridges block at their charted (closed) height, as before. With a sail threshold of 0 (never
   motor) the narrow passages are sailed along the mesh route too, tacked
   where the wind needs it (the tacks are checked against the coastline,
   not against the charted depths the mesh route keeps to). An open stretch
@@ -1158,7 +1168,7 @@ the Signal K user's unit preferences. Saving needs a `readwrite` login.
 | `forecast` | horizon (72 h = 259200 s, 3–360 h; above 144 h only 00z/12z cycles qualify), check interval (60 min), cached cycles kept (2), extra fields (on), memory kept free (1 GB = 1e9 B) | horizon / extra fields / memory kept free reload the forecast; the interval restarts the timer |
 | `currents` | SMOC on, SMOC horizon (72 h = 259200 s, 6–240 h), SMOC step (3 h = 10800 s; 1 h or 3 h only), SMOC area half-width (15°, 2–30°), RTOFS on, RTOFS product (`west_atl`, …), RTOFS horizon (72 h), RTOFS step (3 h) | reloads currents |
 | `tides` | Copernicus Marine sea level on, tide map area half-width (15°, 1–30°), tide map horizon (24 h = 86400 s, 6–240 h) | reloads tides only |
-| `routing` | stages (20), subsectors (30), headings (30), heading increment (1°), sail threshold (4.9 kt), tacking penalty (30 s, charged per tack or gybe by both routers), buffer from land (0 m: the route keeps at least this far from the coastline; a start or end closer is moved out to it, a passage narrower than twice it closes), buffer from unusable water (0 m: on a mesh leg the route keeps at least this far from every triangle the boat cannot use), simulation step (200 m), land raster cell budget (25 M), allow canals (off), route simplification (10 m, 0 = off), shortcut smoother (off), comfort weight (1, 0 = off), shortcut may be slower by (0.05 = 5%), finished routes kept (50), max wind (none), max wave height (none) | applies to the next route |
+| `routing` | stages (20), subsectors (30), headings (30), heading increment (1°), sail threshold (4.9 kt), tacking penalty (30 s, charged per tack or gybe by both routers), buffer from land (0 m: the route keeps at least this far from the coastline; a start or end closer is moved out to it, a passage narrower than twice it closes), buffer from unusable water (0 m: on a mesh leg the route keeps at least this far from every triangle the boat cannot use), drawbridges (ask: plan as open and report the ones crossed; open; avoid), wait at a drawbridge (0 s), simulation step (200 m), land raster cell budget (25 M), allow canals (off), route simplification (10 m, 0 = off), shortcut smoother (off), comfort weight (1, 0 = off), shortcut may be slower by (0.05 = 5%), finished routes kept (50), max wind (none), max wave height (none) | applies to the next route |
 | `publish` | save to the Resources API (on), route name prefix (`WRP`), notifications (on) | applies to the next route |
 
 **Resource guard.** The decoded forecast is on disk, so the guard

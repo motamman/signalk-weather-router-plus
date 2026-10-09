@@ -701,6 +701,14 @@
   </select>
   <div id="smootherNote" class="ctl-hint" hidden>Built into the Refined router.</div>
 
+  <label for="drawbridges" title="Opening bridges on chart-mesh legs. Ask: the route is planned as if they open, and if it passes under one you are told and offered a re-plan avoiding them. Open: plan as if they open. Avoid: never pass one. The chart's open clearance is checked against your air draft either way. Default: the Defaults tab.">Drawbridges</label>
+  <select id="drawbridges" aria-label="Opening bridges">
+    <option value="">Default</option>
+    <option value="ask">Ask</option>
+    <option value="open">Open</option>
+    <option value="avoid">Avoid</option>
+  </select>
+
   <!-- Minimum sailing speed: below it the boat motors (0 = never motor). Moved here from Options (2026-10-08, the owner's request). -->
   <div class="sail-only">
   <label for="sailThresh" title="Below this boat speed under sail the router motors instead. 0 means never motor: every stretch is sailed, and a stretch that cannot be sailed fails the route and says so.">Min sail speed: <span id="sailThreshLabel">5.0</span> <span class="unitOf" data-for="sailThreshLabel"></span></label>

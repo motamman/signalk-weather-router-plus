@@ -26,6 +26,7 @@ import { forecastHorizonNote, type LegWind } from './horizon';
 import type { ModePolicy } from './legsim';
 import { findHandover, sliceCorridor, stitchLegParts } from './mesh/handover';
 import { type MeshLegRunner, meshRulesFor } from './mesh/leg';
+import type { DrawbridgeChoice } from './mesh/route';
 import { legLabel, type LegPlan } from './multileg';
 import { DEFAULT_ROUTER, makeRouter, type RouterKind } from './router';
 import { enrichLegRanges, enrichWaypoints, RouteCancelled, ViasNotCrossedError, type PropagatorOptions } from './propagator';
@@ -81,6 +82,10 @@ export interface LegPipelineInputs {
   meshBufferM?: number;
   /** Keep at least this far from the coastline (metres; 0 or absent: none); the land masks from landFor already keep it, this is for the passage check. */
   landBufferM?: number;
+  /** Opening bridges on mesh legs: ask (plan as open, report the ones crossed), open, or avoid; default ask. */
+  drawbridges?: DrawbridgeChoice;
+  /** Seconds added at each opening bridge passed under (default 0). */
+  bridgeWaitS?: number;
 }
 
 /**
@@ -124,7 +129,12 @@ async function meshLeg(
       legDeparture,
       tag,
       multi,
-      rules: { ...r.rules, avoid: inp.avoidAreas, ...(inp.meshBufferM !== undefined ? { bufferM: inp.meshBufferM } : {}) },
+      rules: {
+        ...r.rules,
+        avoid: inp.avoidAreas,
+        ...(inp.meshBufferM !== undefined ? { bufferM: inp.meshBufferM } : {}),
+        openingBridges: (inp.drawbridges ?? 'ask') === 'avoid' ? 'avoid' : 'open',
+      },
       vessel: inp.vessel,
       polar: inp.polar,
       sim: inp.sim,
@@ -134,6 +144,8 @@ async function meshLeg(
       simplifyM: inp.simplifyM,
       smoother: inp.smoother,
       smootherTolerance: inp.smootherTolerance,
+      drawbridges: inp.drawbridges ?? 'ask',
+      bridgeWaitS: inp.bridgeWaitS ?? 0,
       progress,
       shouldCancel,
     });

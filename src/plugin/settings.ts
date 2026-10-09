@@ -15,6 +15,7 @@
  * to SI.
  */
 
+import { DRAWBRIDGE_CHOICES, type DrawbridgeChoice } from '../engine/mesh/route';
 import * as fs from 'node:fs';
 import { HOUR_S } from '../geo/units';
 import * as path from 'node:path';
@@ -69,6 +70,10 @@ export interface AppSettings {
     navigableBuffer: number;
     /** Keep at least this far (m) from the coastline; 0 = none. */
     landBuffer: number;
+    /** Opening bridges on chart-mesh legs: ask, open or avoid. */
+    drawbridges: DrawbridgeChoice;
+    /** Seconds added at each opening bridge the route passes under. */
+    bridgeWait: number;
     /** Polar rows closer to the wind than this (degrees) are ignored; 0 = the polar as written. */
     noGoMinAngle: number;
     /** A leg is not allowed where the wind speed (m/s) exceeds this; null = no limit. */
@@ -640,6 +645,30 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     enum: ROUTER_KINDS,
     default: DEFAULT_ROUTER,
     help: 'standard: the isochrone search. refined: the same search on the convexified polar (a beat is a straight line at the exact VMG), each mixed sailing leg is then laid out as tacks, and a cross-track polish moves waypoints sideways where the route arrives earlier; under motor it is identical to standard. A route request can choose either (router).',
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.drawbridges',
+    group: 'routing',
+    label: 'Drawbridges',
+    type: 'enum',
+    enum: DRAWBRIDGE_CHOICES,
+    default: 'ask',
+    help: "Opening bridges on chart-mesh legs. ask: the route is planned as if they open, and when it passes under one the web app says so and offers to re-plan avoiding them. open: plan as if they open. avoid: never pass one. The chart's open clearance is checked against the air draft either way. A route request can choose (drawbridges).",
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.bridgeWait',
+    group: 'routing',
+    label: 'Wait at a drawbridge',
+    type: 'number',
+    unit: 's',
+    // EXCEPTION: shown and typed in seconds whatever the Signal K time preference says (public/rp-settings.js, the owner's decision 2026-10-08, until Signal K has a seconds category).
+    quantity: 'seconds',
+    min: 0,
+    max: 7200,
+    default: 0,
+    help: 'Time added at each opening bridge the route passes under, for the opening; everything after it is later by that much.',
     reload: 'next_job',
   },
   {

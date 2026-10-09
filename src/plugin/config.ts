@@ -14,6 +14,7 @@
  * settings.json (settings.ts migrateLegacy). After that they are ignored.
  */
 
+import type { DrawbridgeChoice } from '../engine/mesh/route';
 import { makeVessel, type VesselParams } from '../vessel/vessel';
 import type { RouterKind } from '../engine/router';
 import { DEFAULT_MESH_CATALOG_URL } from './meshes';
@@ -150,6 +151,8 @@ export interface ResolvedConfig {
     navigableBufferM: number;
     /** Buffer from the coastline, metres (0 = none). */
     landBufferM: number;
+    drawbridges: DrawbridgeChoice;
+    bridgeWaitS: number;
     /** Polar rows closer to the wind than this many degrees are ignored (0 = as written). */
     noGoMinAngleDeg: number;
     maxWindMs: number | null;
@@ -418,6 +421,8 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       tackPenaltyS: r.tackPenalty ?? 30,
       navigableBufferM: r.navigableBuffer ?? 0,
       landBufferM: r.landBuffer ?? 0,
+      drawbridges: r.drawbridges ?? 'ask',
+      bridgeWaitS: r.bridgeWait ?? 0,
       noGoMinAngleDeg: r.noGoMinAngle ?? 0,
       maxWindMs: r.maxWind ?? null,
       maxSwhM: r.maxSwh ?? null,

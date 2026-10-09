@@ -37,11 +37,12 @@ import {
   routeFromMeshPath,
   stitchMeshSegments,
 } from './leg';
-import type { MeshRouteResult, MeshRules } from './route';
+import type { DrawbridgeChoice, MeshRouteResult, MeshRules } from './route';
 
-/** The mesh as the leg's land, plus the charted depth under a point. */
+/** The mesh as the leg's land, plus the charted depth under a point and the opening bridges along a move. */
 export interface MeshLegLand extends LandTest {
   depthAt(lon: number, lat: number): number | null;
+  openingBridgesAlong(lonA: number, latA: number, lonB: number, latB: number): { lon: number; lat: number; clearM: number | null }[];
 }
 
 /** What a mesh leg is planned from, wherever it runs. */
@@ -66,6 +67,10 @@ export interface MeshLegInputs {
   simplifyM: number;
   smoother: boolean;
   smootherTolerance: number;
+  /** Opening bridges: ask (plan as open, report), open, avoid (the rules already block them). */
+  drawbridges: DrawbridgeChoice;
+  /** Seconds added at each opening bridge the route passes under. */
+  bridgeWaitS: number;
   wind: LegWind | null;
   current: CurrentSource;
   progress: ProgressFn;
@@ -257,6 +262,44 @@ export function runMeshLeg(inp: MeshLegInputs): Route | null {
     }
   }
   progress(0, 0, `${tag}chart mesh: charted depth under ${n} of ${route.waypoints.length} waypoints`);
+  // Opening bridges the route passes under (planned as open): reported, and
+  // each costs the wait; under 'avoid' the rules blocked them already.
+  if (inp.drawbridges !== 'avoid') {
+    const wps = route.waypoints;
+    const found: { lon: number; lat: number; clearM: number | null; legIndex: number }[] = [];
+    for (let i = 1; i < wps.length; i++)
+      for (const b of land.openingBridgesAlong(wps[i - 1].lon, wps[i - 1].lat, wps[i].lon, wps[i].lat)) found.push({ ...b, legIndex: i });
+    if (found.length) {
+      route.drawbridges = found;
+      if (inp.bridgeWaitS > 0) {
+        // Each crossing delays everything after it; shifts accumulate along the route.
+        let shiftS = 0;
+        let k = 0;
+        for (let i = 1; i < wps.length; i++) {
+          while (k < found.length && found[k].legIndex === i) {
+            shiftS += inp.bridgeWaitS;
+            k++;
+          }
+          if (shiftS > 0) wps[i].time = new Date(wps[i].time.getTime() + shiftS * 1000);
+        }
+        enrichWaypoints(wps, wind, current);
+        recomputePerWaypointMetadata(route);
+        recomputeTotals(route);
+        enrichLegRanges(route, wind);
+      }
+      const list = found
+        .map(
+          b =>
+            `${b.lat.toFixed(4)}, ${b.lon.toFixed(4)}${b.clearM === null ? ' (open clearance not charted)' : ` (open clearance {length:${b.clearM}})`}`
+        )
+        .join('; ');
+      progress(
+        0,
+        0,
+        `${tag}chart mesh: the route passes under ${found.length} opening bridge(s): ${list}${inp.bridgeWaitS > 0 ? `; {time:${inp.bridgeWaitS}} waited at each` : ''}${inp.drawbridges === 'ask' ? '; re-plan with Drawbridges = Avoid to keep clear of them' : ''}`
+      );
+    }
+  }
   const limited = inp.sim.maxWindMs !== undefined || inp.sim.maxSwhM !== undefined;
   forecastHorizonNote(route, inp.wind, limited, tag, progress);
   void legStart;

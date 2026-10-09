@@ -34,6 +34,7 @@ function meshWestOf(eastEdge: number): { mesh: MeshLegRunner; calls: [number, nu
     legCrossesLandExact: () => false,
     legsCrossLandBulk: (la: ArrayLike<number>) => new Uint8Array(la.length),
     depthAt: () => null,
+    openingBridgesAlong: () => [],
   };
   return {
     mesh: {

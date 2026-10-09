@@ -24,7 +24,7 @@ import { enrichLegRanges, enrichWaypoints } from '../propagator';
 import { haversineDistanceM } from '../../geo/geodesy';
 import { recomputePerWaypointMetadata, type Route, type RouteWarning, type Waypoint } from '../route';
 import { recomputeTotals } from '../smoother';
-import type { MeshRules } from './route';
+import type { DrawbridgeChoice, MeshRules } from './route';
 
 /** What the pipeline hands over for a leg on the mesh (legrun.ts plans it where the mesh is loaded). */
 export interface MeshLegArgs {
@@ -45,6 +45,8 @@ export interface MeshLegArgs {
   simplifyM: number;
   smoother: boolean;
   smootherTolerance: number;
+  drawbridges: DrawbridgeChoice;
+  bridgeWaitS: number;
   progress: ProgressFn;
   shouldCancel: () => boolean;
 }

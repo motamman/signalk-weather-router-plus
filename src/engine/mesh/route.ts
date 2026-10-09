@@ -9,7 +9,9 @@
  *
  * Blocked triangles (the parent planner's rules, plus the three the grid
  * planner does not check before routing):
- *  - a charted vertical clearance under the air draft + 1 m;
+ *  - a charted vertical clearance under the air draft + 1 m (an opening
+ *    bridge's open clearance; the bridge is blocked outright when the
+ *    route's rule for opening bridges is 'avoid');
  *  - a charted depth under the draught + 0.5 m, unless the triangle is in
  *    a fairway, dredged area or recommended track (is_navigable);
  *  - a rock, wreck or obstruction whose charted depth (VALSOU) is under
@@ -32,6 +34,7 @@ import {
   FLAG_HAZARD,
   FLAG_MARK,
   FLAG_NAVIGABLE,
+  FLAG_OPENING_BRIDGE,
   FLAG_STRUCTURE,
   fromMeshXY,
   type LoadedMesh,
@@ -41,10 +44,16 @@ import {
   toMeshXY,
 } from './store';
 
+/** How a route treats opening bridges: ask (plan as open, report the ones crossed), open, or avoid them. */
+export const DRAWBRIDGE_CHOICES = ['ask', 'open', 'avoid'] as const;
+export type DrawbridgeChoice = (typeof DRAWBRIDGE_CHOICES)[number];
+
 export interface MeshRules {
   draughtM: number;
   airDraftM: number;
   motorSpeedMs: number;
+  /** Opening bridges: 'open' (default) passes them under their open clearance; 'avoid' blocks every one. */
+  openingBridges?: 'open' | 'avoid';
   /** Areas to avoid: triangles whose centroid lies within radiusM of the centre are blocked. */
   avoid?: { lon: number; lat: number; radiusM: number }[];
   /** The most triangles a widened box may read (default MESH_MAX_TRIANGLES). */
@@ -115,9 +124,11 @@ export function blockedTriangles(m: LoadedMesh, rules: MeshRules): Uint8Array {
   const minClear = rules.airDraftM + 1;
   const minDepth = rules.draughtM + 0.5;
   const { flags, depth, clear, hazv } = m;
+  const avoidOpening = rules.openingBridges === 'avoid';
   for (let t = 0; t < m.n; t++) {
     const f = flags[t];
-    if (clear[t] !== NO_VALUE && clear[t] < minClear) b[t] = 1;
+    if (avoidOpening && f & FLAG_OPENING_BRIDGE) b[t] = 1;
+    else if (clear[t] !== NO_VALUE && clear[t] < minClear) b[t] = 1;
     else if (!(f & FLAG_NAVIGABLE) && depth[t] !== NO_VALUE && depth[t] < minDepth) b[t] = 1;
     else if (f & FLAG_HAZARD && hazv[t] < minDepth) b[t] = 1;
     else if (f & FLAG_MARK && !(f & FLAG_CHANNEL_MARK && f & (FLAG_FAIRWAY | FLAG_DREDGED))) b[t] = 1;

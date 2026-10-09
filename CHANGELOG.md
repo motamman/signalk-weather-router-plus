@@ -84,6 +84,15 @@ uses [Semantic Versioning](https://semver.org/).
   misses a few tenths of a percent of the triangles within the buffer
   (measured on brain, the exact walk being 3 to 12 times slower); the
   exact alternative is described in the code.
+- **Opening bridges** (the mesh build of 2026-10-08 marks them, flag bit
+  7, and stores their open clearance): the clearance rule applies to the
+  open clearance; a request's `drawbridges` (or Defaults →
+  `routing.drawbridges`, default `ask`) is `ask` (plan as open, report the
+  bridges crossed in the summary, the log and the web app, which offers a
+  re-plan avoiding them), `open` or `avoid` (every opening bridge
+  blocked). `routing.bridgeWait` (seconds, default 0) is added at each
+  bridge passed under; the GeoJSON carries `drawbridges`. Older meshes
+  have no bit 7 and behave as before.
 - **Tacking penalty** (Defaults → `routing.tackPenalty`, seconds, default
   30): the time lost on every tack or gybe, charged by both routers. The
   standard search charges it on a move that puts the wind on the other

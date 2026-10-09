@@ -180,6 +180,7 @@ export function stitchLegs(legs: Route[]): Route {
   let sailingTimeS = legs[0].sailingTimeS;
   const warnings: RouteWarning[] = (legs[0].warnings ?? []).map(w => ({ ...w }));
   const autoVias = [...(legs[0].autoVias ?? [])];
+  const drawbridges = (legs[0].drawbridges ?? []).map(b => ({ ...b }));
   const skeleton = legs[0].skeleton ? [...legs[0].skeleton] : undefined;
   const fronts = legs.flatMap((leg, li) => (leg.fronts ?? []).map(f => ({ ...f, leg: li })));
   let validated = legs[0].validated;
@@ -211,6 +212,7 @@ export function stitchLegs(legs: Route[]): Route {
     motoringTimeS += leg.motoringTimeS;
     sailingTimeS += leg.sailingTimeS;
     autoVias.push(...(leg.autoVias ?? []));
+    for (const b of leg.drawbridges ?? []) drawbridges.push({ ...b, legIndex: b.legIndex + offset });
     if (skeleton && leg.skeleton)
       skeleton.push(...(samePoint(skeleton[skeleton.length - 1], leg.skeleton[0]) ? leg.skeleton.slice(1) : leg.skeleton));
     validated = validated && leg.validated;
@@ -232,6 +234,7 @@ export function stitchLegs(legs: Route[]): Route {
   };
   if (warnings.length) route.warnings = warnings;
   if (autoVias.length) route.autoVias = autoVias;
+  if (drawbridges.length) route.drawbridges = drawbridges;
   if (skeleton) route.skeleton = skeleton;
   if (fronts.length) route.fronts = fronts;
   if (horizon > 0) route.forecastHorizonExceededS = horizon;
