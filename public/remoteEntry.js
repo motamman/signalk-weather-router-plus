@@ -334,16 +334,16 @@ var signalk_weather_router_plus = (function () {
       ? (meshes.catalog_error ? 'Could not be read: ' + meshes.catalog_error : meshes.catalog_updated ? 'Last read: catalogue of ' + meshes.catalog_updated.slice(0, 16).replace('T', ' ') + 'Z, ' + meshRows.filter(function (r) { return r.source === 'catalog'; }).length + ' meshes' : '')
       : '';
     var meshSection = card('Chart meshes',
-      "Routing on the charts: inside a mesh the router follows charted depths, bridge clearances, rocks, wrecks, marks and structures, using the vessel's draft and height from Signal K. Outside every mesh it routes on the coastline as before.",
+      "For USCG US water routing: A mesh 'chart' is needed. Select the groups that are needed.",
       meshTable,
       h('p', { className: 'small text-muted' },
         h('b', null, 'Download'), ' copies a published mesh to this server and keeps it current; untick to delete the copy. ',
         h('b', null, 'Use'), " lets the router route on it; untick to keep it on disk but route on the coastline there. A local folder has no Download: it's yours."),
       fold('Where meshes come from',
         row('Catalogue', text(['mesh', 'catalogUrl'], 'blank = the US-ENC catalogue on R2'),
-          'The list of published meshes (the chart build\'s charts/mesh/index.json). Read at start and once a day. ' + catalogNote),
+          'List of published meshes. ' + catalogNote),
         row('Local mesh folder', text(['meshDir'], 'blank = none'),
-          'A mesh you built or copied yourself, or a folder holding several. Listed above as a local row after Save.')));
+          'List of local files.')));
 
     // Map tiles built ahead ------------------------------------------------------
     var d = DEFAULTS;

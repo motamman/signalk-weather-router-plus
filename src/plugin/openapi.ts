@@ -116,7 +116,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           responses: {
             200: {
               description:
-                '{values, schema: {groups[{id,label,help}], settings[{key, group, label, type, unit, quantity, min, max, multipleOf, default, nullable, enum, maxLength, help, reload}]}}',
+                '{values, schema: {groups[{id,label,help}], settings[{key, group, label, type, unit, quantity, min, max, multipleOf, step, default, nullable, enum, maxLength, help, reload}]}}',
               content: {
                 'application/json': {
                   schema: { type: 'object', properties: { values: settingsValuesSchema(), schema: { type: 'object' } } },

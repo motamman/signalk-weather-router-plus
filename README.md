@@ -487,7 +487,7 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   streamed and kept with the job; the switch only shows or hides them, so
   turning it on after a run shows the search that was made. The finished
   route's fronts stay, faintly, also for a past route opened from the log.
-- **Defaults tab**: the web-app settings below (what every route starts from, shared by every client), in the selected units.
+- **Defaults tab**: the web-app settings below (what every route starts from, shared by every client), in the selected units. Numbers are sliders with the value beside the label; max wind and max wave height have a "no limit" box.
 - **While the server gets its forecast** (a first start, or after the
   forecast settings changed, when the forecast is decoded again): a notice
   under the header says what it is doing ("Loading the forecast: decoding
@@ -712,8 +712,8 @@ and `vessel.air_draft_m`); the mesh is not used until both are set.
 - **Opening bridges:** the mesh marks bascule, swing, lift, draw and
   transporter bridges (flag bit 7) and stores their open clearance, or
   none when the chart gives none. The clearance rule (air draft + 1 m)
-  applies to that open clearance. The Drawbridges choice (Plan tab, or
-  the Defaults setting) is ask, open or avoid: ask plans the route as if
+  applies to that open clearance. The Drawbridges setting (Defaults tab;
+  a request's `drawbridges` overrides it) is ask, open or avoid: ask plans the route as if
   they open and, when the finished route passes under one, lists the
   bridges in the summary and the log and the web app offers a re-plan
   avoiding them; avoid blocks every opening bridge; the wait setting adds

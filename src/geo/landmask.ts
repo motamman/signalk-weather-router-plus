@@ -272,6 +272,7 @@ export class LandMask implements LandTest {
       const [kx, ky] = this.cellsFor(this.bufferM, res);
       const ex = nx + 2 * kx;
       const ey = ny + 2 * ky;
+      if (ex * ey > maxCells) throw new Error(`LandMask.refine: buffered patch ${ex}x${ey} exceeds ${maxCells} cells`);
       const eb: BBox = {
         west: wrapLon(west - kx * res),
         south: south - ky * res,

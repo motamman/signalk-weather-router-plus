@@ -1264,7 +1264,7 @@ function _savePlan() {
 function _initRouteChoices() {
   // Values an earlier panel saved under the old names.
   const renamed = { search: { wide: 'moderate', finer: 'maximum' }, router: { experimental: 'refined' } };
-  for (const [id, key] of [['search', 'rp:search'], ['router', 'rp:router'], ['drawbridges', 'rp:drawbridges']]) {
+  for (const [id, key] of [['search', 'rp:search'], ['router', 'rp:router']]) {
     const el = document.getElementById(id);
     if (!el) continue;
     let saved = null;
@@ -2076,6 +2076,10 @@ function _focusOnWaypoint(f) {
 // Build the POST body for /api/routes. Accepts an `overrides` object so
 // Live-mode re-plans can supply {start, waypoints, departure} without
 // touching the other configurables, which still come from the DOM.
+// Set by the "Re-plan avoiding drawbridges" button for the next request only
+// (the owner's decision, 2026-10-08: the standing choice lives on the
+// Defaults tab and a re-plan must not change it).
+let _nextDrawbridges = null;
 function buildRoutePayload(overrides) {
   overrides = overrides || {};
   const sailThreshMs = parseFloat(document.getElementById('sailThresh').value);
@@ -2105,8 +2109,11 @@ function buildRoutePayload(overrides) {
   const pub = document.getElementById('publishSel').value;
   if (pub === 'true') body.publish = true; else if (pub === 'false') body.publish = false;
   const sm = document.getElementById('smootherSel');
-  const db = document.getElementById('drawbridges');
-  if (db && db.value) body.drawbridges = db.value;
+  // Drawbridges: the Defaults setting (routing.drawbridges) rules; the only
+  // request-level choice is the one-shot "re-plan avoiding them" below.
+  // Sent, not cleared, here: the request's success handler clears it, so a
+  // request that fails to start keeps it for the next attempt.
+  if (_nextDrawbridges) body.drawbridges = _nextDrawbridges;
   if (sm && sm.value === 'true') body.smoother = true; else if (sm && sm.value === 'false') body.smoother = false;
   if (document.getElementById('noCurrents').checked) body.no_currents = true;
   const rw = document.getElementById('regionalWind');
@@ -2305,8 +2312,7 @@ function _jobOnDone(job, d) {
       btn.textContent = 'Re-plan avoiding drawbridges';
       btn.style.marginTop = '6px';
       btn.addEventListener('click', () => {
-        const sel = document.getElementById('drawbridges');
-        if (sel) { sel.value = 'avoid'; try { localStorage.setItem('rp:drawbridges', 'avoid'); } catch (_) {} }
+        _nextDrawbridges = 'avoid';
         hint.innerHTML = '';
         document.getElementById('findRoute').click();
       });
@@ -2398,6 +2404,7 @@ document.getElementById('findRoute').addEventListener('click', function() {
   }, null)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(job => {
+      if (body.drawbridges) _nextDrawbridges = null;
       _currentRouteName = body.name || '';
       attachToJob(job.id, { request: body });
       loadRouteHistory();
@@ -3723,6 +3730,7 @@ popup.on('change:position', () => {
     }, null)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(job => {
+      if (payload.drawbridges) _nextDrawbridges = null;
       jobId = job.id;
       replanJobId = job.id;
       // Cancelled before the job existed: stop it now.

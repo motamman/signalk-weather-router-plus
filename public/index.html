@@ -374,6 +374,13 @@
   #srvSettingsForm .st-row label .st-unit { color: var(--text-muted); font-size: var(--f-xs); }
   #srvSettingsForm .st-row.st-bool label { justify-content: flex-start; align-items: center; cursor: pointer; }
   #srvSettingsForm .st-row.st-dirty input, #srvSettingsForm .st-row.st-dirty select { border-color: var(--go); }
+  #srvSettingsForm .st-row.st-dirty .st-val { color: var(--go); font-weight: 600; }
+  #srvSettingsForm .st-row.st-range input[type="range"] { width: 100%; margin: 2px 0 var(--s-1); }
+  #srvSettingsForm .st-row.st-range input[type="range"]:disabled { opacity: 0.4; }
+  #srvSettingsForm .st-row .st-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-2); }
+  #srvSettingsForm .st-row .st-head label { flex: 1; }
+  #srvSettingsForm .st-row label.st-none { flex: 0 0 auto; font-size: var(--f-xs); color: var(--text-muted); white-space: nowrap; cursor: pointer; }
+  #srvSettingsForm .st-row .st-none input { width: auto; margin: 0 4px 0 0; vertical-align: middle; }
   #srvSettingsForm .st-row.st-invalid input, #srvSettingsForm .st-row.st-invalid select { border-color: var(--danger); }
   #srvSettingsForm .st-err { color: var(--danger); font-size: var(--f-xs); margin: 0 0 var(--s-1); }
   #srvSettingsForm .st-err:empty { display: none; }
@@ -677,8 +684,8 @@
 
   <div style="display:flex;gap:var(--s-2);">
     <div style="flex:1;">
-      <label for="search" title="How wide the router's search is. Normal: the routing settings as they are, seconds. Moderate: a better route, about 2 minutes on a long passage. Maximum: the best route, about 6 minutes. A harbour hop takes seconds whichever you pick.">Method</label>
-      <select id="search" aria-label="Search method">
+      <label for="search" title="How wide the router's search is. Normal: the routing settings as they are, seconds. Moderate: a better route, about 2 minutes on a long passage. Maximum: the best route, about 6 minutes. A harbour hop takes seconds whichever you pick.">Effort</label>
+      <select id="search" aria-label="Search effort">
         <option value="normal">Normal</option>
         <option value="moderate">Moderate</option>
         <option value="maximum">Maximum</option>
@@ -698,14 +705,6 @@
     <option value="">Default</option>
     <option value="true">On</option>
     <option value="false">Off</option>
-  </select>
-
-  <label for="drawbridges" title="Opening bridges on chart-mesh legs. Ask: the route is planned as if they open, and if it passes under one you are told and offered a re-plan avoiding them. Open: plan as if they open. Avoid: never pass one. The chart's open clearance is checked against your air draft either way. Default: the Defaults tab.">Drawbridges</label>
-  <select id="drawbridges" aria-label="Opening bridges">
-    <option value="">Default</option>
-    <option value="ask">Ask</option>
-    <option value="open">Open</option>
-    <option value="avoid">Avoid</option>
   </select>
 
   <!-- Minimum sailing speed: below it the boat motors (0 = never motor). Moved here from Options (2026-10-08, the owner's request). -->

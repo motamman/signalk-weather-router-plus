@@ -60,6 +60,20 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Defaults tab: every number is a slider**, the value and unit beside
+  the label, bounds and step from the setting's schema (`step`, SI, new
+  in `/api/settings`' schema and the OpenAPI description) converted to the
+  user's unit. The two settings that can be "none" (max wind, max wave
+  height) have a "no limit" box. A value saved earlier that is off the
+  slider's step shows as saved until the slider moves. Text boxes are
+  gone, so the finest value is the step (0.1 kt for speeds, 1 m for
+  simplification, 5 s for the tacking penalty, 30 s for the bridge wait,
+  10 m for the buffers and the simulation step, 1 h for horizons).
+- **Drawbridges** is a Defaults setting only (`routing.drawbridges`,
+  default ask); the Plan sub-tab's select is removed. The "re-plan
+  avoiding drawbridges" button sends `drawbridges: avoid` for that one
+  request and leaves the setting as it is. The Plan sub-tab's Method
+  label reads Effort.
 - **Buffer from land** (Defaults → `routing.landBuffer`, metres, default
   0): on a coastline leg the route keeps at least this far from the
   shoreline. The land raster is grown by the buffer (`LandMask.withBuffer`,
