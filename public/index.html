@@ -648,7 +648,7 @@
     <div id="liveReadoutStale" style="color:var(--danger);font-size:10px;margin-top:2px;display:none;">⚠ data stale</div>
     <!-- Follow the boat: the map keeps the boat centred (the owner's request, 2026-10-09). A real drag of the map unticks it; ticking it, or the centre-on-boat button, follows again. -->
     <label style="display:flex;align-items:center;gap:4px;margin-top:var(--s-1);cursor:pointer;" title="Keep the map centred on the boat. Dragging the map stops following; tick again, or press the centre-on-boat button, to follow again."><input type="checkbox" id="followBoat" checked style="width:auto;margin:0;">Follow the boat</label>
-    <label style="margin-top:var(--s-2);" title="Perpendicular distance from the planned route that counts as off course; a re-plan follows when the boat stays further off for the off-course sustain time (Setup tab).">Off-course threshold: <span id="xteThresholdMLabel">500</span> <span class="unitOf" data-for="xteThresholdMLabel"></span></label>
+    <label style="margin-top:var(--s-2);" title="Perpendicular distance from the planned route that counts as off course; a re-plan follows when the boat stays further off for the off-course sustain time (Route → Options → Live re-plan triggers).">Off-course threshold: <span id="xteThresholdMLabel">500</span> <span class="unitOf" data-for="xteThresholdMLabel"></span></label>
     <input type="range" id="xteThresholdM" min="100" max="2000" step="50" value="500" aria-label="Off-course threshold">
     <div id="simControls" style="display:none;">
       <div style="display:flex;gap:var(--s-1);margin-top:var(--s-2);">

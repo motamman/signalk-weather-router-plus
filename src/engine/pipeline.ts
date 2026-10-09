@@ -194,9 +194,13 @@ export async function runLegPipeline(
   // anything the mesh cannot take falls through to the coastline search
   // below, unchanged.
   if (inp.mesh) {
-    const cs = inp.mesh.covers([legStart]);
-    const ce = inp.mesh.covers([legEnd]);
-    if (cs && ce) {
+    // One mesh must hold both ends for the whole leg to be planned on it
+    // (the runner opens one mesh); ends in two different meshes are the
+    // handover case, like one end outside any mesh.
+    const both = inp.mesh.covers([legStart, legEnd]);
+    const cs = both || inp.mesh.covers([legStart]);
+    const ce = both || inp.mesh.covers([legEnd]);
+    if (both) {
       const mr = await meshLeg(inp, plan, legIndex, legStart, legDeparture, tag);
       if (mr) return mr;
     } else if ((cs || ce) && inp.waterGrid && plan.vias.length === 0) {

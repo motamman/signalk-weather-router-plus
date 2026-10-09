@@ -249,6 +249,8 @@ export function stitchMeshSegments(parts: Route[], wind: WindSource): Route {
   const route: Route = { waypoints, totalTimeS: 0, totalDistanceM: 0, motoringTimeS: 0, sailingTimeS: 0, validated, meshLeg: true };
   if (warnings.length) route.warnings = warnings;
   if (fronts.length) route.fronts = fronts;
+  const drops = parts.reduce((n, p) => n + (p.smootherDrops ?? 0), 0);
+  if (drops) route.smootherDrops = drops;
   recomputePerWaypointMetadata(route);
   recomputeTotals(route);
   enrichLegRanges(route, wind);

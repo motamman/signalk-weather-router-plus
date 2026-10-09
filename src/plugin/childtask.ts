@@ -32,7 +32,7 @@ export type ChildTask =
   | { task: 'rmtree'; dir: string }
   | { task: 'regional'; src: RegionalSource; srcDir: string; dataDir: string; keepRuns: number }
   | MeshLegTask
-  | { task: 'mesh-download'; base: string; dest: string };
+  | { task: 'mesh-download'; base: string; dest: string; build: string };
 
 /** A message a task sends before its answer (the mesh leg's progress and stage fronts). */
 export type ChildEvent = MeshLegEvent;
@@ -160,8 +160,18 @@ async function countTree(dir: string): Promise<RmtreeResult> {
  * rest are fetched one at a time to a temporary name and renamed.
  * Progress goes to `<dest>/.progress.json` every file.
  */
-async function downloadMesh(base: string, dest: string): Promise<MeshDownloadResult> {
+async function downloadMesh(base: string, dest: string, build: string): Promise<MeshDownloadResult> {
   dest = path.resolve(dest);
+  // A copy started for another build (or from another catalogue) is not
+  // resumed: a tile of the same size can differ in content between builds,
+  // so the folder goes and the copy starts over. `.progress.json` records
+  // what a folder was started for.
+  try {
+    const prev = JSON.parse(fs.readFileSync(path.join(dest, '.progress.json'), 'utf8')) as { base?: string; build?: string };
+    if (prev.base !== base || prev.build !== build) fs.rmSync(dest, { recursive: true, force: true });
+  } catch {
+    // no progress file: an empty or new folder
+  }
   fs.mkdirSync(dest, { recursive: true });
   /** The local path of a file the server's lists name; a name that leaves `dest` is refused. */
   const inside = (rel: string): string => {
@@ -197,7 +207,7 @@ async function downloadMesh(base: string, dest: string): Promise<MeshDownloadRes
   let bytes = 0;
   let done = 0;
   const progress = (): void => {
-    fs.writeFileSync(path.join(dest, '.progress.json'), JSON.stringify({ files: done, total: files.length, bytes }));
+    fs.writeFileSync(path.join(dest, '.progress.json'), JSON.stringify({ base, build, files: done, total: files.length, bytes }));
   };
   progress();
   for (const rel of files) {
@@ -253,7 +263,7 @@ async function runTask(t: ChildTask): Promise<unknown> {
       return runMeshLegTask(t, event => process.send!({ event }));
     }
     case 'mesh-download':
-      return downloadMesh(t.base, t.dest);
+      return downloadMesh(t.base, t.dest, t.build);
   }
 }
 

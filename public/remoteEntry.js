@@ -376,7 +376,7 @@ var signalk_weather_router_plus = (function () {
       ? (meshes.catalog_error ? 'Could not be read: ' + meshes.catalog_error : meshes.catalog_updated ? 'Last read: catalogue of ' + meshes.catalog_updated.slice(0, 16).replace('T', ' ') + 'Z, ' + meshRows.filter(function (r) { return r.source === 'catalog'; }).length + ' meshes' : '')
       : '';
     var meshSection = card('Chart meshes',
-      "For USCG US water routing: A mesh 'chart' is needed. Select the groups that are needed.",
+      'Routing on charted water (depths, clearances, hazards) needs a navigation mesh of the area. Tick the US Coast Guard districts you sail in; each is downloaded and kept current.',
       meshTable,
       h('p', { className: 'small text-muted' },
         h('b', null, 'Download'), ' copies a published mesh to this server and keeps it current; untick to delete the copy. ',
@@ -389,7 +389,7 @@ var signalk_weather_router_plus = (function () {
             catalogReading ? 'Reading…' : 'Read the catalogue now'),
           h('small', { className: 'form-text text-muted d-block' }, 'Reads the catalogue at the saved address, lists what it says, then downloads ticked meshes that are missing or have a newer build. Otherwise it is read at start and once a day.')),
         row('Local mesh folder', text(['meshDir'], 'blank = none'),
-          'List of local files.')));
+          'A folder holding one mesh (index.json and its tiles) or several mesh folders, managed by you and used beside the downloaded ones.')));
 
     // Map tiles built ahead ------------------------------------------------------
     var d = DEFAULTS;

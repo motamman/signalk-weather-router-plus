@@ -203,8 +203,7 @@ export function runMeshLeg(inp: MeshLegInputs): Route | null {
         );
         // Simplification as on a coastline leg (parent order: RDP, then the
         // shortcut smoother), with the mesh as land so a shortcut is taken
-        // only where the mesh allows it. The refined router arrives with the
-        // smoother already off (its polish replaces it).
+        // only where the mesh allows it; both routers, the request's choice.
         const nRdp = rdpSimplify(part, land, inp.simplifyM);
         if (nRdp) recomputeTotals(part);
         const nSm = inp.smoother

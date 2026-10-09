@@ -310,7 +310,8 @@ export function localMeshes(meshDir: string | null): LocalMesh[] {
 export function readyMeshDirs(storeDir: string): { name: string; dirs: string[]; build_date: string | null }[] {
   let names: string[];
   try {
-    names = fs.readdirSync(storeDir).filter(n => !n.startsWith('.') && !n.endsWith('.new'));
+    // `.new` is a copy in progress, `.old` the copy a swap replaced (gone once the swap's cleanup runs).
+    names = fs.readdirSync(storeDir).filter(n => !n.startsWith('.') && !n.endsWith('.new') && !n.endsWith('.old'));
   } catch {
     return [];
   }
@@ -430,13 +431,14 @@ export class MeshManager {
     await this.readCatalog(signal);
     if (signal.aborted) return;
     fs.mkdirSync(this.storeDir, { recursive: true });
-    // Unticked meshes go, including stale .new folders.
+    // Unticked meshes go, including stale .new and leftover .old folders.
     for (const n of this.onDisk()) {
       if (this.ticked.includes(n)) continue;
       this.removing.add(n);
       try {
         fs.rmSync(path.join(this.storeDir, n), { recursive: true, force: true });
         fs.rmSync(path.join(this.storeDir, `${n}.new`), { recursive: true, force: true });
+        fs.rmSync(path.join(this.storeDir, `${n}.old`), { recursive: true, force: true });
         this.log(`mesh ${n}: removed (not in the download list)`);
       } catch (err) {
         this.errors.set(n, `removal failed: ${(err as Error).message}`);
@@ -501,7 +503,11 @@ export class MeshManager {
     const t0 = Date.now();
     try {
       this.log(`mesh ${entry.name}: downloading ${(entry.bytes / 1e9).toFixed(1)} GB from ${meshBaseUrl(this.catalogUrl, entry)}`);
-      const r = await runChildTask({ task: 'mesh-download', base: meshBaseUrl(this.catalogUrl, entry), dest: tmp }, 6 * 3600_000, signal);
+      const r = await runChildTask(
+        { task: 'mesh-download', base: meshBaseUrl(this.catalogUrl, entry), dest: tmp, build: entry.build_date },
+        6 * 3600_000,
+        signal
+      );
       if (signal.aborted) return;
       const marker: MeshMarker = {
         name: entry.name,

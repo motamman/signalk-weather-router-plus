@@ -24,7 +24,9 @@ import {
   type PluginConfig,
   type ResolvedConfig,
   type SelfDesign,
+  selfDesignValue,
 } from './plugin/config';
+import { AIR_DRAFT_M_RANGE, DRAUGHT_M_RANGE } from './vessel/vessel';
 import { mergeSettings, reloadsFor, settingsSchema, SettingsStore, SettingsValidationError } from './plugin/settings';
 import { checkDecodeResources } from './plugin/memguard';
 import { siText } from './plugin/unittext';
@@ -367,17 +369,14 @@ export = function plugin(app: SkApp): SignalKPlugin {
    * name, not plugin settings; the chart mesh needs both.
    */
   function selfDesign(): SelfDesign {
-    const num = (path: string, key?: string): number | null => {
+    const num = (path: string, key: string | undefined, range: readonly [number, number]): number | null => {
       try {
-        const raw = app.getSelfPath?.(path) as unknown;
-        let v = raw && typeof raw === 'object' && 'value' in raw ? (raw as { value: unknown }).value : raw;
-        if (key && v && typeof v === 'object') v = (v as Record<string, unknown>)[key];
-        return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+        return selfDesignValue(app.getSelfPath?.(path) as unknown, key, range);
       } catch {
         return null;
       }
     };
-    return { draughtM: num('design.draft', 'maximum'), airDraftM: num('design.airHeight') };
+    return { draughtM: num('design.draft', 'maximum', DRAUGHT_M_RANGE), airDraftM: num('design.airHeight', undefined, AIR_DRAFT_M_RANGE) };
   }
 
   /** The vessel's name from Signal K (vessels.self.name), or null when the server has none. */

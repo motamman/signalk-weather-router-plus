@@ -117,6 +117,7 @@ export function beatToWindward(
       tack.timeMs += tackS * 1000;
       tack.elapsedS += tackS;
       tack.costS += tackS;
+      tack.sailingS += tackS; // time spent sailing: the totals must add up
       const s2 = simulateLegTime(tLon, tLat, new Date(tack.timeMs), gLon, gLat, vessel, polar, wind, current, simOpts);
       if (!Number.isFinite(s2.seconds) || s2.seconds <= 0) continue;
       // Time plus comfort cost: with a comfort weight the beat avoids the rougher tack.

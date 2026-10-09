@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { KTS_TO_MS } from '../geo/geodesy';
-import { resolveConfig, routeVessel, type LegacyPluginConfig } from './config';
+import { resolveConfig, routeVessel, selfDesignValue, type LegacyPluginConfig } from './config';
 import {
   defaultSettings,
   mergeSettings,
@@ -408,4 +408,15 @@ test('settings: Tides group reloads tides only', () => {
     SETTINGS_SPEC.filter(s => s.group === 'tides').map(s => s.key),
     ['tides.enabled', 'tides.halfWidth', 'tides.horizon']
   );
+});
+
+test('selfDesignValue: Signal K self-data within the vessel bounds is used, anything else is unknown', () => {
+  assert.equal(selfDesignValue({ value: { maximum: 2.1 } }, 'maximum', [0.1, 30]), 2.1);
+  assert.equal(selfDesignValue({ value: 18 }, undefined, [0.5, 100]), 18);
+  assert.equal(selfDesignValue(18, undefined, [0.5, 100]), 18);
+  assert.equal(selfDesignValue({ value: { maximum: 0.05 } }, 'maximum', [0.1, 30]), null, 'below the bound');
+  assert.equal(selfDesignValue({ value: 1800 }, undefined, [0.5, 100]), null, 'an air height in the wrong unit');
+  assert.equal(selfDesignValue({ value: null }, undefined, [0.5, 100]), null);
+  assert.equal(selfDesignValue(undefined, 'maximum', [0.1, 30]), null);
+  assert.equal(selfDesignValue({ value: { maximum: 'deep' } }, 'maximum', [0.1, 30]), null);
 });

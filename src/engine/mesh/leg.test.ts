@@ -16,7 +16,7 @@ import { ConstantWind, NoCurrent, NoWind, type CurrentSource } from '../environm
 import { planLegs } from '../multileg';
 import { PolarDiagram } from '../../vessel/polar';
 import { runLegPipeline, type LegPipelineInputs } from '../pipeline';
-import { classifySegments, meshCorridor, type MeshLegRunner, meshRulesFor, routeFromMeshPath } from './leg';
+import { classifySegments, meshCorridor, type MeshLegRunner, meshRulesFor, routeFromMeshPath, stitchMeshSegments } from './leg';
 import { type MeshLegLand, runMeshLeg } from './legrun';
 import type { MeshRouteResult } from './route';
 import type { LegWind } from '../horizon';
@@ -580,4 +580,31 @@ test('pipeline: the mesh falls through to the coastline search when it finds no 
     assert.equal(calls.length, 0);
     assert.ok(!messages.some(m => /chart mesh/.test(m)));
   }
+});
+
+test('pipeline: a leg whose ends lie in two different meshes is not planned as one mesh leg', async () => {
+  const path: [number, number][] = [
+    [0, 0.5],
+    [0.5, 0.6],
+    [1, 0.5],
+  ];
+  const { mesh, calls } = fakeMeshOk(path);
+  // Two meshes meeting at 0.5°E: each end is in one, no mesh holds both.
+  const split: MeshLegRunner = { ...mesh, covers: pts => pts.every(p => p[0] < 0.5) || pts.every(p => p[0] >= 0.5) };
+  const { inp, messages } = inputs(split, {});
+  const r = await runLegPipeline(inp, PLAN, 0, [0, 0.5], T0);
+  assert.equal(calls.length, 0, 'the mesh leg was not asked for');
+  assert.ok(!r.meshLeg);
+  assert.ok(messages.some(m => /^skeleton/.test(m)), 'the coastline search ran: ' + messages.join('\n'));
+});
+
+test('stitchMeshSegments: the smoother drops of every segment are summed', () => {
+  const a = routeFromMeshPath([[0, 0], [0.01, 0]], T0, BOAT, null, new NoWind(), new NoCurrent(), SIM)!;
+  const b = routeFromMeshPath([[0.01, 0], [0.02, 0]], new Date(a.waypoints[1].time), BOAT, null, new NoWind(), new NoCurrent(), SIM)!;
+  a.smootherDrops = 2;
+  b.smootherDrops = 3;
+  const r = stitchMeshSegments([a, b], new NoWind());
+  assert.equal(r.waypoints.length, 3);
+  assert.equal(r.smootherDrops, 5);
+  assert.equal(stitchMeshSegments([routeFromMeshPath([[0, 0], [0.01, 0]], T0, BOAT, null, new NoWind(), new NoCurrent(), SIM)!], new NoWind()).smootherDrops, undefined);
 });

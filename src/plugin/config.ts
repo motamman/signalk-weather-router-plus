@@ -468,6 +468,19 @@ export interface SelfDesign {
 }
 
 /**
+ * A vessel dimension from Signal K self-data (`design.draft.maximum`,
+ * `design.airHeight`): the raw value or its `{value}` wrapper, a `key`
+ * inside it when given, a finite number within `range`; anything else is
+ * null (unknown). The bounds are makeVessel's, so a value Signal K reports
+ * in the wrong unit disables the chart mesh instead of failing every route.
+ */
+export function selfDesignValue(raw: unknown, key: string | undefined, range: readonly [number, number]): number | null {
+  let v = raw && typeof raw === 'object' && 'value' in raw ? (raw as { value: unknown }).value : raw;
+  if (key && v && typeof v === 'object') v = (v as Record<string, unknown>)[key];
+  return typeof v === 'number' && Number.isFinite(v) && v >= range[0] && v <= range[1] ? v : null;
+}
+
+/**
  * The vessel for one route: values in the request take precedence; the
  * rest come from the vessel settings (never the built-in defaults), and
  * the draught and air draft from Signal K's vessel base data (like the

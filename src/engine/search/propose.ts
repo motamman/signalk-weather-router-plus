@@ -116,7 +116,9 @@ export function propose(
         continue;
       }
       const i = keep[c];
-      if (Number.isFinite(wdPar) && sc.dominant[c] === 1 && tackBetween(par.cogDeg, hdg[i], wdPar)) secs += tackS;
+      // A tack: the penalty is time spent sailing, so it counts in the sailing time too (the totals must add up).
+      const tacked = Number.isFinite(wdPar) && sc.dominant[c] === 1 && tackBetween(par.cogDeg, hdg[i], wdPar);
+      if (tacked) secs += tackS;
       const legDist = haversineDistanceM(par.lon, par.lat, cLon[i], cLat[i]);
       const cand: Candidate = {
         lon: cLon[i],
@@ -128,7 +130,7 @@ export function propose(
         sogMs: legDist / secs,
         cogDeg: hdg[i],
         mode: sc.dominant[c] === 1 ? 'sailing' : 'motoring',
-        sailingS: sc.sailing[c],
+        sailingS: sc.sailing[c] + (tacked ? tackS : 0),
         motoringS: sc.motoring[c],
         viaCount: par.viaCount,
         viaIdxs: [],

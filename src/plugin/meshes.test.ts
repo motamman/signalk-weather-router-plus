@@ -63,6 +63,9 @@ test('readyMeshDirs: a complete marker makes a mesh ready; clusters are listed f
   );
   fs.writeFileSync(path.join(multi, '.wrp-mesh.json'), JSON.stringify({ name: '14CGD', build_date: 'y' }));
   fs.mkdirSync(path.join(store, '07CGD.new'));
+  // A copy a swap replaced, not yet cleaned up: not a mesh of its own.
+  fs.mkdirSync(path.join(store, '01CGD.old'));
+  fs.writeFileSync(path.join(store, '01CGD.old', '.wrp-mesh.json'), JSON.stringify({ name: '01CGD', build_date: 'w' }));
   assert.deepEqual(readyMeshDirs(store), [
     { name: '01CGD', dirs: [one], build_date: 'x' },
     { name: '14CGD', dirs: [path.join(multi, 'w158n20'), path.join(multi, 'w145n13')], build_date: 'y' },
@@ -108,7 +111,7 @@ function serve(
   });
 }
 
-function publish(root: string, buildDate: string, tileBytes: number): void {
+function publish(root: string, buildDate: string, tileBytes: number, fill = 7): void {
   const dir = path.join(root, 'charts', 'mesh', '01CGD');
   fs.mkdirSync(dir, { recursive: true });
   const tiles = [
@@ -119,7 +122,7 @@ function publish(root: string, buildDate: string, tileBytes: number): void {
     path.join(dir, 'index.json'),
     JSON.stringify({ version: 1, west: 0, south: 0, east: 2, north: 1, tileDeg: 1, xScale: 1, triangles: 2, tiles })
   );
-  for (const t of tiles) fs.writeFileSync(path.join(dir, t.file), Buffer.alloc(tileBytes, 7));
+  for (const t of tiles) fs.writeFileSync(path.join(dir, t.file), Buffer.alloc(tileBytes, fill));
   const entry = { ...ENTRY, build_date: buildDate, bytes: 2 * tileBytes, triangles: 2 };
   fs.writeFileSync(path.join(root, 'charts', 'mesh', 'index.json'), JSON.stringify({ version: 1, updated: buildDate, meshes: [entry] }));
 }
@@ -151,10 +154,20 @@ test('MeshManager: downloads a ticked mesh, marks it ready, re-downloads a newer
     assert.equal(readMarker(path.join(store, '01CGD'))!.build_date, '2026-10-09T00:00:00Z');
     assert.equal(fs.statSync(path.join(store, '01CGD', 'mesh_001_002.bin')).size, 1200);
     assert.ok(!fs.existsSync(path.join(store, '01CGD.new')) && !fs.existsSync(path.join(store, '01CGD.old')));
-    // Unticked: removed.
+    // A copy started for another build is not resumed: same tile size, other content.
+    fs.mkdirSync(path.join(store, '01CGD.new'), { recursive: true });
+    fs.writeFileSync(path.join(store, '01CGD.new', '.progress.json'), JSON.stringify({ base: url + 'charts/mesh/01CGD/', build: '2026-10-09T00:00:00Z', files: 1, total: 2, bytes: 1200 }));
+    fs.writeFileSync(path.join(store, '01CGD.new', 'mesh_001_002.bin'), Buffer.alloc(1300, 7));
+    publish(root, '2026-10-10T00:00:00Z', 1300, 9);
+    await mgr.reconcile();
+    assert.equal(readMarker(path.join(store, '01CGD'))!.build_date, '2026-10-10T00:00:00Z');
+    assert.equal(fs.readFileSync(path.join(store, '01CGD', 'mesh_001_002.bin'))[0], 9, 'the stale tile was replaced, not resumed');
+    // Unticked: removed, a leftover .old folder too.
+    fs.mkdirSync(path.join(store, '01CGD.old'));
     mgr.configure(url + 'charts/mesh/index.json', [], store);
     await mgr.reconcile();
     assert.ok(!fs.existsSync(path.join(store, '01CGD')));
+    assert.ok(!fs.existsSync(path.join(store, '01CGD.old')));
     assert.equal(mgr.status().meshes.find(r => r.name === '01CGD')!.state, 'absent');
     // A ticked name the catalogue lacks is reported, not fetched.
     mgr.configure(url + 'charts/mesh/index.json', ['99CGD'], store);

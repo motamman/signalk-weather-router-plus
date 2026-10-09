@@ -23,6 +23,10 @@ export const DEFAULT_VESSEL: VesselParams = {
 };
 
 /** Merge a partial override onto defaults, validating ranges. */
+/** The bounds makeVessel enforces on the drafts; Signal K self-data outside them reads as unknown (plugin/config.ts selfDesignValue). */
+export const DRAUGHT_M_RANGE: readonly [number, number] = [0.1, 30];
+export const AIR_DRAFT_M_RANGE: readonly [number, number] = [0.5, 100];
+
 export function makeVessel(partial: Partial<VesselParams>): VesselParams {
   const v: VesselParams = { ...DEFAULT_VESSEL, ...stripUndefined(partial) };
   const check = (name: keyof VesselParams, min: number, max: number): void => {
@@ -33,8 +37,8 @@ export function makeVessel(partial: Partial<VesselParams>): VesselParams {
   };
   check('motorSpeedMs', 0.01, 50);
   check('polarPerformance', 0.3, 1.2);
-  if (v.draughtM !== null) check('draughtM', 0.1, 30);
-  if (v.airDraftM !== null) check('airDraftM', 0.5, 100);
+  if (v.draughtM !== null) check('draughtM', ...DRAUGHT_M_RANGE);
+  if (v.airDraftM !== null) check('airDraftM', ...AIR_DRAFT_M_RANGE);
   return v;
 }
 

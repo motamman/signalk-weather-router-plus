@@ -169,6 +169,32 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Review of PR #34, seven code points: (1) a leg whose ends lie in two
+  different meshes was planned as one mesh leg, the runner opened the
+  start's mesh, the search reported the end outside and the whole leg fell
+  back to the coastline search; one mesh must now hold both ends, else the
+  handover applies (`src/engine/pipeline.ts`, the runner prefers the mesh
+  holding both). (2) A mesh download interrupted and resumed after the
+  catalogue published a newer build kept tiles of the old build when
+  their size matched; `.progress.json` now records the base URL and build
+  and a folder started for another is cleared (`childtask.ts
+  downloadMesh`). (3) A `01CGD.old` folder left by a swap counted as a ready
+  mesh of its own; `.old` is skipped and removed with an unticked mesh.
+  (4) The tacking penalty was in the total but not in the sailing time, so
+  sailing plus motoring fell short of the total by the penalty per tack
+  (golden beat: sailing 30121 s against a total of 30391 s, nine tacks);
+  it counts as sailing time in the search and the final beat, and the
+  golden fixture is re-recorded (sailing 30391 s). (5) A multi-segment mesh
+  leg lost `smoother_drops` in the stitch. (6) A Signal K draught or air
+  height outside the vessel bounds (0.1–30 m, 0.5–100 m; an air height in
+  the wrong unit) made every route throw; it now reads as unknown and only
+  disables the mesh (`selfDesignValue`). (7) `GET /api/meshes` and
+  `POST /api/meshes/refresh` in the OpenAPI document, with `meshes` and
+  `router` in the status description. Text: the off-course tooltip and
+  README named tabs that no longer exist; the panel's mesh help; the
+  README said narrow-passage tacks are checked against the coastline (they
+  are tested against the mesh) and three places said the refined router
+  never smooths.
 - **A leg starting (or ending) just off an open coast inside a chart mesh
   never used the mesh**: the mesh handover looked only for narrow water
   (both shores within 2 km across the track), so a start 3.4 km off a
@@ -225,8 +251,7 @@ uses [Semantic Versioning](https://semver.org/).
   so the Smoothing choice did nothing there and even the Standard router's
   route kept every search step. Each searched stretch of a mesh leg now
   gets the same two steps as a coastline leg, with the mesh as land, so a
-  shortcut is taken only where the mesh allows it; the refined router's
-  stretches keep the smoother off, as before.
+  shortcut is taken only where the mesh allows it, for both routers.
 - A mesh leg's open stretch whose search failed was motored whatever the
   request asked (job 1c1fda5b, 2026-10-08: 106 km around the outside of
   Cape Cod motored under sail_max with a sail threshold of 0). It now

@@ -411,6 +411,11 @@ test('tacking penalty: a dead-upwind leg with a large penalty tacks no more ofte
       dear.totalTimeS >= free.totalTimeS + 1800 - 1,
       `${router}: with the penalty ${dear.totalTimeS} s, without ${free.totalTimeS} s: at least one 1800 s tack is charged`
     );
+    // The penalty is time spent sailing: sailing plus motoring is the total.
+    assert.ok(
+      Math.abs(dear.sailingTimeS + dear.motoringTimeS - dear.totalTimeS) < 1,
+      `${router}: sailing ${dear.sailingTimeS} + motoring ${dear.motoringTimeS} ≠ total ${dear.totalTimeS}`
+    );
   }
 });
 

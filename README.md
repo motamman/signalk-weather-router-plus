@@ -690,7 +690,9 @@ and `vessel.air_draft_m`); the mesh is not used until both are set.
 - **Motor:** the whole leg is an A* over the mesh's triangle edges with a
   shore and shallow-water penalty, pulled tight by the funnel algorithm.
 - **Sailing modes:** the mesh route is the skeleton. Its narrow passages
-  (both shores within 1 km of the track) are motored along it; each open
+  (both shores within 1 km of the track) are motored along it, or, with a
+  sail threshold of 0 (never motor), sailed along it, tacked where the
+  wind needs it with the tacks tested against the mesh; each open
   stretch between them is sailed by the open-water router from the end of
   one passage to the start of the next, with that stretch of the mesh
   route and its passage widths as the search's corridor (water wider than
@@ -721,10 +723,7 @@ and `vessel.air_draft_m`); the mesh is not used until both are set.
   bridges in the summary and the log and the web app offers a re-plan
   avoiding them; avoid blocks every opening bridge; the wait setting adds
   time at each one passed. A mesh built before 2026-10-08 has no bit 7
-  and its bridges block at their charted (closed) height, as before. With a sail threshold of 0 (never
-  motor) the narrow passages are sailed along the mesh route too, tacked
-  where the wind needs it (the tacks are checked against the coastline,
-  not against the charted depths the mesh route keeps to). An open stretch
+  and its bridges block at their charted (closed) height, as before. An open stretch
   whose search fails is followed along the mesh route under the request's
   own mode: sailed under sail_max (tacks where needed, motor only below a
   positive threshold), walked under fastest; when it cannot be sailed the
@@ -1165,7 +1164,7 @@ falls back to Signal K's own process. The boat's last position is kept in `last-
 the plugin data directory, so the boat's area is known after a restart
 before a fix arrives.
 
-**Web-app settings** (the webapp's **Settings** tab, or `GET`/`PUT
+**Web-app settings** (the webapp's **Defaults** tab, or `GET`/`PUT
 /api/settings`): stored on the server in `settings.json` in the plugin
 data directory and shared by every client. Values are SI on the wire
 (m, m/s, s; degrees for the heading increment); the page shows them in
@@ -1502,7 +1501,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `max_swh_m` | number | m | setting `routing.maxSwh` (none) | 0..30; a leg is not allowed where the significant wave height is above this (needs wave data) |
 | `simplify_m` | number | m | setting `routing.simplify` | 0..5000; route simplification tolerance, 0 = off |
 | `smoother` | boolean | | setting `routing.smoother` | run the shortcut smoother |
-| `smoother_tolerance` | number | ratio | setting `routing.smootherTolerance` | 0..0.5; how much slower a shortcut may be (0.05 = 5%). The Route tab's *Smoothing* (Default / On / Off) sends `smoother`; with `router: refined` the smoother never runs (its polish replaces it) |
+| `smoother_tolerance` | number | ratio | setting `routing.smootherTolerance` | 0..0.5; how much slower a shortcut may be (0.05 = 5%). The Route tab's *Smoothing* (Default / On / Off) sends `smoother`; it runs for both routers |
 | `comfort_weight` | number | | setting `routing.comfortWeight` (1) | 0..3; how much the search avoids rough water as the boat meets it (the encounter index). 0 = off, the fastest route. See [Comfort](#comfort-rough-water) |
 | `name` | string | | `<prefix> <lat>,<lon> → <lat>,<lon>` | name of the Signal K route record (trimmed). The default uses the `publish.routeNamePrefix` setting (`WRP`) and the start and end to two decimals |
 | `publish` | boolean | | setting `publish.toResources` (on) | save the finished route to the Resources API |

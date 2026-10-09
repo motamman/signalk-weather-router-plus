@@ -97,7 +97,8 @@ function meshLegRunner(
         );
         return null;
       }
-      const m = meshFor([a.legStart]) ?? meshFor([a.plan.end]);
+      // The mesh holding both ends; a handover leg has one end outside every mesh, so then the one holding either.
+      const m = meshFor([a.legStart, a.plan.end]) ?? meshFor([a.legStart]) ?? meshFor([a.plan.end]);
       if (!m) {
         a.progress(0, 0, `WARNING: ${a.tag}chart mesh: no mesh covers the leg; using the coastline search instead`);
         return null;
