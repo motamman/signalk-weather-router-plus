@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0-beta.1] - 2026-10-09
+
 ### Added
 
 - **Follow the boat** (Live vessel panel, LIVE and SIMULATE): a checkbox,
@@ -1474,7 +1476,9 @@ builds before this release, with their measurements, is in
   loads the current scripts.
 - The configuration panel has been tested on Signal K server 2.33.0.
 
-[Unreleased]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.0-beta.1...HEAD
+[0.2.0-beta.1]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.1.2-beta.1...v0.2.0-beta.1
+[0.1.2-beta.1]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.1.1...v0.1.2-beta.1
 [0.1.1]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.1.0-beta.9...v0.1.1
 [0.1.0-beta.9]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.1.0-beta.8...v0.1.0-beta.9
 [0.1.0-beta.8]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.1.0-beta.7...v0.1.0-beta.8
