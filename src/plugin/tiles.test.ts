@@ -4,7 +4,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
-import { roundHour, tileAt, tileBBox, tileQuery, TileService, TileStore, trimPoints, type TileId } from './tiles';
+import {
+  roundHour,
+  stampMatches,
+  tileAt,
+  tileBBox,
+  tileQuery,
+  TileService,
+  TileStore,
+  trimPoints,
+  type TileGroup,
+  type TileId,
+} from './tiles';
+import type { DataStamp } from './protocol';
 
 test('tile boxes: web-map tile edges and the tile holding a point', () => {
   const b = tileBBox(1, 0, 0);
@@ -49,16 +61,69 @@ function tmp(): string {
 
 const T: TileId = { layer: 'wind', z: 6, x: 18, y: 23, hourMs: Date.UTC(2026, 8, 29, 12) };
 
+/** What the plugin holds before and after a data swap mid-request. */
+const STAMP_A: DataStamp = {
+  forecast: { cycleMs: Date.UTC(2026, 8, 29, 6), params: ['10u', '10v'] },
+  smoc: { key: 'smoc-a', settled: true },
+  rtofs: Date.UTC(2026, 8, 29),
+  tide: { key: 'tide-a', settled: true },
+};
+const STAMP_B: DataStamp = {
+  forecast: { cycleMs: Date.UTC(2026, 8, 29, 12), params: ['10u', '10v'] },
+  smoc: { key: 'smoc-b', settled: false },
+  rtofs: Date.UTC(2026, 8, 29) + 86_400_000,
+  tide: { key: 'tide-b', settled: false },
+};
+
+/** A query fn whose answers the test hands over, oldest call first. */
+function handover(): {
+  svc: TileService;
+  store: TileStore;
+  root: string;
+  calls: { n: number };
+  /** What the plugin holds now; answers default to its stamp. */
+  held: { stamp: DataStamp };
+  answer: (v: unknown, stamp?: DataStamp) => void;
+} {
+  const root = tmp();
+  const store = new TileStore({ root, capBytes: 1e9 });
+  const calls = { n: 0 };
+  const resolvers: ((v: { result: unknown; complete: boolean; stamp: DataStamp }) => void)[] = [];
+  const held = { stamp: STAMP_A };
+  const svc = new TileService(
+    store,
+    () => {
+      calls.n++;
+      return new Promise<{ result: unknown; complete: boolean; stamp: DataStamp }>(r => resolvers.push(r));
+    },
+    () => held.stamp
+  );
+  return {
+    svc,
+    store,
+    root,
+    calls,
+    held,
+    answer: (v, stamp) => resolvers.shift()?.({ result: v, complete: true, stamp: stamp ?? held.stamp }),
+  };
+}
+
+const wait = (ms = 2): Promise<void> => new Promise(r => setTimeout(r, ms));
+
 test('tile service: computes once, saves, then answers from disk', async () => {
   const root = tmp();
   const store = new TileStore({ root, capBytes: 1e9 });
   store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'a' });
   let calls = 0;
-  const svc = new TileService(store, async () => {
-    calls++;
-    await new Promise(r => setTimeout(r, 20));
-    return { result: { v: 1 }, complete: true };
-  });
+  const svc = new TileService(
+    store,
+    async () => {
+      calls++;
+      await new Promise(r => setTimeout(r, 20));
+      return { result: { v: 1 }, complete: true, stamp: STAMP_A };
+    },
+    () => STAMP_A
+  );
   const [a, b] = await Promise.all([svc.get(T), svc.get(T)]);
   assert.equal(calls, 1, 'identical requests share one query');
   assert.equal(a.cached, false);
@@ -69,11 +134,248 @@ test('tile service: computes once, saves, then answers from disk', async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('point answers: one computed from replaced data is never served; the request asks again', async () => {
+  const h = handover();
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-06z' });
+  const args = { lat: 1, lon: 2, startMs: 3, maxCount: null };
+  const p = h.svc.point('weather_point', args as never);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 1; i++) await wait();
+  assert.equal(h.calls.n, 1);
+  // The forecast run swaps while the query is in flight, and the answer
+  // names the replaced data (its stamp): never served. The request asks
+  // again, and the worker answers from the data the plugin holds now.
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-12z' });
+  h.held.stamp = STAMP_B;
+  h.answer({ run: '06z' }, STAMP_A);
+  // While the data the plugin holds is what the check saw, asking again
+  // would only get the same answer: no query goes out.
+  await wait(20);
+  assert.equal(h.calls.n, 1, 'no second query while the data held is unchanged');
+  h.svc.dataChanged(); // the worker's reload lands: the held data moved
+  for (let i = 0; i < 500 && h.calls.n < 2; i++) await wait();
+  h.answer({ run: '12z' }, STAMP_B);
+  assert.deepEqual(await p, { run: '12z' });
+  assert.equal(h.calls.n, 2, 'the replaced-data answer was discarded, one fresh query answered');
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
+test('point answers: one computed from the data the plugin holds now is served even when its generation changed while the query ran', async () => {
+  const h = handover();
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-06z' });
+  const args = { lat: 1, lon: 2, startMs: 3, maxCount: null };
+  const p = h.svc.point('weather_point', args as never);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 1; i++) await wait();
+  // The worker's refresh ran beside the query: it read the NEW run while
+  // the request started under the old generation. The answer's stamp names
+  // what the plugin holds now: served (and filed under the new generation),
+  // not thrown away and computed again.
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-12z' });
+  h.held.stamp = STAMP_B;
+  h.answer({ run: '12z' }, STAMP_B);
+  assert.deepEqual(await p, { run: '12z' });
+  assert.equal(h.calls.n, 1, 'the answer was served, not recomputed');
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
+test('point answers: a requester of the newer data never joins a query of the older one', async () => {
+  const h = handover();
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-06z' });
+  const args = { lat: 1, lon: 2, startMs: 3, maxCount: null };
+  const p1 = h.svc.point('weather_point', args as never);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 1; i++) await wait();
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-12z' });
+  h.held.stamp = STAMP_B;
+  const p2 = h.svc.point('weather_point', args as never);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 2; i++) await wait();
+  assert.equal(h.calls.n, 2, 'the newer data started its own query');
+  h.answer({ run: '06z' }, STAMP_A); // resolves the first query: its answer names replaced data, its requester waits out the change
+  await wait(20);
+  h.svc.dataChanged(); // the held data moves: the first requester asks again
+  for (let i = 0; i < 500 && h.calls.n < 3; i++) await wait();
+  h.answer({ run: '12z' }, STAMP_B); // resolves the newer data's query
+  h.answer({ run: '12z' }, STAMP_B); // resolves the first requester's retry
+  assert.deepEqual(await p2, { run: '12z' });
+  assert.deepEqual(await p1, { run: '12z' }, "the old query's requester was answered from the newer data");
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
+test('point answers: a saved answer of a superseded generation is not served when the store changes mid-read', async () => {
+  const h = handover();
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-06z' });
+  const args = { lat: 1, lon: 2, startMs: 3, maxCount: null };
+  const k = { group: 'pt' as const, rel: 'weather_point/hash.gz' };
+  await h.store.write(k, zlib.gzipSync(Buffer.from(JSON.stringify({ run: '06z' }))), h.store.generation('pt'));
+  // A read that starts under run-06z and only gets its bytes after the swap:
+  // the answer belongs to the old generation and must not be served. The
+  // stub delegates every state-touching method to the real store, so both
+  // see one truth; only `read` is slowed down.
+  let midReadSwap = (): void => undefined;
+  const current = { stamp: STAMP_A as DataStamp };
+  const slow = Object.assign(Object.create(h.store), {
+    read: async () => {
+      // The path is computed at read start, under the generation the request captured.
+      const f = h.store.file(k as never);
+      await wait(20);
+      midReadSwap();
+      try {
+        return await fs.promises.readFile(f!);
+      } catch {
+        return null;
+      }
+    },
+    generation: (g: 'pt') => h.store.generation(g),
+    setGenerations: (g: Record<TileGroup, string | null>) => h.store.setGenerations(g),
+    file: (t: TileId | { group: TileGroup; rel: string }) => h.store.file(t as never),
+    write: (t: TileId | { group: TileGroup; rel: string }, gz: Buffer, g: string | null) => h.store.write(t as never, gz, g),
+    noteNotKept: (): void => h.store.noteNotKept(),
+  });
+  const svc = new TileService(
+    slow as TileStore,
+    async () => ({ result: { run: '12z' }, complete: true, stamp: STAMP_B }),
+    () => current.stamp
+  );
+  midReadSwap = (): void => {
+    svc.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-12z' });
+    current.stamp = STAMP_B;
+  };
+  const p = svc.point('weather_point', args as never);
+  assert.deepEqual(await p, { run: '12z' }, 'the old generation answer was discarded');
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
+test('point answers: the request keeps asking until an answer names the data held; there is no attempt cap', async () => {
+  const h = handover();
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-06z' });
+  const args = { lat: 1, lon: 2, startMs: 3, maxCount: null };
+  const p = h.svc.point('weather_point', args as never);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 1; i++) await wait();
+  // The data keeps changing under the request: every answer names replaced
+  // data and is discarded. The worker always reads its newest data, which
+  // changes hours apart: the loop ends when one answers from what the
+  // plugin holds — no attempt count cuts it off.
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-12z' });
+  h.held.stamp = STAMP_B;
+  h.answer({ n: 1 }, STAMP_A);
+  await wait(20);
+  h.svc.dataChanged(); // the worker's reload lands: the held data moved
+  for (let i = 0; i < 500 && h.calls.n < 2; i++) await wait();
+  const STAMP_C: DataStamp = { ...STAMP_B, forecast: { cycleMs: Date.UTC(2026, 8, 29, 18), params: ['10u', '10v'] } };
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-18z' });
+  h.held.stamp = STAMP_C;
+  h.answer({ n: 2 }, STAMP_B);
+  await wait(20);
+  h.svc.dataChanged();
+  for (let i = 0; i < 500 && h.calls.n < 3; i++) await wait();
+  const STAMP_D: DataStamp = { ...STAMP_C, forecast: { cycleMs: Date.UTC(2026, 8, 30, 0), params: ['10u', '10v'] } };
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'run-00z' });
+  h.held.stamp = STAMP_D;
+  h.answer({ n: 3 }, STAMP_C);
+  await wait(20);
+  h.svc.dataChanged();
+  for (let i = 0; i < 500 && h.calls.n < 4; i++) await wait();
+  h.answer({ n: 4 }, STAMP_D);
+  assert.deepEqual(await p, { n: 4 });
+  assert.equal(h.calls.n, 4, 'asked until the answer named the data held, then stopped');
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
+test('tile service: a tile computed from replaced data is discarded and asked again', async () => {
+  const h = handover();
+  h.store.setGenerations({ wx: 'gen-06z', cur: 'a', tide: 'a', land: 'coast', pt: 'a' });
+  const p = h.svc.get(T);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 1; i++) await wait();
+  h.store.setGenerations({ wx: 'gen-12z', cur: 'a', tide: 'a', land: 'coast', pt: 'a' });
+  h.held.stamp = STAMP_B;
+  h.answer([1, 2, 3], STAMP_A);
+  // While the data the plugin holds is what the check saw, asking again
+  // would only get the same answer: no query goes out.
+  await wait(20);
+  assert.equal(h.calls.n, 1, 'no second query while the data held is unchanged');
+  h.svc.dataChanged(); // the worker's reload lands: the held data moved
+  for (let i = 0; i < 500 && h.calls.n < 2; i++) await wait();
+  h.answer([4, 5, 6], STAMP_B);
+  const { gz } = await p;
+  assert.deepEqual(JSON.parse(zlib.gunzipSync(gz).toString()), [4, 5, 6]);
+  assert.equal(h.calls.n, 2);
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
+test('stamp: a group is matched against the sources it is computed from, and only those the answer read', () => {
+  const off: DataStamp = { forecast: null, smoc: null, rtofs: null, tide: null };
+  // The land group: matched against nothing.
+  assert.ok(stampMatches('land', STAMP_A, off), 'land has no stamped sources');
+  // The weather group: the forecast part, when the answer read one.
+  assert.ok(stampMatches('wx', STAMP_A, { ...STAMP_A }), 'same forecast: match');
+  assert.ok(
+    stampMatches('wx', STAMP_A, { ...STAMP_A, smoc: null, rtofs: null, tide: null }),
+    'replaced current and tide sources do not touch wx'
+  );
+  assert.equal(stampMatches('wx', STAMP_A, { ...STAMP_A, forecast: STAMP_B.forecast }), false, 'another forecast run: mismatch');
+  // The current group: the forecast when read (the current and arrows layers read none), SMOC and RTOFS strictly.
+  assert.ok(stampMatches('cur', STAMP_A, { ...STAMP_A, tide: null }), 'tide is not part of cur');
+  assert.ok(stampMatches('cur', STAMP_A, { ...STAMP_A, forecast: null }), 'an answer that read no forecast is not held to the loaded run');
+  assert.equal(stampMatches('cur', STAMP_A, { ...STAMP_A, forecast: STAMP_B.forecast }), false, 'a read forecast must name the loaded run');
+  assert.equal(
+    stampMatches('cur', STAMP_A, { ...STAMP_A, smoc: { key: 'smoc-a', settled: false } }),
+    false,
+    'a settledness flip is a different run'
+  );
+  assert.equal(stampMatches('cur', STAMP_A, { ...STAMP_A, smoc: null }), false, 'no SMOC where the plugin has one: the answer lacked it');
+  assert.equal(stampMatches('cur', STAMP_A, { ...STAMP_A, rtofs: 1 }), false, 'another RTOFS run: mismatch');
+  // The tide group: only the tide part.
+  assert.ok(stampMatches('tide', STAMP_A, { ...off, tide: STAMP_A.tide }), 'same tide run: match');
+  assert.equal(stampMatches('tide', STAMP_A, off), false, 'no tide run where the plugin has one: mismatch');
+  // The point group: everything the answer read.
+  assert.ok(stampMatches('pt', STAMP_A, { ...STAMP_A }));
+  assert.ok(stampMatches('pt', STAMP_A, { ...STAMP_A, forecast: null }), 'the tide series reads no forecast: accepted while one is loaded');
+  assert.equal(stampMatches('pt', STAMP_A, { ...STAMP_A, tide: null }), false, 'no tide run where the plugin has one: mismatch');
+  assert.equal(stampMatches('pt', off, off), true, 'nothing loaded, nothing read: match');
+});
+
+test('tile service: current and arrows tiles are accepted while a forecast is loaded (they read none)', async () => {
+  const h = handover();
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'a' });
+  const cur: TileId = { layer: 'current', z: 6, x: 18, y: 23, hourMs: T.hourMs };
+  const arr: TileId = { layer: 'arrows', z: 6, x: 18, y: 23, hourMs: T.hourMs };
+  // The current colour layer and the current arrows read no forecast (their
+  // kinds need none): their answers stamp no forecast and must be accepted
+  // while one is loaded, not asked for again until the browser gives up.
+  const p1 = h.svc.get(cur);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 1; i++) await wait();
+  h.answer([1], { ...STAMP_A, forecast: null });
+  assert.deepEqual(JSON.parse(zlib.gunzipSync((await p1).gz).toString()), [1]);
+  const p2 = h.svc.get(arr);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 1; i++) await wait();
+  const b = tileBBox(6, 18, 23);
+  h.answer([{ lon: b.west, lat: b.south }], { ...STAMP_A, forecast: null });
+  const pts = JSON.parse(zlib.gunzipSync((await p2).gz).toString()) as { lon: number }[];
+  assert.equal(pts.length, 1, 'the arrows answer was served, not retried');
+  assert.equal(h.calls.n, 2, 'each tile answered once, no retries');
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
+test('point answers: a tide series is accepted while a forecast is loaded (it reads none)', async () => {
+  const h = handover();
+  h.store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'a' });
+  const args = { lat: 1, lon: 2, fromMs: 0, hours: 12 };
+  const p = h.svc.point('tide_series', args as never);
+  for (let i = 0; i < 500 && h.svc.inflightCount < 1; i++) await wait();
+  // pointQuery passes no abort signal: a retry loop here would never end.
+  h.answer({ waterLevel: [] }, { ...STAMP_A, forecast: null });
+  assert.deepEqual(await p, { waterLevel: [] });
+  assert.equal(h.calls.n, 1, 'answered once, no retries');
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
 test('tile service: an incomplete answer is served but not saved', async () => {
   const root = tmp();
   const store = new TileStore({ root, capBytes: 1e9 });
   store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'a' });
-  const svc = new TileService(store, async () => ({ result: [], complete: false }));
+  const svc = new TileService(
+    store,
+    async () => ({ result: [], complete: false, stamp: STAMP_A }),
+    () => STAMP_A
+  );
   assert.equal((await svc.get(T)).cached, false);
   assert.equal((await svc.get(T)).cached, false);
   assert.equal(store.stats().not_kept, 2);
@@ -85,10 +387,14 @@ test('tile service: the query is cancelled when every requester has gone', async
   const store = new TileStore({ root, capBytes: 1e9 });
   store.setGenerations({ wx: 'a', cur: 'a', tide: 'a', land: 'coast', pt: 'a' });
   let seen: AbortSignal | undefined;
-  const svc = new TileService(store, (_k, _a, signal) => {
-    seen = signal;
-    return new Promise((_res, rej) => signal?.addEventListener('abort', () => rej(new Error('cancelled'))));
-  });
+  const svc = new TileService(
+    store,
+    (_k, _a, signal) => {
+      seen = signal;
+      return new Promise((_res, rej) => signal?.addEventListener('abort', () => rej(new Error('cancelled'))));
+    },
+    () => STAMP_A
+  );
   const c1 = new AbortController();
   const c2 = new AbortController();
   const p1 = svc.get(T, c1.signal).catch(e => e as Error);

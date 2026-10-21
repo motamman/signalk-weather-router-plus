@@ -784,7 +784,7 @@ export async function route(
           const mem = checkRouteForecastMemory(need, cfg.forecast.memoryHeadroomBytes);
           if (!mem.ok) throw new Error(mem.message);
           const t0 = Date.now();
-          const store = await readWindow(st, `job ${id} ${what}`, opts);
+          const { store } = await readWindow(st, `job ${id} ${what}`, opts);
           st.routeWindow = store;
           st.send({ type: 'forecast-memory', memory: { ...st.forecastMemory } });
           progress(

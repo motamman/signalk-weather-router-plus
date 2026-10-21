@@ -14,6 +14,16 @@
  * changes that group's generation and the old directory is removed. The
  * whole store is kept under a byte cap, least recently used first.
  * All file access is asynchronous: this runs on Signal K's main thread.
+ *
+ * An answer belongs to the data it was computed from, and says so: every
+ * query answer carries a stamp naming the runs it read (DataStamp, sent by
+ * the workers). A run decode (or any other data change) while a request is
+ * being answered must never silently hand the caller an answer from the
+ * replaced data (issue #47): the main thread serves and saves an answer
+ * only when its stamp names the data the plugin holds now, and asks again
+ * until one does. The saved-answer read stays generation-checked: a file
+ * lives under the generation directory it was written with, so a
+ * generation swap while reading is exact, not inferred.
  */
 
 import * as crypto from 'node:crypto';
@@ -24,7 +34,7 @@ import * as path from 'node:path';
 import { promisify } from 'node:util';
 import * as zlib from 'node:zlib';
 import type { BBox } from '../geo/geodesy';
-import type { QueryArgs, QueryKind } from './protocol';
+import type { DataStamp, QueryArgs, QueryKind } from './protocol';
 import { rmtree, runChildTask, type RmtreeResult } from './childtask';
 
 export { FIELD_LAYERS as TILE_FIELD_LAYERS } from './layers';
@@ -667,7 +677,7 @@ export type TileQueryFn = (
   kind: QueryKind,
   args: QueryArgs[QueryKind],
   signal?: AbortSignal
-) => Promise<{ result: unknown; complete: boolean }>;
+) => Promise<{ result: unknown; complete: boolean; stamp: DataStamp }>;
 
 /** Encode a query answer as the tile's gzip body. */
 export async function encodeTile(t: TileId, result: unknown): Promise<Buffer> {
@@ -687,55 +697,184 @@ function tileKey(t: TileId): string {
 }
 
 /**
+ * An answer whose stamp names data the plugin no longer holds; the caller
+ * asks again — once the data the plugin holds has moved past what the
+ * check saw (`held`): until then the worker answers from the same data
+ * and the same mismatch would come back.
+ */
+class StaleAnswer extends Error {
+  constructor(
+    readonly group: TileGroup,
+    readonly held: DataStamp
+  ) {
+    super(`the ${group} data changed while answering; ask again`);
+  }
+}
+function staleAnswer(group: TileGroup, held: DataStamp): Error {
+  return new StaleAnswer(group, held);
+}
+
+/** Whether two stamps name the same data: the retry waits only while the held data is what the check saw. */
+const sameStamp = (a: DataStamp, b: DataStamp): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/** A one-shot promise that dataChanged resolves: the next change of the data the plugin holds. */
+function deferred(): { p: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const p = new Promise<void>(r => (resolve = r));
+  return { p, resolve };
+}
+
+/**
+ * Whether an answer's stamp names the data the plugin holds now, for the
+ * group the answer is for: a group is matched only against the sources it
+ * is computed from (the land group against none: its generation covers the
+ * coastline). The stamp's parts are matched exactly, including nulls: a
+ * source the worker did not have where the plugin has one (or the other
+ * way round) is replaced data too.
+ */
+export function stampMatches(group: TileGroup, expected: DataStamp, stamp: DataStamp): boolean {
+  const same = (want: unknown, got: unknown): boolean => JSON.stringify(want ?? null) === JSON.stringify(got ?? null);
+  // The forecast part is compared only when the answer read one: kinds that
+  // need no forecast (the current and arrows layers, the tide series) stamp
+  // null and are not held to the loaded run. A kind that needed the
+  // forecast either names it or errored, so a null never hides a replaced
+  // run. The other sources are compared strictly: null there means the
+  // worker had none, which is replaced (or missing) data wherever the
+  // group compares them.
+  if (stamp.forecast && !same(expected.forecast, stamp.forecast)) return false;
+  if (group === 'cur' || group === 'pt') {
+    if (!same(expected.smoc, stamp.smoc)) return false;
+    if ((expected.rtofs ?? null) !== (stamp.rtofs ?? null)) return false;
+  }
+  if (group === 'tide' || group === 'pt') {
+    if (!same(expected.tide, stamp.tide)) return false;
+  }
+  return true;
+}
+
+/**
  * Tiles from the store, else computed by the data worker and saved.
- * Identical requests in flight share one query; the query is cancelled
- * (if it has not started) when every requester has gone.
+ * Identical requests share one query while the data is unchanged (the
+ * in-flight key carries the generation); the query is cancelled (if it
+ * has not started) when every requester has gone.
  */
 export class TileService {
   private readonly inflight = new Map<string, { p: Promise<Buffer>; waiters: number; ctrl: AbortController }>();
+  /** Resolved by dataChanged: answers waiting out a stamp mismatch sleep on this. */
+  private change = deferred();
 
   constructor(
     readonly store: TileStore,
-    private readonly query: TileQueryFn
+    private readonly query: TileQueryFn,
+    /** The data the plugin holds now, to check an answer's stamp against. */
+    private readonly dataStamp: () => DataStamp
   ) {}
 
+  /**
+   * The data the plugin holds changed: wakes requests waiting out a stamp
+   * mismatch. index.ts calls this wherever an input of dataStamp() changes
+   * (a worker run message, applySettings) — either end of a mismatch: the
+   * worker ahead (handling its message moves dataStamp) or behind (its
+   * reload ends in a message that does).
+   */
+  dataChanged(): void {
+    const c = this.change;
+    this.change = deferred();
+    c.resolve();
+  }
+
+  /** The next data change, or a rejection when the requester goes. */
+  private nextChange(signal?: AbortSignal): Promise<void> {
+    const p = this.change.p;
+    if (!signal) return p;
+    if (signal.aborted) return Promise.reject(new Error('cancelled'));
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => reject(new Error('cancelled'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      void p.then(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      });
+    });
+  }
+
   async get(t: TileId, signal?: AbortSignal): Promise<{ gz: Buffer; cached: boolean }> {
-    const saved = await this.store.read(t);
-    if (saved) return { gz: saved, cached: true };
-    if (signal?.aborted) throw new Error('cancelled'); // gone during the disk read: start nothing
-    const key = tileKey(t);
-    let f = this.inflight.get(key);
-    if (!f) {
-      const ctrl = new AbortController();
-      const generation = this.store.generation(tileGroup(t.layer));
-      const { kind, args } = tileQuery(t);
-      const p = this.query(kind, args, ctrl.signal)
-        .then(async ({ result, complete }) => {
-          const gz = await encodeTile(t, result);
-          if (complete) await this.store.write(t, gz, generation);
-          else this.store.noteNotKept();
-          return gz;
-        })
-        .finally(() => {
-          if (this.inflight.get(key) === f) this.inflight.delete(key);
-        });
-      f = { p, waiters: 0, ctrl };
-      this.inflight.set(key, f);
-    }
-    const entry = f;
-    entry.waiters++;
-    const onAbort = (): void => {
-      if (--entry.waiters > 0) return;
-      entry.ctrl.abort();
-      // A later request for the same tile starts afresh rather than joining a cancelled query.
-      if (this.inflight.get(key) === entry) this.inflight.delete(key);
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-    try {
-      return { gz: await entry.p, cached: false };
-    } finally {
-      if (!signal?.aborted) entry.waiters--;
-      signal?.removeEventListener('abort', onAbort);
+    const group = tileGroup(t.layer);
+    // The answer belongs to the data it was computed from, and says so
+    // (DataStamp): a mismatch is asked again until the worker answers from
+    // what the plugin holds now (issue #47). The in-flight key carries the
+    // generation, so a requester of newer data never joins a query of an
+    // older one.
+    for (;;) {
+      const generation = this.store.generation(group);
+      const key = `${group}/${generation}/${tileKey(t)}`;
+      const saved = await this.store.read(t);
+      if (saved) {
+        // The file lives under the generation it was saved with; if that
+        // generation is gone by the time the bytes arrive, the answer
+        // belongs to replaced data. Read again under the current one.
+        if (this.store.generation(group) === generation) return { gz: saved, cached: true };
+        continue;
+      }
+      if (signal?.aborted) throw new Error('cancelled'); // gone during the disk read: start nothing
+      let f = this.inflight.get(key);
+      if (!f) {
+        const ctrl = new AbortController();
+        const { kind, args } = tileQuery(t);
+        const p = this.query(kind, args, ctrl.signal)
+          .then(async ({ result, complete, stamp }) => {
+            const gz = await encodeTile(t, result);
+            const held = this.dataStamp();
+            if (!stampMatches(group, held, stamp)) {
+              // The answer was computed from data the plugin has replaced
+              // meanwhile (or no longer holds): never served or saved. The
+              // stamp the check saw rides along: the retry asks again only
+              // once the data held has moved past it.
+              throw staleAnswer(group, held);
+            }
+            // Filed under the generation the attempt started under: the
+            // stamp vouches for the runs, not for the generation's other
+            // inputs (the coastline, the harmonics directory, the settings
+            // revision), so a generation that moved mid-query refuses the
+            // write and the request is answered once more under it.
+            if (complete) await this.store.write(t, gz, generation);
+            else this.store.noteNotKept();
+            return gz;
+          })
+          .finally(() => {
+            if (this.inflight.get(key) === f) this.inflight.delete(key);
+          });
+        f = { p, waiters: 0, ctrl };
+        this.inflight.set(key, f);
+      }
+      const entry = f;
+      entry.waiters++;
+      const onAbort = (): void => {
+        if (--entry.waiters > 0) return;
+        entry.ctrl.abort();
+        // A later request for the same tile starts afresh rather than joining a cancelled query.
+        if (this.inflight.get(key) === entry) this.inflight.delete(key);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      try {
+        return { gz: await entry.p, cached: false };
+      } catch (err) {
+        // The answer named replaced data (checked once for every requester
+        // of the query): nothing was saved. Ask again under the data held —
+        // but only once it has moved: while it is still what the check saw,
+        // the worker answers from the same data and the same mismatch comes
+        // back (a settings change reloads the worker behind any query in
+        // flight, which can take minutes). A change landing between the
+        // check and here is seen by the stamp compare and skips the wait.
+        if (err instanceof StaleAnswer) {
+          if (sameStamp(err.held, this.dataStamp())) await this.nextChange(signal);
+          continue;
+        }
+        throw err;
+      } finally {
+        if (!signal?.aborted) entry.waiters--;
+        signal?.removeEventListener('abort', onAbort);
+      }
     }
   }
 
@@ -749,45 +888,79 @@ export class TileService {
   /**
    * A point answer (conditions, Weather API point forecast or tide
    * series, forecast samples) from the store, else from the data worker
-   * and saved when complete. Keyed by the exact query.
+   * and saved when complete. Keyed by the exact query within one data
+   * generation; an answer whose stamp names replaced data (the forecast
+   * run changed while it was being answered — issue #47) is never served:
+   * the request asks again until the worker answers from the data the
+   * plugin holds now.
    */
   async point(kind: QueryKind, args: QueryArgs[QueryKind], signal?: AbortSignal): Promise<unknown> {
     const json = JSON.stringify(args);
     const k: StoreKey = { group: 'pt', rel: path.join(kind, `${hash(json)}.gz`) };
-    const saved = await this.store.read(k);
-    if (saved) return fromJson((await gunzip(saved)).toString());
-    if (signal?.aborted) throw new Error('cancelled');
-    const key = `pt/${kind}/${json}`;
-    let f = this.inflight.get(key);
-    if (!f) {
-      const ctrl = new AbortController();
+    for (;;) {
       const generation = this.store.generation('pt');
-      const p = this.query(kind, args, ctrl.signal)
-        .then(async ({ result, complete }) => {
-          const gz = await gzip(Buffer.from(toJson(result)));
-          if (complete) await this.store.write(k, gz, generation);
-          else this.store.noteNotKept();
-          return gz;
-        })
-        .finally(() => {
-          if (this.inflight.get(key) === f) this.inflight.delete(key);
-        });
-      f = { p, waiters: 0, ctrl };
-      this.inflight.set(key, f);
-    }
-    const entry = f;
-    entry.waiters++;
-    const onAbort = (): void => {
-      if (--entry.waiters > 0) return;
-      entry.ctrl.abort();
-      if (this.inflight.get(key) === entry) this.inflight.delete(key);
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-    try {
-      return fromJson((await gunzip(await entry.p)).toString());
-    } finally {
-      if (!signal?.aborted) entry.waiters--;
-      signal?.removeEventListener('abort', onAbort);
+      const saved = await this.store.read(k);
+      if (saved) {
+        // The file lives under the generation it was saved with; if that
+        // generation is gone by the time the bytes arrive, the answer
+        // belongs to replaced data. Read again under the current one.
+        if (this.store.generation('pt') === generation) return fromJson((await gunzip(saved)).toString());
+        continue;
+      }
+      if (signal?.aborted) throw new Error('cancelled');
+      const key = `pt/${generation}/${kind}/${json}`;
+      let f = this.inflight.get(key);
+      if (!f) {
+        const ctrl = new AbortController();
+        const p = this.query(kind, args, ctrl.signal)
+          .then(async ({ result, complete, stamp }) => {
+            const gz = await gzip(Buffer.from(toJson(result)));
+            const held = this.dataStamp();
+            if (!stampMatches('pt', held, stamp)) {
+              // The answer was computed from data the plugin has replaced
+              // meanwhile (or no longer holds): never served or saved. The
+              // stamp the check saw rides along: the retry asks again only
+              // once the data held has moved past it.
+              throw staleAnswer('pt', held);
+            }
+            if (complete) await this.store.write(k, gz, generation);
+            else this.store.noteNotKept();
+            return gz;
+          })
+          .finally(() => {
+            if (this.inflight.get(key) === f) this.inflight.delete(key);
+          });
+        f = { p, waiters: 0, ctrl };
+        this.inflight.set(key, f);
+      }
+      const entry = f;
+      entry.waiters++;
+      const onAbort = (): void => {
+        if (--entry.waiters > 0) return;
+        entry.ctrl.abort();
+        if (this.inflight.get(key) === entry) this.inflight.delete(key);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      try {
+        return fromJson((await gunzip(await entry.p)).toString());
+      } catch (err) {
+        // The answer named replaced data (checked once for every requester
+        // of the query): nothing was saved. Ask again under the data held —
+        // but only once it has moved: while it is still what the check saw,
+        // the worker answers from the same data and the same mismatch comes
+        // back. A Weather API point passes no abort signal, so without the
+        // wait the loop would send identical queries for as long as the
+        // worker takes to catch up. A change landing between the check and
+        // here is seen by the stamp compare and skips the wait.
+        if (err instanceof StaleAnswer) {
+          if (sameStamp(err.held, this.dataStamp())) await this.nextChange(signal);
+          continue;
+        }
+        throw err;
+      } finally {
+        if (!signal?.aborted) entry.waiters--;
+        signal?.removeEventListener('abort', onAbort);
+      }
     }
   }
 
@@ -798,6 +971,8 @@ export class TileService {
 
   /** Requesters waiting on a tile's in-flight query (0 when none is in flight; tests). */
   waiters(t: TileId): number {
-    return this.inflight.get(tileKey(t))?.waiters ?? 0;
+    const suffix = `/${tileKey(t)}`;
+    for (const [k, v] of this.inflight) if (k.endsWith(suffix)) return v.waiters;
+    return 0;
   }
 }

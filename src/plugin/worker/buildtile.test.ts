@@ -96,6 +96,11 @@ test('buildTile writes the bytes the main thread wrote from the query answer, an
     const done = sent.find(m => m.type === 'tile-built');
     assert.ok(done && done.type === 'tile-built' && done.complete, `${t.layer}: built`);
     assert.equal(done.bytes, before.length);
+    assert.deepEqual(
+      done.stamp,
+      { forecast: null, smoc: null, rtofs: null, tide: null },
+      `${t.layer}: the stamp names what was read (nothing loaded here)`
+    );
     assert.ok(Buffer.from(fs.readFileSync(tmp)).equals(before), `${t.layer}: the same bytes`);
     await store.adopt(t, tmp, done.bytes, store.generation('cur'));
     assert.equal(fs.existsSync(tmp), false, 'moved, not copied');

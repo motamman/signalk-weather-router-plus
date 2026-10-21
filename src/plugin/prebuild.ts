@@ -44,7 +44,7 @@ import * as fs from 'node:fs';
 import { DEG, M_PER_DEG, HOUR_MS } from '../geo/units';
 import * as path from 'node:path';
 import { fork, type ChildProcess } from 'node:child_process';
-import type { MainToWorker, VesselPosition, WorkerToMain } from './protocol';
+import type { DataStamp, MainToWorker, VesselPosition, WorkerToMain } from './protocol';
 import { PRESSURE_TILE_ZOOM } from './tilejoin';
 import {
   PYRAMID_MIN_ZOOM,
@@ -53,6 +53,7 @@ import {
   tileAt,
   tileBBox,
   tileGroup,
+  stampMatches,
   type TileGroup,
   type TileId,
   type TileLayer,
@@ -140,6 +141,8 @@ export interface PrebuildDeps {
   initMessage: () => MainToWorker;
   /** What a new tiles worker must adopt: forecast, SMOC, harmonics, tide run, a refresh. */
   replayMessages: () => MainToWorker[];
+  /** The data the plugin holds now, to check a built tile's stamp against before adopting it. */
+  dataStamp: () => DataStamp;
   vesselPosition: () => VesselPosition | null;
   /** Hours available: forecast (colour and barb layers), tide run, per layer; null = not loaded. */
   lastHourMs: (layer: TileLayer) => number | null;
@@ -252,7 +255,7 @@ interface TilesWorker {
   /** Tile build in flight. */
   pending: {
     id: number;
-    resolve: (v: { bytes: number; complete: boolean }) => void;
+    resolve: (v: { bytes: number; complete: boolean; stamp: DataStamp }) => void;
     reject: (e: Error) => void;
     timer: NodeJS.Timeout;
   } | null;
@@ -492,7 +495,7 @@ export class TilePrebuilder {
           const p = h.pending;
           h.pending = null;
           clearTimeout(p.timer);
-          p.resolve({ bytes: m.bytes, complete: m.complete });
+          p.resolve({ bytes: m.bytes, complete: m.complete, stamp: m.stamp });
         }
         return;
       case 'query-error':
@@ -509,7 +512,7 @@ export class TilePrebuilder {
   }
 
   /** Build a tile in a builder, written to `tmp` (complete: false, nothing written). */
-  private workerBuild(h: TilesWorker, t: TileId, tmp: string): Promise<{ bytes: number; complete: boolean }> {
+  private workerBuild(h: TilesWorker, t: TileId, tmp: string): Promise<{ bytes: number; complete: boolean; stamp: DataStamp }> {
     const id = ++this.queryId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -682,8 +685,18 @@ export class TilePrebuilder {
     const t0 = Date.now();
     try {
       if (!tmp) throw new Error('its data is not loaded');
-      const { bytes, complete } = await this.workerBuild(h, t, tmp);
-      if (complete) {
+      const { bytes, complete, stamp } = await this.workerBuild(h, t, tmp);
+      const group = tileGroup(t.layer);
+      if (complete && !stampMatches(group, this.deps.dataStamp(), stamp)) {
+        // The tile was computed from data the plugin has replaced meanwhile
+        // (a settings change, or a tide run the builders learned late): not
+        // adopted, not counted as built. No forecast-swap window exists: a
+        // builder has the new run before it builds (worker.ts handles its
+        // messages one at a time, behind the 'forecast' message itself).
+        await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
+        this.counts.notKept++;
+        this.deps.store.noteNotKept();
+      } else if (complete) {
         await this.deps.store.adopt(t, tmp, bytes, generation);
         this.counts.built++;
         this.builtTotal++;

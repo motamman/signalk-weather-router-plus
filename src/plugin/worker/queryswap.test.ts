@@ -25,6 +25,7 @@ const EAST: CurrentSourceLike = {
 
 function fakeSmoc(onEnsure: () => void): SmocCurrentSource {
   return {
+    run: { key: 'test-run', settled: true },
     evictions: 0,
     revision: 0,
     bracketSteps: () => [Date.UTC(2026, 9, 13, 12)],
@@ -90,6 +91,11 @@ test('a query whose SMOC source is replaced while it waits is answered incomplet
   await query(st, 1, 'currents', ARGS);
   const same = sent.find(m => m.type === 'query-result');
   assert.ok(same && same.type === 'query-result' && same.complete, 'same source: complete');
+  assert.deepEqual(
+    same.stamp,
+    { forecast: null, smoc: { key: 'test-run', settled: true }, rtofs: null, tide: null },
+    'the stamp names what was read'
+  );
 
   sent.length = 0;
   const next = fakeSmoc(() => undefined);

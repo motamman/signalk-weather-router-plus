@@ -305,27 +305,47 @@ export function keepCycles(current: Cycle, n: number): Cycle[] {
 }
 
 /**
+ * A window of the decoded run, and the run it was read from: a run replaced
+ * (and pruned) between choosing it and reading it is retried once with the
+ * run now current, so an answer's stamp must name the run actually read.
+ */
+export interface WindowRead {
+  store: ForecastStore;
+  run: DecodedRun;
+}
+
+/**
  * Read a window of the decoded run, noting the memory it holds while in
  * use. A run replaced (and pruned) between choosing it and reading it is
- * retried once with the run now current.
+ * retried once with the run now current. Options that depend on the run
+ * (its bracket indices) are computed from the run actually read: pass
+ * them as a function of the run; static options as an object.
  */
-export async function readWindow(st: WorkerState, what: string, opts: WindowOptions): Promise<ForecastStore> {
+export async function readWindow(
+  st: WorkerState,
+  what: string,
+  opts: WindowOptions | ((run: DecodedRun) => WindowOptions)
+): Promise<WindowRead> {
   const r = st.run;
   if (!r) throw new Error('no forecast loaded');
+  const forRun = (run: DecodedRun): WindowOptions => (typeof opts === 'function' ? opts(run) : opts);
   const t = Date.now();
   let store: ForecastStore;
+  let read = r;
   try {
-    store = await r.window(opts);
+    store = await r.window(forRun(r));
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && st.run && st.run !== r) store = await st.run.window(opts);
-    else throw err;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && st.run && st.run !== r) {
+      read = st.run;
+      store = await st.run.window(forRun(st.run));
+    } else throw err;
   }
   const bytes = store.bytes();
   st.forecastMemory.heldBytes += bytes;
   if (!st.forecastMemory.last || bytes >= st.forecastMemory.last.bytes || Date.now() - Date.parse(st.forecastMemory.last.at) > 600_000) {
     st.forecastMemory.last = { what, bytes, readMs: Date.now() - t, at: new Date().toISOString() };
   }
-  return store;
+  return { store, run: read };
 }
 
 export function releaseWindow(st: WorkerState, store: ForecastStore | null): void {

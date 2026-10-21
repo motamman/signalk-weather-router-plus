@@ -8,7 +8,7 @@
  */
 
 import { Worker } from 'node:worker_threads';
-import type { MainToWorker, QueryArgs, QueryKind, WorkerRole, WorkerToMain } from './protocol';
+import type { DataStamp, MainToWorker, QueryArgs, QueryKind, WorkerRole, WorkerToMain } from './protocol';
 
 /** Roles of the two workers the plugin runs (tiles workers: prebuild.ts). */
 export type MainRole = Exclude<WorkerRole, 'tiles'>;
@@ -40,7 +40,7 @@ export class WorkerPool {
   private queryId = 0;
   private readonly pending = new Map<
     number,
-    { resolve: (v: { result: unknown; complete: boolean }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+    { resolve: (v: { result: unknown; complete: boolean; stamp: DataStamp }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
   >();
 
   constructor(private readonly deps: WorkerPoolDeps) {}
@@ -74,9 +74,14 @@ export class WorkerPool {
    * A data-worker query. `signal`: when it aborts before the worker has
    * started the query, the query is dropped (it then rejects with
    * "cancelled"); one already running completes. `complete` is false when
-   * an on-demand current / tide load was late or failed.
+   * an on-demand current / tide load was late or failed. `stamp` names the
+   * data the answer was computed from (DataStamp).
    */
-  queryFull<K extends QueryKind>(kind: K, args: QueryArgs[K], signal?: AbortSignal): Promise<{ result: unknown; complete: boolean }> {
+  queryFull<K extends QueryKind>(
+    kind: K,
+    args: QueryArgs[K],
+    signal?: AbortSignal
+  ): Promise<{ result: unknown; complete: boolean; stamp: DataStamp }> {
     const h = this.workers.data;
     if (!h.worker || !h.ready) return Promise.reject(new Error('data worker not ready'));
     if (signal?.aborted) return Promise.reject(new Error('cancelled'));
@@ -137,12 +142,12 @@ export class WorkerPool {
   }
 
   /** A query answer from the data worker. */
-  resolveQuery(id: number, result: unknown, complete: boolean): void {
+  resolveQuery(id: number, result: unknown, complete: boolean, stamp: DataStamp): void {
     const p = this.pending.get(id);
     if (!p) return;
     clearTimeout(p.timer);
     this.pending.delete(id);
-    p.resolve({ result, complete });
+    p.resolve({ result, complete, stamp });
   }
   rejectQuery(id: number, message: string): void {
     const p = this.pending.get(id);

@@ -392,6 +392,26 @@ export type MainToWorker =
   | { type: 'query-cancel'; id: number }
   | { type: 'shutdown' };
 
+/**
+ * The identity of the data an answer was computed from, as the worker that
+ * answered it read it (worker/query.ts answer): the forecast run actually
+ * read (readWindow falls back to the run that became current when the one
+ * it chose was pruned meanwhile), the SMOC run and settledness, the RTOFS
+ * run, and the tide run and settledness, all as sampled. The main thread
+ * serves and saves an answer only when this matches what it holds now; on
+ * a mismatch it asks again (tiles.ts TileService, prebuild.ts).
+ */
+export interface DataStamp {
+  /** The decoded run read, null when the query kind reads no forecast (the current and arrows layers, the tide series): not compared, unlike a missing source. */
+  forecast: { cycleMs: number; params: string[] } | null;
+  /** The SMOC run sampled, null when SMOC is off or not loaded. */
+  smoc: { key: string; settled: boolean } | null;
+  /** The RTOFS run sampled (runMs), null when RTOFS is off or not loaded. */
+  rtofs: number | null;
+  /** The tide run sampled, null when tides are off or not loaded. */
+  tide: { key: string; settled: boolean } | null;
+}
+
 export type WorkerToMain =
   | { type: 'ready'; role: WorkerRole }
   | { type: 'log'; level: 'debug' | 'info' | 'error'; message: string }
@@ -429,7 +449,7 @@ export type WorkerToMain =
     }
   | { type: 'error'; id: string; message: string; cancelled?: boolean }
   /** `complete`: false when an on-demand current / tide load missed its deadline or failed (do not cache). */
-  | { type: 'query-result'; id: number; result: unknown; complete: boolean }
+  | { type: 'query-result'; id: number; result: unknown; complete: boolean; stamp: DataStamp }
   /** tiles worker: a 'build-tile' answered; `complete` false: nothing written (do not keep), else `bytes` written to its `tmp`. */
-  | { type: 'tile-built'; id: number; bytes: number; complete: boolean }
+  | { type: 'tile-built'; id: number; bytes: number; complete: boolean; stamp: DataStamp }
   | { type: 'query-error'; id: number; message: string };
