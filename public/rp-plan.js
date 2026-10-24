@@ -1720,8 +1720,8 @@ function renderResultStrip(p, navWarns) {
 })();
 
 // Called when route computation starts: clear the stale log and
-// itinerary, start the phase progress, show Cancel. The user's tab is
-// left alone — progress is visible in the pinned head regardless.
+// itinerary, start the phase progress in Find Route's place, show
+// Cancel. The user's tab is left alone.
 function showModal() {
   modalLog.innerHTML = '';
   modalItinerary.innerHTML = '';
@@ -1750,7 +1750,12 @@ function showModal() {
   renderResultStrip(null);
   updatePlanHint();
   RouteProgress.start();
+  // The progress takes the button's place until the job ends (_computeUiIdle), in view: it is a little taller than the
+  // button, which can sit at the panel's bottom edge. Its text is one line (index.html), so once is enough.
+  document.getElementById('findRoute').style.display = 'none';
   cancelBtn.style.display = 'inline-block';
+  const progressBox = document.getElementById('routeProgress');
+  if (progressBox.offsetParent && progressBox.scrollIntoView) progressBox.scrollIntoView({ block: 'nearest' });
 }
 
 // Log lines come from the plugin with quantities as unit tokens: written in the user's units.
@@ -2307,6 +2312,7 @@ function _computeUiIdle() {
   _activeJobId = null;
   const btn = document.getElementById('findRoute');
   btn.textContent = 'Find Route';
+  btn.style.display = '';
   cancelBtn.style.display = 'none';
   refreshFindRouteEnabled();
 }

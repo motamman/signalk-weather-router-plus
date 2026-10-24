@@ -265,7 +265,10 @@
   .leg-warn-chip { font-size: 10px; padding: 1px 5px; border-radius: var(--r-sm); background: #3a2a10; color: #f0c270; margin-left: 4px; }
   .leg-warn-chip.land { background: #3a1210; color: #ff9d9d; }
   /* Phase progress — shown while a route computes. */
-  #routeProgress { margin-top: var(--s-2); }
+  #routeProgress {
+    margin-top: var(--s-3); padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border-hard); border-radius: var(--r-md); background: var(--surface-2);
+  }
   .rp-row { display: flex; align-items: center; gap: var(--s-2); }
   .rp-bar { display: flex; gap: 3px; flex: 1; }
   .rp-cell {
@@ -276,8 +279,15 @@
   .rp-cell.current { background: var(--go); opacity: 0.55; animation: rp-pulse 1.1s ease-in-out infinite; }
   .rp-cell.failed { background: var(--danger); }
   @keyframes rp-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.9; } }
-  .rp-label { font-size: var(--f-xs); color: var(--text-2); margin-top: 3px; display: flex; justify-content: space-between; gap: var(--s-2); }
+  .rp-label { font-size: var(--f-sm); color: var(--text-2); margin-top: var(--s-1); display: flex; justify-content: space-between; gap: var(--s-2); }
   .rp-label .rp-phase { color: var(--text); font-weight: 600; }
+  /* One line while the route runs, so the box keeps its height while the text changes (it is scrolled into view once,
+     at the start). A failure's message wraps instead: nothing changes the box after it, and it is said whole, inside
+     the box (PR #71 review). */
+  .rp-label .rp-sub { flex: 1 1 auto; min-width: 0; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rp-label .rp-phase { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rp-label .rp-elapsed { flex: none; white-space: nowrap; }
+  .rp-label.failed .rp-phase { white-space: normal; overflow-wrap: anywhere; }
   .rp-label.failed .rp-phase { color: var(--danger); }
   .rp-label.done .rp-phase { color: var(--tack-starboard); }
   /* Best departure: the departures compared (rp-plan.js). */
@@ -791,20 +801,20 @@
   </div>
 
   <button id="findRoute" disabled>Find Route</button>
-  <label style="display:block;font-size:11px;cursor:pointer;margin-top:var(--s-1);" title="Draw the router's search on the map while a route computes: the front of each stage and the best path so far. Off by default; the same switch is in Layers → Base."><input type="checkbox" id="frontToggleRoute" style="width:auto;margin-right:4px;">Show decision lines (the router's search)</label>
-  <button id="resetBtn" style="width:100%;padding:7px;margin-top:var(--s-1);background:var(--surface-2);color:var(--text);border:1px solid var(--border-hard);border-radius:var(--r-sm);cursor:pointer;font-size:var(--f-sm);transition:background var(--t-quick);">Clear all</button>
-  <div id="status"></div>
-  <div id="planHint" class="hint"></div>
-
-  </div>
-
-  <!-- Phase progress while a route computes. -->
+  <!-- Phase progress while a route computes, in the button's place (rp-plan.js hides the button meanwhile): where the
+       user pressed Find Route, so it is in view, with Cancel beside it. A failure stays here under the button. -->
   <div id="routeProgress" style="display:none;">
     <div class="rp-row">
       <div class="rp-bar" id="rpBar"></div>
       <button id="cancelRoute" type="button" style="display:none;">Cancel</button>
     </div>
     <div class="rp-label" id="rpLabel"><span class="rp-phase">Starting…</span><span class="rp-sub"></span><span class="rp-elapsed"></span></div>
+  </div>
+  <label style="display:block;font-size:11px;cursor:pointer;margin-top:var(--s-1);" title="Draw the router's search on the map while a route computes: the front of each stage and the best path so far. Off by default; the same switch is in Layers → Base."><input type="checkbox" id="frontToggleRoute" style="width:auto;margin-right:4px;">Show decision lines (the router's search)</label>
+  <button id="resetBtn" style="width:100%;padding:7px;margin-top:var(--s-1);background:var(--surface-2);color:var(--text);border:1px solid var(--border-hard);border-radius:var(--r-sm);cursor:pointer;font-size:var(--f-sm);transition:background var(--t-quick);">Clear all</button>
+  <div id="status"></div>
+  <div id="planHint" class="hint"></div>
+
   </div>
 
   <!-- Result strip: what the route is. Hidden while empty. -->
