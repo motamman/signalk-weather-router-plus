@@ -25,6 +25,16 @@ uses [Semantic Versioning](https://semver.org/).
   six date checks and subtractions now go through `getTime()` (same
   results); the page behaves as before.
 
+### Fixed
+
+- **The panel fits the screen on an iPad.** Its height was capped with
+  `vh`, which is the viewport with the browser's bars retracted (MDN,
+  `<length>`). This page never scrolls, so Safari's bars stay out, and
+  the panel ran under the bottom edge: its last part (Best departure)
+  could not be scrolled to. The cap is in `dvh` now, the viewport as it
+  is, with `vh` kept for browsers without it; the phone layout's legend
+  box likewise.
+
 ## [0.2.0-beta.3] - 2026-10-22
 
 ### Added

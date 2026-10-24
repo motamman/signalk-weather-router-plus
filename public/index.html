@@ -110,8 +110,12 @@
     border-radius: var(--r-md);
     box-shadow: var(--shadow-panel);
     width: var(--panel-w-desktop); box-sizing: border-box;
-    /* Stops above the map's attribution line so nothing hides behind it. */
-    max-height: calc(100vh - 20px - var(--attrib-h, 48px)); overflow-y: auto;
+    /* Stops above the map's attribution line so nothing hides behind it. dvh where the browser has it: vh is the
+       viewport with the browser's bars retracted (MDN, <length>), and this page never scrolls, so they never do: on
+       an iPad the panel ran under the screen's bottom edge, and its last part (Best departure) could not be reached. */
+    max-height: calc(100vh - 20px - var(--attrib-h, 48px));
+    max-height: calc(100dvh - 20px - var(--attrib-h, 48px));
+    overflow-y: auto;
     font-size: var(--f-base);
     color: var(--text);
     display: flex; flex-direction: column;
@@ -208,7 +212,9 @@
   @media (max-width: 768px) {
     #legendBox {
       left: 10px; bottom: auto; top: 80px; max-width: 58vw;
-      max-height: calc(100vh - 100px); overflow-y: auto;
+      max-height: calc(100vh - 100px);
+      max-height: calc(100dvh - 100px);   /* as #panel's */
+      overflow-y: auto;
     }
   }
   .tab-pane.active { display: block; }
