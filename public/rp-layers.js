@@ -1870,8 +1870,8 @@ export const map = new ol.Map({
   layers: [osmLayer, seamarkLayer, windHeatmapLayer, currentHeatmapLayer, roughnessLayer, waveHeatmapLayer, precipHeatmapLayer, temperatureLayer, sstLayer, tideLayer, pressureLayer, currentLayer, seasArrowsLayer, waveArrowsLayer, windLayer, frontLayer, skeletonLayer, pastRouteLayer, trackLayer, routeLayer, proposedRouteLayer, vesselMarkerLayer, notesLayer, seasRouteLayer, ringLayer, markerLayer, condMarkerLayer, meteoMarkerLayer],
   view: new ol.View({
     // Last view this browser had (saved on every move), else Block
-    // Island Sound at zoom 11. On a first visit the first Signal K
-    // position fix (navigation.position) pans to the vessel.
+    // Island Sound at zoom 11, until the first Signal K position fix
+    // (navigation.position) pans to the vessel.
     center: ol.proj.fromLonLat(_SAVED_VIEW ? [_SAVED_VIEW.lon, _SAVED_VIEW.lat] : _DEFAULT_LONLAT),
     zoom: _SAVED_VIEW ? _SAVED_VIEW.zoom : 11
   })
@@ -1891,29 +1891,40 @@ export const map = new ol.Map({
   setAttribH();
 })();
 
-// Remember where the map was left, so the next load opens there. Not
-// on a first visit until the map has moved (the user, or the first
-// Signal K fix): OL fires moveend after the first render, which would
-// otherwise save the default view and stop the next visit from opening
-// on the boat. The page never asks the browser for its location: the
-// vessel's position comes from Signal K.
-let _autoCentreOnVessel = !_SAVED_VIEW;   // first visit: the first Signal K fix centres the map
+// Every load opens on the boat: routes are planned from where it is, and
+// the view saved last time can be anywhere (on a first visit, Block
+// Island Sound). The first Signal K fix centres the map on it, keeping
+// the saved zoom, unless the map has moved since the load (the user, or
+// a route fitted into view) before the fix came. The page never asks
+// the browser for its location: the vessel's position comes from Signal K.
+//
+// The view is saved on every move, so the zoom carries over and the
+// start view stands in while Signal K has no position. OL fires moveend
+// after the first render too; that one is not a move, and saving it would
+// keep the default view on a first visit. A zoom is a move: the zoom
+// buttons keep the centre (PR #70 review).
+let _autoCentreOnVessel = true;   // until the first Signal K fix, or the map moves
 const _startCenter = map.getView().getCenter();
+const _startZoom = map.getView().getZoom();
 map.on('moveend', function() {
   const v = map.getView();
   const c = v.getCenter();
   if (_autoCentreOnVessel) {
-    if (c[0] === _startCenter[0] && c[1] === _startCenter[1]) return;
+    if (c[0] === _startCenter[0] && c[1] === _startCenter[1] && v.getZoom() === _startZoom) return;
     _autoCentreOnVessel = false;
   }
   const [lon, lat] = ol.proj.toLonLat(c);
   try { localStorage.setItem('rp:view', JSON.stringify({ lon, lat, zoom: v.getZoom() })); } catch (_) {}
 });
-// First visit with no saved view: the first Signal K fix opens the map on the boat (rp-plan.js).
+// The first Signal K fix of the load opens the map on the boat (rp-plan.js).
+// Not while the view is animating: something else (a route being fitted)
+// is moving the map already.
 export function centreOnVesselOnce(coord) {
   if (!_autoCentreOnVessel) return;
   _autoCentreOnVessel = false;
-  map.getView().animate({ center: coord, zoom: 11, duration: 400 });
+  const v = map.getView();
+  if (v.getAnimating()) return;
+  v.animate({ center: coord, duration: 400 });
 }
 
 // Every overlay keyed by the view and the overlay time (each loader

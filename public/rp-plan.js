@@ -4256,7 +4256,7 @@ function _meteoRouteChanged() {
         // The marker: with the Own vessel layer on, or in LIVE / SIMULATE.
         if ((vesselToggle && vesselToggle.checked) || liveMode) renderMarker(snap);
         else vesselMarkerSource.clear();
-        // First visit with no saved view: open on the boat, marker or not.
+        // The first fix of the load opens the map on the boat, marker or not.
         if (!simMode && snap.lat != null && snap.lon != null) centreOnVesselOnce(ol.proj.fromLonLat([snap.lon, snap.lat]));
         if (liveMode && snap.lat != null && snap.lon != null) centreOnBoat([snap.lon, snap.lat]);
         if (simMode) {
@@ -4302,7 +4302,7 @@ function _meteoRouteChanged() {
       f.set('rotation_rad', rot_deg * Math.PI / 180);
       vesselMarkerSource.addFeature(f);
     }
-    centreOnVesselOnce(coord);  // first visit with no saved view: open the map on the boat
+    centreOnVesselOnce(coord);  // the first fix of the load: open the map on the boat
   }
 
   // ── trigger logic ────────────────────────────────────────────────
