@@ -456,7 +456,9 @@ function _clearRouteTime() {
   if (timeOverride()) { setTimeOverride(null); _reloadTimedOverlays(); }
 }
 
-function _loadRouteJob(id, given) {
+// `computed`: a route that has just finished computing (resumed after a reload, or its stream lost), not one opened
+// from Saved: no "Recompute?" banner, and the job stays remembered for a reload until its route has loaded.
+function _loadRouteJob(id, given, { computed = false } = {}) {
   if (!id) return;
   const job = given || routeHistoryItems.find(j => j.id === id);
   if (job && (job.status === 'running' || job.status === 'queued')) {
@@ -467,8 +469,9 @@ function _loadRouteJob(id, given) {
   _currentRouteJobId = id;
   _currentRouteName = job && job.request ? (job.request.name || '') : '';
   authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
-    .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
+    .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
+      if (computed) _forgetComputing(id);
       // Another route opened while this body was still being read (the channel cancels only the request): dropped.
       if (_currentRouteJobId !== id) return;
       if (_displayedJobId !== id) _clearRouteTime();
@@ -496,11 +499,14 @@ function _loadRouteJob(id, given) {
       routeActive = true;
       _routeStale = false;
       updatePlanHint();
-      _askRecompute(job);
+      if (!computed) _askRecompute(job);
       _fitRouteInView();
       showTab('itinerarySection');
     })
     .catch(err => {
+      // Forgotten when the server answered no or another route was opened; a request cut off by a reload, or the
+      // server out of reach, keeps it.
+      if (computed && (err.status || _currentRouteJobId !== id)) _forgetComputing(id);
       if (_currentRouteJobId !== id) return;   // another route was opened meanwhile
       console.error('Failed to load route:', err);
       const st = document.getElementById('status');
@@ -2302,9 +2308,21 @@ let _activeJobId = null;
 function _closeJobStream() {
   if (_activeJobES) { try { _activeJobES.close(); } catch (_) {} _activeJobES = null; }
 }
-function _computeUiIdle() {
+// localStorage: the route job this browser is following until it ends, so a reload (or the window closed and opened
+// again) picks it up: the job runs on the server either way (_resumeComputing).
+const _COMPUTING_KEY = 'rp:computingJob';
+// The job left behind: forgotten, unless another one has been remembered in its place.
+function _forgetComputing(id) {
+  try { if (localStorage.getItem(_COMPUTING_KEY) === id) localStorage.removeItem(_COMPUTING_KEY); } catch (_) { /* not remembered */ }
+}
+// The job followed ends here: it is forgotten (if it is still the one remembered) unless `keep`. Kept: it is done and
+// its route still loading (_jobOnDone and _loadRouteJob forget it once the route has loaded), or its status could not
+// be read, so a reload in between can still find it.
+function _computeUiIdle(keep = false) {
+  const id = _activeJobId;
   _routeComputing = false;
   _activeJobId = null;
+  if (!keep && id) _forgetComputing(id);
   const btn = document.getElementById('findRoute');
   btn.textContent = 'Find Route';
   cancelBtn.style.display = 'none';
@@ -2327,11 +2345,15 @@ function _backToEarlierRoute() {
   _currentRouteName = shown ? _jobBeforeAttach.name : '';
   _jobBeforeAttach = null;
 }
+// Counts the attachments: an answer meant for an earlier one, even of the same job, is dropped (_jobOnError).
+let _attachSeq = 0;
 function attachToJob(id, jobRow) {
   // A reconnect to the same job keeps what was on the map before it.
   if (_activeJobId !== id) _jobBeforeAttach = { id: _currentRouteJobId, name: _currentRouteName };
   _closeJobStream();
   _activeJobId = id;
+  _attachSeq++;
+  try { localStorage.setItem(_COMPUTING_KEY, id); } catch (_) { /* not remembered */ }
   const btn = /** @type {HTMLButtonElement} */ (document.getElementById('findRoute'));
   const statusEl = document.getElementById('status');
   btn.disabled = true;
@@ -2440,11 +2462,12 @@ function _jobOnDone(job, d) {
   statusEl.textContent = '';
   RouteProgress.done(elapsed);
   routeActive = true;
-  _computeUiIdle();
+  _computeUiIdle(true);
   // Fetch the route GeoJSON separately (SSE is not for large payloads).
   authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
-    .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
+    .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
+      _forgetComputing(id);
       // An answer for a job no longer current (a newer request started while this body was still being read: the
       // 'route-load' channel cancels only the request, not the body read; PR #40 review) is dropped.
       if (_currentRouteJobId !== id) return;
@@ -2460,6 +2483,9 @@ function _jobOnDone(job, d) {
       showTab('itinerarySection');
     })
     .catch(err => {
+      // Forgotten when the server answered no or another route was opened; a request cut off by a reload, or the
+      // server out of reach, keeps it.
+      if (err.status || _currentRouteJobId !== id) _forgetComputing(id);
       if (_currentRouteJobId !== id) return;   // a job no longer current: the route shown is another's
       // No route is shown after all (PR #39 review): the hint and the stale check must not act on one.
       routeActive = false;
@@ -2498,14 +2524,21 @@ function _jobOnError(job, ev) {
   // server answered 404/401) — check the job's status once.
   if (es.readyState === EventSource.CLOSED) {
     _closeJobStream();
+    // The answer acts only while this attachment is still the one followed: another attached meanwhile (from Saved,
+    // even of this same job) keeps its progress, Cancel and remembered id.
+    const seq = _attachSeq;
+    const current = () => _activeJobId === id && _attachSeq === seq;
     authFetch(API + '/routes/' + encodeURIComponent(id), { cache: 'no-store' }, null)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then(r => r.ok ? r.json() : Promise.reject(Object.assign(new Error('HTTP ' + r.status), { status: r.status })))
       .then(j => {
-        if (j.status === 'done') { appendLog('stream closed; job finished — loading result', 'done'); _computeUiIdle(); RouteProgress.hide(); _loadRouteJob(id); }
-        else if (j.status === 'queued' || j.status === 'running') { appendLog('stream lost; reconnecting…', 'error'); setTimeout(() => attachToJob(id, j), 2000); }
+        if (!current()) return;
+        if (j.status === 'done') { appendLog('stream closed; job finished — loading result', 'done'); _computeUiIdle(true); RouteProgress.hide(); _loadRouteJob(id, j, { computed: true }); }
+        else if (j.status === 'queued' || j.status === 'running') { appendLog('stream lost; reconnecting…', 'error'); setTimeout(() => { if (current()) attachToJob(id, j); }, 2000); }
         else { appendLog('job ' + j.status + (j.error ? ': ' + j.error : ''), 'error'); RouteProgress.fail(j.status); _computeUiIdle(); _backToEarlierRoute(); }
       })
-      .catch(e => { appendLog('Connection error: ' + e.message, 'error'); statusEl.textContent = 'Error: ' + e.message; RouteProgress.fail('Connection error'); _computeUiIdle(); });
+      // Its status unknown (the server out of reach, or a sign-in asked for): still remembered, for a reload to find. A
+      // 404 says the job is gone: forgotten.
+      .catch(e => { if (!current()) return; appendLog('Connection error: ' + e.message, 'error'); statusEl.textContent = 'Error: ' + e.message; RouteProgress.fail('Connection error'); _computeUiIdle(e.status !== 404); });
   } else {
     appendLog('(event stream interrupted — reconnecting)', 'error');
   }
@@ -2545,6 +2578,27 @@ document.getElementById('findRoute').addEventListener('click', /** @this {HTMLBu
       showTab('logSection');
     });
 });
+
+// A route this browser was following when the page went (reloaded, or the window closed and opened again): still
+// computing, the page follows it again, with the progress in Find Route's place; finished meanwhile, it is shown;
+// failed, cancelled or gone, it is forgotten. Only this browser's own: a job another device started stays there.
+(function _resumeComputing() {
+  let id = null;
+  try { id = localStorage.getItem(_COMPUTING_KEY); } catch (_) { /* nothing remembered */ }
+  if (!id) return;
+  const shownBefore = _currentRouteJobId;
+  authFetch(API + '/routes/' + encodeURIComponent(id), { cache: 'no-store' }, null)
+    .then(r => (r.ok ? r.json() : Promise.reject(Object.assign(new Error('HTTP ' + r.status), { status: r.status }))))
+    .then(job => {
+      // A route started, or one opened from Saved or a window, meanwhile: that one stays, and this job is forgotten
+      // (a route started meanwhile is remembered in its place).
+      if (_activeJobId || _currentRouteJobId !== shownBefore) { _forgetComputing(id); return; }
+      if (job.status === 'queued' || job.status === 'running') { attachToJob(id, job); return; }
+      if (job.status === 'done') _loadRouteJob(id, job, { computed: true });   // forgotten once its route has loaded
+      else _forgetComputing(id);
+    })
+    .catch(err => { if (err.status === 404) _forgetComputing(id); });   // otherwise kept: the server may be busy or out of reach
+})();
 
 cancelBtn.addEventListener('click', () => {
   if (!_activeJobId) return;
@@ -3613,10 +3667,15 @@ function _winOpen(jobId) {
       .catch(err => appendLog('Cancel failed: ' + err.message, 'error'));
   });
   window.addEventListener('rp:units', () => { if (_win) _winRender(); });
-  // The newest window, if any: shown again (and followed while it runs).
+  // The newest window, if any: shown again (and followed while it runs). Still running, its section opens: closed,
+  // the page looked idle after a reload while the departures were computing.
   authFetch(API + '/windows?limit=1', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : []))
-    .then(list => { if (Array.isArray(list) && list.length) _winPoll(list[0].id); })
+    .then(list => {
+      if (!Array.isArray(list) || !list.length) return;
+      if (list[0].status === 'running') /** @type {HTMLDetailsElement} */ (document.getElementById('windowSection')).open = true;
+      _winPoll(list[0].id);
+    })
     .catch(() => { /* none: nothing to show */ });
 })();
 

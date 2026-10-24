@@ -25,6 +25,17 @@ uses [Semantic Versioning](https://semver.org/).
   six date checks and subtractions now go through `getTime()` (same
   results); the page behaves as before.
 
+### Fixed
+
+- **A computation still running shows again after a reload.** A route
+  or a Best departure window runs on the server whether the page is open
+  or not, but after a reload (or the window closed and opened again) the
+  page looked idle. A route this browser started is now followed again,
+  with its progress and Cancel, or shown if it finished meanwhile; a
+  route another device started is left alone. A Best departure window
+  still running opens its section, where its table was already being
+  followed but out of sight.
+
 ## [0.2.0-beta.3] - 2026-10-22
 
 ### Added
