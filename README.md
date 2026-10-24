@@ -490,7 +490,8 @@ computed with what that request says, not with the user's saved Setup.
   sets them), else in the browser's time zone, and the departure field is
   read in the same zone. A time a day or more away carries its date
   ("Tue 13 Oct 21:58"), as a weekday alone is ambiguous on a long passage.
-- **Best departure** (Route tab): the route on the map computed for each
+- **Best departure** (Route tab, the button beside Departure; it opens
+  under the Departure time): the route on the map computed for each
   departure from the Departure time to a latest departure, every 3, 6, 12
   or 24 h ([Departure windows](#departure-windows)). The departures run
   one after another on the server, each as long as one route; the table

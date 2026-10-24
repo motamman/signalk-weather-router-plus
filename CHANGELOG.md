@@ -24,6 +24,13 @@ uses [Semantic Versioning](https://semver.org/).
   (`tsconfig.public.json`, `checkJs`). The scripts gained JSDoc types, and
   six date checks and subtractions now go through `getTime()` (same
   results); the page behaves as before.
+- **Best departure opens from a button beside Departure.** It was a
+  closed section under the result strip, the last thing on the Route
+  tab, below the panel's visible part on a short screen (in a 1180×690
+  window at 738 px, the view ending at 644 px, measured in Chromium). The
+  button sits on the Departure label's line, and the section opens under
+  the Departure time, where a departure is chosen. Closed, it takes no
+  room, so Find Route stays where it was.
 
 ## [0.2.0-beta.3] - 2026-10-22
 

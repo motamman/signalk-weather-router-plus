@@ -507,6 +507,12 @@
   #panel details.subsection[open] > summary::before { content: '−'; }
   #panel details.subsection > summary:hover { color: var(--text); }
   #panel details.subsection .subsection-body { padding: 4px var(--s-3) var(--s-2); }
+  /* Best departure: the button beside Departure opens it (rp-plan.js), so it has no summary line and no room closed. */
+  .dep-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-1); }
+  #bestDepBtn { padding: 0 6px; line-height: 1.5; white-space: nowrap; }
+  #bestDepBtn[aria-expanded="true"] { background: var(--surface-3); }
+  #panel details#windowSection > summary { display: none; }
+  #panel details#windowSection:not([open]) { display: none; }
   /* "Data pane" sections — Log + Itinerary share a dark internal palette. */
   #panel .tab-pane.data-pane .section-body {
     padding: 0; background: var(--ink-bg);
@@ -755,9 +761,36 @@
   <div id="waypointList" class="coord" style="font-size:11px;"><span style="color:#888">No intermediate waypoints</span></div>
 
   <div style="display:flex;gap:var(--s-2);">
-    <div style="flex:1;"><label>Departure</label><input type="datetime-local" id="departure"></div>
+    <div style="flex:1;"><div class="dep-head"><label for="departure">Departure</label><button type="button" id="bestDepBtn" class="sm-btn" aria-controls="windowSection" aria-expanded="false" title="Compare this route over a series of departures">Best departure ▸</button></div><input type="datetime-local" id="departure"></div>
     <div style="flex:1;"><label>Route name</label><input type="text" id="routeName" placeholder="(optional)" maxlength="200"></div>
   </div>
+
+  <!-- Best departure: the same route for a series of departures (POST /api/windows; rp-plan.js). Opened by the button
+       beside Departure, where a departure is chosen, and shown under it: it sat closed under the result strip, below
+       everything else (2026-10, a user). Closed, it takes no room, so Find Route stays where it was. -->
+  <details class="subsection" id="windowSection">
+  <summary>Best departure</summary>
+  <div class="subsection-body">
+    <div class="ctl-hint">This plan (the start, destination and waypoints above, the choices below), computed for each departure from the Departure time to the latest one here, one after the other on the server; the table compares them as they finish. Each takes as long as one route.</div>
+    <div style="display:flex;gap:var(--s-2);">
+      <div style="flex:1;"><label for="windowTo">Latest departure</label><input type="datetime-local" id="windowTo"></div>
+      <div style="flex:1;"><label for="windowStep">Every</label>
+        <select id="windowStep" aria-label="Time between departures">
+          <option value="10800">3 h</option>
+          <option value="21600" selected>6 h</option>
+          <option value="43200">12 h</option>
+          <option value="86400">24 h</option>
+        </select></div>
+    </div>
+    <div id="windowCount" class="ctl-hint"></div>
+    <div style="display:flex;gap:var(--s-2);">
+      <button id="windowStart" type="button" disabled style="flex:1;">Compare departures</button>
+      <button id="windowCancel" type="button" class="sm-btn" hidden>Cancel</button>
+    </div>
+    <div id="windowStatus" class="ctl-hint" aria-live="polite"></div>
+    <div id="windowResults"></div>
+  </div>
+  </details>
 
   <div style="display:flex;gap:var(--s-2);">
     <div style="flex:1;">
@@ -810,30 +843,6 @@
   <!-- Result strip: what the route is. Hidden while empty. -->
   <div id="routeInfo"></div>
 
-  <!-- Best departure: the same route for a series of departures (POST /api/windows; rp-plan.js). -->
-  <details class="subsection" id="windowSection">
-  <summary>Best departure</summary>
-  <div class="subsection-body">
-    <div class="ctl-hint">The route above, computed for each departure from the Departure time to the latest one here, one after the other on the server; the table compares them as they finish. Each takes as long as one route.</div>
-    <div style="display:flex;gap:var(--s-2);">
-      <div style="flex:1;"><label for="windowTo">Latest departure</label><input type="datetime-local" id="windowTo"></div>
-      <div style="flex:1;"><label for="windowStep">Every</label>
-        <select id="windowStep" aria-label="Time between departures">
-          <option value="10800">3 h</option>
-          <option value="21600" selected>6 h</option>
-          <option value="43200">12 h</option>
-          <option value="86400">24 h</option>
-        </select></div>
-    </div>
-    <div id="windowCount" class="ctl-hint"></div>
-    <div style="display:flex;gap:var(--s-2);">
-      <button id="windowStart" type="button" disabled style="flex:1;">Compare departures</button>
-      <button id="windowCancel" type="button" class="sm-btn" hidden>Cancel</button>
-    </div>
-    <div id="windowStatus" class="ctl-hint" aria-live="polite"></div>
-    <div id="windowResults"></div>
-  </div>
-  </details>
   </div><!-- /plan -->
 
   <div class="route-group" data-group="options">

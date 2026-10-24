@@ -3599,7 +3599,14 @@ function _winOpen(jobId) {
     const from = fromClockInput(depEl.value) || new Date();
     toEl.value = toClockInput(new Date(from.getTime() + 48 * 3600 * 1000));
   };
-  document.getElementById('windowSection').addEventListener('toggle', e => { if (/** @type {HTMLDetailsElement} */ (e.target).open) { defaultTo(); _winRefresh(); } });
+  // Opened by the button beside Departure (index.html): the section has no summary line of its own.
+  const winSection = /** @type {HTMLDetailsElement} */ (document.getElementById('windowSection')), bestDepBtn = document.getElementById('bestDepBtn');
+  bestDepBtn.addEventListener('click', () => { winSection.open = !winSection.open; });
+  winSection.addEventListener('toggle', () => {
+    bestDepBtn.setAttribute('aria-expanded', String(winSection.open));
+    bestDepBtn.textContent = 'Best departure ' + (winSection.open ? '▾' : '▸');
+    if (winSection.open) { defaultTo(); _winRefresh(); }
+  });
   for (const el of [toEl, depEl, document.getElementById('windowStep')]) {
     el.addEventListener('change', _winRefresh);
     el.addEventListener('input', _winRefresh);
