@@ -655,6 +655,12 @@ computed with what that request says, not with the user's saved Setup.
   streamed and kept with the job; the switch only shows or hides them, so
   turning it on after a run shows the search that was made. The finished
   route's fronts stay, faintly, also for a past route opened from the log.
+- **The search's boat**: while a route computes, a small boat on the map
+  at the head of the search's best path so far, with that path behind
+  it and the stage beside it ("stage 13/20", and the leg with
+  waypoints), moving on with each stage. It waits at the start until
+  the first stage, and goes when the job ends. With the decision lines
+  on, the path is theirs (dashed) and the boat sits at its end.
 - **Defaults tab**: the web-app settings below (what every route starts from, shared by every client), in the selected units. Numbers are sliders with the value beside the label; max wind and max wave height have a "no limit" box.
 - **While the server gets its forecast** (a first start, or after the
   forecast settings changed, when the forecast is decoded again): a notice

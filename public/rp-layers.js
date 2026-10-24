@@ -270,6 +270,47 @@ export function drawFronts(fronts) {
   for (const fr of fronts || []) drawFront(fr, { final: true });
 }
 
+// --- The search's boat: while a route computes, a boat at the head of the
+// search's best path so far (the job's `frontier` events, rp-plan.js), with
+// that path behind it, so the map shows the search going on without the
+// decision lines. Its trail is left out while the decision lines show, which
+// draw the same path dashed. Gone when the job ends.
+export const searchBoatSource = new ol.source.Vector();
+const SEARCH_BOAT_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30">' +
+  '<path d="M15,3 L15,21 L5,21 Z" fill="#ffffff" stroke="#5a1e7a" stroke-width="1.6" stroke-linejoin="round"/>' +
+  '<path d="M17,6 L25,21 L17,21 Z" fill="#e9d7f5" stroke="#5a1e7a" stroke-width="1.4" stroke-linejoin="round"/>' +
+  '<path d="M3,23 L27,23 L23,28 L7,28 Z" fill="#7828a0" stroke="#3d1153" stroke-width="1.2" stroke-linejoin="round"/>' +
+  '</svg>';
+const searchBoatLayer = new ol.layer.Vector({
+  source: searchBoatSource,
+  style: f => {
+    if (f.get('kind') === 'trail') {
+      return frontLayer.getVisible() ? null : new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(120,40,160,0.6)', width: 2 }) });
+    }
+    return new ol.style.Style({
+      image: new ol.style.Icon({ src: 'data:image/svg+xml;utf8,' + encodeURIComponent(SEARCH_BOAT_SVG), anchor: [0.5, 0.85] }),
+      text: new ol.style.Text({
+        text: f.get('label') || '', offsetY: 16, font: '600 12px system-ui, sans-serif',
+        fill: new ol.style.Fill({ color: '#3d1153' }), stroke: new ol.style.Stroke({ color: 'rgba(255,255,255,0.9)', width: 3 }),
+      }),
+      zIndex: 18,
+    });
+  },
+  zIndex: 18,
+});
+// The decision lines switched on or off: the trail follows.
+frontLayer.on('change:visible', () => searchBoatSource.changed());
+/** Put the search's boat at the end of `path` ([[lon, lat], …] from the start), the path trailing behind it. */
+export function showSearchBoat(path, label) {
+  searchBoatSource.clear();
+  if (!Array.isArray(path) || !path.length) return;
+  const coords = unwrapLonLats(path).map(c => ol.proj.fromLonLat(c));
+  if (coords.length > 1) searchBoatSource.addFeature(new ol.Feature({ geometry: new ol.geom.LineString(coords), kind: 'trail' }));
+  searchBoatSource.addFeature(new ol.Feature({ geometry: new ol.geom.Point(coords[coords.length - 1]), kind: 'boat', label: label || '' }));
+}
+export function clearSearchBoat() { searchBoatSource.clear(); }
+
 // --- Skeleton layer (A* presumptive route, blue) ---
 const skeletonLayer = new ol.layer.Vector({
   source: skeletonSource,
@@ -1867,7 +1908,7 @@ try {
 
 export const map = new ol.Map({
   target: 'map',
-  layers: [osmLayer, seamarkLayer, windHeatmapLayer, currentHeatmapLayer, roughnessLayer, waveHeatmapLayer, precipHeatmapLayer, temperatureLayer, sstLayer, tideLayer, pressureLayer, currentLayer, seasArrowsLayer, waveArrowsLayer, windLayer, frontLayer, skeletonLayer, pastRouteLayer, trackLayer, routeLayer, proposedRouteLayer, vesselMarkerLayer, notesLayer, seasRouteLayer, ringLayer, markerLayer, condMarkerLayer, meteoMarkerLayer],
+  layers: [osmLayer, seamarkLayer, windHeatmapLayer, currentHeatmapLayer, roughnessLayer, waveHeatmapLayer, precipHeatmapLayer, temperatureLayer, sstLayer, tideLayer, pressureLayer, currentLayer, seasArrowsLayer, waveArrowsLayer, windLayer, frontLayer, skeletonLayer, pastRouteLayer, trackLayer, routeLayer, proposedRouteLayer, searchBoatLayer, vesselMarkerLayer, notesLayer, seasRouteLayer, ringLayer, markerLayer, condMarkerLayer, meteoMarkerLayer],
   view: new ol.View({
     // Last view this browser had (saved on every move), else Block
     // Island Sound at zoom 11. On a first visit the first Signal K

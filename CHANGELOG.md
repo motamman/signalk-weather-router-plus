@@ -12,6 +12,13 @@ uses [Semantic Versioning](https://semver.org/).
   `progress` items, every `summary` field and the `links`, with which fields
   are always present; and the answers of `GET /api/windows` and
   `GET /api/windows/{id}`. Nothing else in the document changes.
+- **The search's boat.** While a route computes, a small boat on the map
+  sits at the head of the search's best path so far, with that path
+  behind it and the stage beside it, and moves on with each stage, so
+  the map shows the search going on. It uses the job's stage fronts,
+  which the page already received but drew only with the decision lines
+  on. It waits at the start until the first stage and goes when the job
+  ends.
 
 ### Changed
 
