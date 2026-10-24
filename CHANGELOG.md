@@ -12,6 +12,12 @@ uses [Semantic Versioning](https://semver.org/).
   `progress` items, every `summary` field and the `links`, with which fields
   are always present; and the answers of `GET /api/windows` and
   `GET /api/windows/{id}`. Nothing else in the document changes.
+- **An (i) beside Effort.** It opens the routers page at a new Effort
+  section: what Normal, Moderate and Maximum set (stages, cross-track
+  bins, headings), what each cost and gained on the measured requests,
+  and which to pick. Its only explanation was the label's tooltip, which
+  a touch screen never shows. The page and README now call the choice
+  Effort, as the Route tab does, instead of Method.
 
 ### Changed
 

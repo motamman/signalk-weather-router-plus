@@ -1352,16 +1352,37 @@ window.addEventListener('rp:status', (/** @type {CustomEvent} */ e) => {
   _syncSmoothing();
 });
 
-// --- The routers explained: (i) beside the Router choice opens routers.html in a large popup ---
+// --- The routers explained: (i) beside the Router choice opens routers.html in a large popup, the (i) beside Effort
+// the same page at its Effort section ---
 (function () {
   const overlay = document.getElementById('routerInfoOverlay');
   const btn = document.getElementById('routerInfoBtn');
+  const effortBtn = document.getElementById('effortInfoBtn');
   const close = document.getElementById('routerInfoClose');
-  const frame = document.getElementById('routerInfoFrame');
+  const frame = /** @type {HTMLIFrameElement} */ (document.getElementById('routerInfoFrame'));
+  const title = document.getElementById('routerInfoTitle');
   if (!overlay || !btn || !close || !frame) return;
-  const open = () => { if (!frame.getAttribute('src')) frame.setAttribute('src', 'routers.html'); overlay.style.display = 'flex'; };
+  // `section`: an id on the page to show, else its top. The page is loaded on the first open, and the section asked for
+  // last is shown when it has loaded: a click before that finds the frame's initial blank page, which reads 'complete'
+  // too, so the page is told by its URL. A page already loaded is scrolled, not loaded again, once the popup is shown
+  // and laid out (a frame in a hidden popup has no size, and a scroll then is lost).
+  let want = null;
+  const isRouters = () => frame.contentWindow.location.pathname.endsWith('/routers.html');
+  const show = () => requestAnimationFrame(() => {
+    const el = want ? frame.contentDocument.getElementById(want) : null;
+    if (el) el.scrollIntoView(); else frame.contentWindow.scrollTo(0, 0);
+  });
+  frame.addEventListener('load', () => { if (isRouters() && overlay.style.display === 'flex') show(); });
+  const open = (section, heading) => {
+    if (title) title.textContent = heading;
+    overlay.style.display = 'flex';
+    want = section;
+    if (!frame.getAttribute('src')) frame.setAttribute('src', 'routers.html' + (section ? '#' + section : ''));
+    else if (isRouters()) show();
+  };
   const shut = () => { overlay.style.display = 'none'; };
-  btn.addEventListener('click', open);
+  btn.addEventListener('click', () => open(null, 'The two routers'));
+  if (effortBtn) effortBtn.addEventListener('click', () => open('effort', 'Effort'));
   close.addEventListener('click', shut);
   overlay.addEventListener('click', e => { if (e.target === overlay) shut(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.style.display === 'flex') shut(); });

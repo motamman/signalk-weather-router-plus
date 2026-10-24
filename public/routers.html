@@ -6,7 +6,7 @@
 <!-- The routers explained: opened from the (i) beside the Router choice on the Route tab (index.html, rp-plan.js). -->
 <title>Standard vs Refined</title>
 <style>
-/* Layout: one reading column; each method gets a diagram beside its explanation, then one comparison chart. */
+/* Layout: one reading column; each router gets a diagram beside its explanation, then Effort, then one comparison chart. */
 :root {
   --bg: #f6f7f4; --fg: #1d2420; --muted: #5d665f; --line: #c9d0c8; --panel: #ffffff;
   --sea: #dfe9ee; --land: #d9d2bf; --iso: #1f5fa8; --exp: #b5451b; --wind: #4a7d5c; --ok: #2a7a4b;
@@ -53,7 +53,7 @@ body { margin: 0; }
 
 <div class="wrap">
 <h1>Standard vs Refined</h1>
-<p class="lede">The two open-water routers on the Route tab, what each does with the wind and the polar, and what they measured on the same requests on a Raspberry Pi 5 (8 October 2026, one forecast run, fixed departures).</p>
+<p class="lede">The two open-water routers on the Route tab, what each does with the wind and the polar, what the Effort choice beside them changes, and what they measured on the same requests on a Raspberry Pi 5 (8 October 2026, one forecast run, fixed departures).</p>
 
 <h2>Standard <span class="tag iso">isochrone search</span></h2>
 <div class="row">
@@ -170,11 +170,31 @@ body { margin: 0; }
   <tr><td>Cost on a 1,240 km passage</td><td class="n">17 s</td><td class="n">35 s</td></tr>
 </table>
 
+<h2 id="effort">Effort <span class="tag iso">how wide the search is</span></h2>
+<p>Effort sets how many candidates the search keeps and tries at each stage, for either router. More effort finds a better route and takes longer. It changes nothing else: the forecast, the polar, the limits and the comfort weight stay as they are.</p>
+<table>
+  <tr><th style="width:34%"></th><th>Normal</th><th>Moderate</th><th>Maximum</th></tr>
+  <tr><td>Stages, start to destination</td><td>as set on the Defaults tab; out of the box 20</td><td class="n">40</td><td class="n">40</td></tr>
+  <tr><td>Cross-track bins per stage, the best candidate kept in each (twice the Subsectors setting)</td><td>out of the box 60 (Subsectors 30)</td><td class="n">200</td><td class="n">300</td></tr>
+  <tr><td>Headings tried each side of the course</td><td>out of the box 30, 1° apart: ±30°</td><td class="n">60, 1° apart: ±60°</td><td class="n">120, 0.5° apart: ±60°</td></tr>
+  <tr><td>Newport → Bermuda, 1,240 km, Standard router: wait on a Pi 5</td><td class="n">17 s</td><td class="n">2 min 08 s</td><td class="n">6 min 03 s</td></tr>
+  <tr><td>… arrives, against Normal</td><td class="n">—</td><td class="n">80 min earlier</td><td class="n">94 min earlier</td></tr>
+  <tr><td>A 5-hour harbour beat, Standard router: arrives, against Normal</td><td class="n">—</td><td class="n">29 min earlier</td><td class="n">32 min earlier</td></tr>
+</table>
+<p class="cap">From the measurements below. The beat took about 5 s at either effort.</p>
+<ul class="steps" style="margin-top:10px">
+  <li><b>A short hop:</b> any effort; it takes seconds whichever you pick.</li>
+  <li><b>A passage:</b> Moderate gained 80 of Maximum's 94 minutes on the Bermuda passage, in about a third of the time (2 min 08 s against 6 min 03 s).</li>
+  <li><b>Maximum</b> when the wait doesn't matter, for example for the last plan before you leave.</li>
+  <li><b>With the Refined router</b> the gains stack: Refined at Moderate arrived as early as Standard at Maximum (4d 08h 59m against 4d 09h 00m) in 3 min 12 s.</li>
+  <li><b>Best departure</b> computes every departure at the effort set here, one after the other, so it waits that long for each.</li>
+</ul>
+
 <h2>What was measured</h2>
-<p>Minutes saved against the Standard router with the Normal method, same forecast run and departure for all bars. <i>Moderate</i> is the wider search (stages 40, 100 cross-track bins, headings ±60°); <i>Maximum</i> is 150 bins at 0.5°.</p>
-<div class="legend"><span class="a">Standard router, Moderate method</span><span class="b">Standard router, Maximum method</span><span class="c">Refined router, Normal method</span><span class="d">Refined router, Moderate method</span></div>
+<p>Minutes saved against the Standard router at Normal effort, same forecast run and departure for all bars. <i>Moderate</i> is the wider search (stages 40, 200 cross-track bins, headings ±60°); <i>Maximum</i> is 300 bins at 0.5° (<a href="#effort">Effort</a>, above).</p>
+<div class="legend"><span class="a">Standard router, Moderate effort</span><span class="b">Standard router, Maximum effort</span><span class="c">Refined router, Normal effort</span><span class="d">Refined router, Moderate effort</span></div>
 <div class="fig">
-  <svg viewBox="0 0 900 330" id="barSvg" role="img" aria-label="Bar chart of minutes saved per request and method"></svg>
+  <svg viewBox="0 0 900 330" id="barSvg" role="img" aria-label="Bar chart of minutes saved per request, router and effort"></svg>
   <div class="cap">Newport → Great Salt Pond is a 5-hour beat; the offshore reach 128 km at 10 hours; Newport → Bermuda 1,240 km at 106 hours. Every route was checked leg by leg for impossible speeds before being counted.</div>
 </div>
 <table style="margin-top:14px">
@@ -184,7 +204,7 @@ body { margin: 0; }
   <tr><td>Newport → Bermuda</td><td class="n">4d 10h 34m</td><td class="n">4d 09h 13m</td><td class="n">4d 09h 00m</td><td class="n">4d 10h 07m</td><td class="n">4d 08h 59m</td></tr>
   <tr><td>Bermuda wall time (Pi 5)</td><td class="n">17s</td><td class="n">2m 08s</td><td class="n">6m 03s</td><td class="n">35s</td><td class="n">3m 12s</td></tr>
 </table>
-<p class="note" style="margin-top:14px">Reading it: on the beat, the Moderate method alone finds more than the Refined router does, and the two don't add up. On the reach only the Refined router's polish moves the number, by a few minutes. On the passage they stack: Refined with Moderate equals Standard with Maximum in half the time. The Normal method's pruning is the larger loss on long passages; the Method choice is the direct remedy.</p>
+<p class="note" style="margin-top:14px">Reading it: on the beat, Moderate effort alone finds more than the Refined router does, and the two don't add up. On the reach only the Refined router's polish moves the number, by a few minutes. On the passage they stack: Refined with Moderate equals Standard with Maximum in half the time. Normal effort's pruning is the larger loss on long passages; the Effort choice is the direct remedy.</p>
 </div>
 
 <script>

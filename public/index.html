@@ -761,7 +761,7 @@
 
   <div style="display:flex;gap:var(--s-2);">
     <div style="flex:1;">
-      <label for="search" title="How wide the router's search is. Normal: the routing settings as they are, seconds. Moderate: a better route, about 2 minutes on a long passage. Maximum: the best route, about 6 minutes. A harbour hop takes seconds whichever you pick.">Effort</label>
+      <label for="search" title="How wide the router's search is. Normal: the routing settings as they are, seconds. Moderate: a better route, about 2 minutes on a long passage. Maximum: the best route, about 6 minutes. A harbour hop takes seconds whichever you pick. The (i) explains it, with what was measured.">Effort <button type="button" id="effortInfoBtn" aria-label="What Effort changes" title="What Effort changes" style="width:18px;height:18px;padding:0;margin-left:4px;border:1px solid var(--border-hard);border-radius:50%;background:var(--surface-2);color:var(--text);font:600 11px/16px ui-serif,Georgia,serif;cursor:pointer;vertical-align:1px;">i</button></label>
       <select id="search" aria-label="Search effort">
         <option value="normal">Normal</option>
         <option value="moderate">Moderate</option>
@@ -1069,14 +1069,15 @@
 </div>
 
 <!-- Vessel/polar specs form (POST /api/polar-from-specs) ------------- -->
-<!-- The routers explained (public/routers.html), opened from the (i) beside the Router choice. -->
+<!-- The routers and Effort explained (public/routers.html), opened from the (i) beside the Router choice, and at its
+     Effort section from the (i) beside Effort. -->
 <div id="routerInfoOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:200;justify-content:center;align-items:center;">
   <div style="background:var(--surface);color:var(--text);border-radius:8px;width:1040px;max-width:94vw;height:90vh;display:flex;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,0.4);overflow:hidden;">
     <div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex:none;">
-      <h3 style="margin:0;font-size:15px;">The two routers</h3>
+      <h3 id="routerInfoTitle" style="margin:0;font-size:15px;">The two routers</h3>
       <button id="routerInfoClose" type="button" aria-label="Close" style="background:none;border:none;font-size:20px;color:var(--muted);cursor:pointer;">&times;</button>
     </div>
-    <iframe id="routerInfoFrame" title="Standard vs Refined" style="flex:1;width:100%;border:0;background:var(--surface);"></iframe>
+    <iframe id="routerInfoFrame" title="Standard vs Refined, and Effort" style="flex:1;width:100%;border:0;background:var(--surface);"></iframe>
   </div>
 </div>
 <div id="vesselOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:200;justify-content:center;align-items:flex-start;padding-top:40px;">

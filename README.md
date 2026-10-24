@@ -1123,9 +1123,11 @@ The same passage run with a much wider isochrone beam (`routing.stages`
 40, `routing.subsectors` 150, `routing.headings` 120 at 0.5°) arrived
 377,985 s, 94 minutes earlier than the standard beam, at 21 × the wall
 time: the standard pruning is the larger loss on long passages. That
-beam and a middle one are the **Method** choice on the Route tab
+beam and a middle one are the **Effort** choice on the Route tab
 (request `search`: `normal`, `moderate`, `maximum`; `src/engine/search/presets.ts`),
-beside the **Router** choice.
+beside the **Router** choice. The (i) beside each opens the same page
+(`public/routers.html`): the routers, and at its Effort section what each
+effort sets, what it cost and gained on these requests, and which to pick.
 
 ### Comfort (rough water)
 
@@ -1893,7 +1895,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `vessel.under_keel_clearance_m` | number | m | setting (0.5) | 0..3; charted depth on chart-mesh legs must be at least the draught plus this |
 | `vessel.overhead_clearance_m` | number | m | setting (2) | 0..10; charted clearance on chart-mesh legs must be at least the air draft plus this |
 | `router` | `"standard"` or `"refined"` | | setting `routing.router` (`standard`) | the [open-water router](#open-water-router-standard-or-refined) |
-| `search` | `"normal"`, `"moderate"` or `"maximum"` | | `normal` | search method (the Route tab's *Method*): `normal` = the routing settings as they are; `moderate` = stages 40, 100 cross-track bins, headings ±60° at 1° (a better route; about 2 min on a 600 nm passage on a Raspberry Pi 5); `maximum` = stages 40, 150 bins, ±60° at 0.5° (the best; about 6 min). An explicit `stages` still wins |
+| `search` | `"normal"`, `"moderate"` or `"maximum"` | | `normal` | search method (the Route tab's *Effort*): `normal` = the routing settings as they are; `moderate` = stages 40, 200 cross-track bins (subsectors 100), headings ±60° at 1° (a better route; about 2 min on a 600 nm passage on a Raspberry Pi 5); `maximum` = stages 40, 300 bins (subsectors 150), ±60° at 0.5° (the best; about 6 min). An explicit `stages` still wins |
 
 `vessel.polar` is a token from `GET /api/polars`. A file name such as
 `a_boat.pol` resolves only inside the polar library (the configured
