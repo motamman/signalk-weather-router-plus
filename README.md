@@ -1386,7 +1386,8 @@ resolution levels 1–4 (`GSHHS_f_L1.shp` through `GSHHS_f_L4.shp`):
   needs 22): the chart mesh archives are zstd, which Node's own zlib
   unpacks from 22.15 on.
 - Internet access for the forecast, current, tide and coastline
-  downloads.
+  downloads. On a metered link, see
+  [Metered or no internet](#metered-or-no-internet-signalk-internet).
 - Disk in the Signal K data directory: the decoded forecast (about
   1.35 GB for 72 h with the extra fields, 4.6 GB at 360 h), the GRIB files
   of the cached cycles, the coastline (about 156 MB when downloaded),
@@ -3013,6 +3014,31 @@ its departures' route jobs send none ([Departure windows](#departure-windows)).
 The value is `{state, method: [], message, timestamp}`. Cancelled jobs
 send no notification, nor does a window that ends other than done
 (cancelled, or failed by a restart). The plugin emits no other deltas.
+
+#### Metered or no internet (signalk-internet)
+
+With the [signalk-internet](https://www.npmjs.com/package/@meri-imperiumi/signalk-internet)
+plugin installed and enabled (recommended in the App Store), the plugin
+reads its `network.internet.state` on the vessel. A value left behind by
+a disabled signalk-internet counts for nothing. At start the plugin
+waits for signalk-internet's first state (at most 30 s) before its first
+downloads. While the state is `metered`, `offline` or `captive`, nothing
+is downloaded on its own:
+
+- the forecast, current and tide refresh rounds use what is on disk
+  (`checks` in `/api/status` says `skipped: the internet connection is
+  metered …`), and one runs as soon as the state clears;
+- the coastline download at first start and the chart meshes' daily
+  catalogue read and downloads wait, looking again every 15 minutes;
+- map tiles are not built ahead of time (`overlay_prebuild.paused` in
+  `/api/status`).
+
+What you ask for still downloads: **Refresh forecast**, **Download
+coastline**, the mesh panel's buttons, routes and departure windows
+(a route with no forecast on disk yet downloads the forecast first),
+and the map and conditions you look at. The plugin status says why it
+waits. Without signalk-internet, or in any other state, downloads run as
+before.
 
 #### OpenAPI
 

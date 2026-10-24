@@ -140,12 +140,15 @@ export function pruneForecastCaches(st: WorkerState, cfg: ResolvedConfig, cl: Ec
  * The run in use keeps answering until the new one is complete. Every check
  * ends with what it found (SourceCheck), sent as 'forecast-check'.
  * `offline`: this refresh round already found no connection; the server is
- * not asked again (the reason is reported).
+ * not asked again (the reason is reported). `held`: the round was held by
+ * the internet state (internet.ts): no forecast yet is then not an error,
+ * so a route waiting for the first forecast keeps waiting (index.ts asks
+ * for an unheld round for it).
  */
-export async function refreshForecast(st: WorkerState, force: boolean, offline: string | null = null): Promise<void> {
+export async function refreshForecast(st: WorkerState, force: boolean, offline: string | null = null, held = false): Promise<void> {
   let check: SourceCheck;
   try {
-    check = await refreshForecastInner(st, force, offline);
+    check = await refreshForecastInner(st, force, offline, held);
   } catch (err) {
     check = { outcome: isOffline(err) ? 'could-not-check' : 'failed', at: '', reason: (err as Error).message };
   } finally {
@@ -160,7 +163,7 @@ export async function refreshForecast(st: WorkerState, force: boolean, offline: 
 const newest = (reason: string | null = null): SourceCheck => ({ outcome: 'newest', at: '', reason });
 const newRun = (reason: string): SourceCheck => ({ outcome: 'new-run', at: '', reason });
 
-async function refreshForecastInner(st: WorkerState, force: boolean, offline: string | null): Promise<SourceCheck> {
+async function refreshForecastInner(st: WorkerState, force: boolean, offline: string | null, held: boolean): Promise<SourceCheck> {
   const { config: cfg, client: cl } = requireInit(st);
   const startedAt = new Date().toISOString();
   // Why a decode would be needed, for the user waiting on it.
@@ -197,7 +200,7 @@ async function refreshForecastInner(st: WorkerState, force: boolean, offline: st
       return { outcome, at: '', reason: `${(err as Error).message}; using the decoded run ${path.basename(fallback.dir)} on disk` };
     }
     // No run in use at all: the error the page shows instead of a forecast.
-    if (!st.run) st.send({ type: 'refresh-error', message: (err as Error).message });
+    if (!st.run && !held) st.send({ type: 'refresh-error', message: (err as Error).message });
     return { outcome, at: '', reason: (err as Error).message };
   }
   const cycle = resolved.cycle;

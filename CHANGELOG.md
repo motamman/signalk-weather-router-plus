@@ -6,6 +6,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **No background downloads on a metered link.** With the signalk-internet
+  plugin installed and enabled, while its `network.internet.state` is `metered`,
+  `offline` or `captive`, the forecast, current and tide refresh rounds use
+  what is on disk, the coastline download at first start and the chart
+  meshes' daily pass wait, and map tiles are not built ahead. Refresh,
+  Download coastline, the mesh panel's buttons, routes and the map still
+  download. signalk-internet is recommended in the App Store
+  (`signalk.recommends`).
+
 ## [0.2.0-beta.3] - 2026-10-22
 
 ### Added

@@ -151,7 +151,7 @@ export interface PrebuildDeps {
   atStep: (layer: TileLayer, hourMs: number) => boolean;
   /** Layers the loaded data can answer (e.g. no waves without wave fields). */
   layerAvailable: (layer: TileLayer) => boolean;
-  /** A route is running or the data worker has map queries waiting. */
+  /** A route is running, the data worker has map queries waiting, or the internet state holds downloads (internet.ts). */
   busy: () => boolean;
   log: (msg: string) => void;
   error: (msg: string) => void;

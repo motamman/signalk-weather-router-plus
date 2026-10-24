@@ -142,14 +142,16 @@ if (role === 'data') setNetworkObserver((state, reason) => noteNetwork(st, state
  * request of this round finds no connection, the sources after it are not
  * asked (each uses what it has and reports "could not check" with the reason).
  */
-export async function refresh(st: WorkerState, force: boolean): Promise<void> {
+/** `hold`: why this round must not download (internet.ts): every source then answers from what is on disk. */
+export async function refresh(st: WorkerState, force: boolean, hold: string | null = null): Promise<void> {
   const networkAllowed = st.role === 'data';
   const t0 = Date.now();
-  const offline = (): string | null => (st.lastOfflineMs >= t0 ? `skipped: ${st.connectivity.reason ?? 'no internet connection'}` : null);
+  const offline = (): string | null =>
+    hold ? `skipped: ${hold}` : st.lastOfflineMs >= t0 ? `skipped: ${st.connectivity.reason ?? 'no internet connection'}` : null;
   await refreshRtofs(st, networkAllowed, offline());
   sendCurrents(st);
   if (st.role === 'data') {
-    await refreshForecast(st, force, offline());
+    await refreshForecast(st, force, offline(), hold !== null);
     // After the forecast, so a first boot is not held up by the SMOC resident download.
     await refreshSmoc(st, offline());
     sendCurrents(st);
@@ -215,7 +217,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
     }
     case 'refresh':
       if (msg.position !== undefined) st.vesselPos = msg.position;
-      await refresh(st, msg.force ?? false);
+      await refresh(st, msg.force ?? false, msg.hold ?? null);
       st.send({ type: 'data-status', status: dataStatus(st) });
       return;
     case 'forecast': {
@@ -396,8 +398,8 @@ function inBackground(msg: MainToWorker, fn: () => Promise<void>): void {
 const queueRefresh = refreshQueue({
   inBackground: fn => inBackground({ type: 'refresh' }, fn),
   setPosition: pos => (st.vesselPos = pos),
-  run: async force => {
-    await refresh(st, force);
+  run: async (force, hold) => {
+    await refresh(st, force, hold);
     st.send({ type: 'data-status', status: dataStatus(st) });
   },
 });
