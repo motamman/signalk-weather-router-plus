@@ -439,18 +439,33 @@ computed with what that request says, not with the user's saved Setup.
   min sail speed and limits in the same store ([In Freeboard-SK](#in-freeboard-sk)).
 - **Header.** The data sources, with how fresh each one is. Collapsed (the
   default): one line, `wind ●● | waves ● | currents ●● | tides ●`, a dot
-  per source in its colour, with **Show** on the right. Expanded (**Hide**
+  per source in its colour, with **Show** on the right; a tap or click
+  anywhere on the line opens it too. Expanded (**Hide**
   folds it again; the choice is kept in the browser): a *Data sources*
   title, then each row (wind, waves, currents, tides) with one line per
   source: wind the ECMWF run and any regional model, waves the ECMWF run,
   currents each current source, tides the sea-level run, then the job
   queue. A source that does not cover the route on the map (or the map
   view when there is none) is listed all the same, marked *(not in this
-  view)*. Each source carries a pill with its run's age, coloured by its
-  own publication cadence: **green** until 30 minutes before its next run
+  view)*. Each source carries a pill with its run's age and, in brackets,
+  when its next run is due (*10.2 hour old (next in 2.3 hour)*; once due
+  *(expected now)*, more than an hour after that *(1.5 hour late)*),
+  coloured by its own publication cadence: **green** until 30 minutes before its next run
   is due, **orange** from then until an hour after, **red** after that
-  (the old run still in use) or when nothing is loaded; hover a pill for
-  the run, when it was published and when the next is due. Sources and
+  (the old run still in use) or when nothing is loaded. Under each source
+  the same as text (a pill's tooltip has it too, which a touch screen
+  never shows): when its run was published, when the next is due, and
+  when it was last checked and what that found (the newest run is in use,
+  a new run was loaded, the server could not be asked, or the new run
+  could not be loaded). Under the list, what the colours mean, how often
+  the plugin checks every source (*Check for a new cycle every*,
+  Defaults) and **Check now**, which starts that check at once
+  (`POST /api/forecast/refresh`, as Log → Forecast data's **Refresh
+  forecast**). It is off from the tap until every source has been checked
+  since (at most ten minutes), so a second tap asks for no second round;
+  while ECMWF is being
+  checked it says so, with the time it began. When the first forecast
+  could not be loaded, that error line offers Check now too. Sources and
   when their runs are due: ECMWF at its measured publication times (see
   [Data](#data)); RTOFS daily, by the last file the horizon needs (a pill
   per product loaded; where no product covers the vessel, the currents row
@@ -805,8 +820,9 @@ forecast hour from one place, as a chartplotter's weather view does:
   step, Page Up/Down a day, Home now, End the last hour.
 - **How fresh the data is**: the model, the run (UTC) and when the
   forecast ends, then a coloured pill per source the shown layers are
-  drawn from, with its run's age (the run, when it was published and when
-  the next one is due in its tooltip), as the web page's header shows them
+  drawn from, with its run's age and, in brackets, when the next run is
+  due (*10 h old (next in 2 h)*; the run and when it was published and is
+  due in its tooltip), as the web page's header shows them
   (`/api/status` `freshness`; the map layers read ECMWF, so the regional
   wind models are not listed; when the panel cannot read the
   chartplotter's chart list or the presets, every source is, and both

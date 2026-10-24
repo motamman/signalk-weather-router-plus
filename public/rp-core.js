@@ -1113,10 +1113,18 @@ let _fresh = new Map();   // source name → freshness entry of the last status
 function _clockText(iso) {
   return iso ? fmtClock(new Date(iso), { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }) : '';
 }
-// The pill's words: the run's age, "loaded" for a fixed table, "none" when nothing is loaded.
+// The pill's words: the run's age, "loaded" for a fixed table, "none" when nothing is loaded; after the age, in brackets,
+// when the next run is due (freshness `next_due_at`), so the line says when to look again.
 function _freshText(f) {
   const age = f.published_at ? Math.max(0, (Date.now() - Date.parse(f.published_at)) / 1000) : null;
-  return f.state === 'red' && !f.run ? 'none' : age === null ? 'loaded' : _fmt(age, 'time') + ' old';
+  return f.state === 'red' && !f.run ? 'none' : age === null ? 'loaded' : _fmt(age, 'time') + ' old' + _nextText(f);
+}
+// " (next in 2 h)" before it is due; once due, " (expected now)", or red, " (1.5 h late)"; nothing without a due time.
+function _nextText(f) {
+  const due = f.next_due_at ? Date.parse(f.next_due_at) : NaN;
+  if (!Number.isFinite(due)) return '';
+  const s = (due - Date.now()) / 1000;
+  return s > 0 ? ' (next in ' + _fmt(s, 'time') + ')' : f.state === 'red' ? ' (' + _fmt(-s, 'time') + ' late)' : ' (expected now)';
 }
 // The header's sources list collapsed to one line of dots (remembered in this browser).
 let _statusCollapsed = (() => { try { return localStorage.getItem('statusCollapsed') !== 'false'; } catch (_) { return true; } })();
@@ -1124,12 +1132,123 @@ let _statusCollapsed = (() => { try { return localStorage.getItem('statusCollaps
   const el = document.getElementById('dataStatus');
   if (!el) return;
   el.addEventListener('click', e => {
-    if (!/** @type {Element} */ (e.target).closest('.ds-toggle')) return;
+    const t = /** @type {Element} */ (e.target);
+    if (t.closest('.ds-check-now')) { _checkNow(); return; }
+    // Collapsed, the whole line opens the list: a dot is too small to aim at on a touch screen, and its tooltip never shows there.
+    if (!t.closest('.ds-toggle') && !(_statusCollapsed && t.closest('.ds-summary'))) return;
     _statusCollapsed = !_statusCollapsed;
     try { localStorage.setItem('statusCollapsed', String(_statusCollapsed)); } catch (_) { /* private window */ }
+    if (!_statusCollapsed) _loadCheckEvery();
     redrawStatusLine();
   });
 })();
+
+// ─────────── The expanded list's details and Check now ───────────
+// Under each source, as text: when its run was published and the next is due (the pill's tooltip) and what the last
+// check of it found (status `checks`); under the list, how often the plugin checks, with Check now.
+let _checks = {};          // status `checks` of the last status
+let _checkEveryS = null;   // forecast.refreshInterval from /api/settings, read when the list opens
+let _checkNowNote = '';    // what Check now did, kept across the status redraws while it applies
+// Check now is off from the tap until every source in the status `checks` has been checked since the server took the
+// request: the round's end. A second request once a round has started queues a whole round more
+// (worker/refreshqueue.ts merges only into one still waiting), and a round checks RTOFS before ECMWF and SMOC and the
+// tides after it, so ECMWF's `forecast_loading` alone does not span it.
+let _checkAsking = false;
+let _checkTakenAt = 0;     // when the server took the request, by its own clock (the answer's Date header); 0 before
+const _CHECK_ROUND_MAX_MS = 10 * 60 * 1000;   // on again after this whatever the statuses said
+const _CHECK_SAID = {
+  newest: 'the newest run is in use',
+  'new-run': 'a new run was loaded',
+  'could-not-check': 'the server could not be asked',
+  failed: 'the new run could not be loaded',
+};
+// A freshness source's name to the key its check is kept under (protocol.ts CheckedSource); regional models have none.
+function _checkKey(source) {
+  if (source === 'ECMWF') return 'ecmwf';
+  if (/SMOC/i.test(source)) return 'smoc';
+  if (/sea level/i.test(source)) return 'tides';
+  return /^RTOFS-/.test(source) ? 'rtofs:' + source.slice(6) : null;
+}
+function _freshDetail(name) {
+  const f = _fresh.get(name);
+  if (!f) return '';
+  const key = _checkKey(name), c = key ? _checks[key] : null;
+  const parts = [
+    f.published_at ? 'published ' + _clockText(f.published_at) : '',
+    f.next_due_at ? 'next due ' + _clockText(f.next_due_at) : '',
+    c && c.at ? 'checked ' + _clockText(c.at) + ': ' + (_CHECK_SAID[c.outcome] || c.outcome) : '',
+  ].filter(Boolean);
+  return parts.length ? '<div class="fresh-detail">' + escapeHtml(parts.join(' · ')) + '</div>' : '';
+}
+// What the pills' colours mean (as freshness.ts sets them), once under the list.
+const _FRESH_LEGEND = '<div class="fresh-legend">'
+  + '<span class="fresh fresh-green">●</span> no newer run due yet · '
+  + '<span class="fresh fresh-orange">●</span> a newer run is due about now (from 30 min before until an hour after) · '
+  + '<span class="fresh fresh-red">●</span> more than an hour late, or nothing loaded</div>';
+function _checkLine(s) {
+  const every = _checkEveryS ? 'The plugin checks every source every ' + _fmt(_checkEveryS, 'time') + ' (Defaults → Forecast). ' : '';
+  // A check or a new run already under way: said here, and Check now waits for it (another request would only queue).
+  const l = s.forecast_loading;
+  const busy = l && l.phase === 'checking'
+    ? 'Checking ECMWF for a newer run' + (l.started_at ? ' since ' + _clockText(l.started_at) : '') + '…'
+    : l && l.phase === 'decoding' ? 'A new run is loading (below).' : '';
+  return '<div class="ds-check">' + escapeHtml(every)
+    + (busy
+      ? '<button type="button" class="ds-check-now" disabled>Checking…</button> <span class="ds-check-note">' + escapeHtml(busy) + '</span>'
+      : '<button type="button" class="ds-check-now" title="Check every source for a newer run now"' + (_checkAsking ? ' disabled' : '') + '>Check now</button>'
+        + (_checkNowNote ? ' <span class="ds-check-note">' + escapeHtml(_checkNowNote) + '</span>' : ''))
+    + '</div>';
+}
+// A status: Check now is on again once every source it lists was checked at or after the request (the check times and
+// the request's are both the server's clock). With no sources listed, once no ECMWF check is under way.
+function _checkSettled(s) {
+  if (!_checkAsking || !_checkTakenAt) return;
+  const ats = Object.values(s.checks || {}).map(c => Date.parse(c && c.at));
+  const l = s.forecast_loading;
+  const over = ats.length ? ats.every(t => t >= _checkTakenAt) : !(l && l.phase === 'checking');
+  if (!over) return;
+  _checkAsking = false;
+  clearTimeout(_checkNoteTimer);
+  _checkNowNote = '';
+}
+function _loadCheckEvery() {
+  // Plain fetch, as the Defaults tab reads it: a refusal here is no reason for the page-wide sign-in.
+  fetch(API + '/settings', { credentials: 'same-origin', cache: 'no-store' })
+    .then(r => (r.ok ? r.json() : null))
+    .then(b => {
+      const v = b && b.values && b.values.forecast ? b.values.forecast.refreshInterval : null;
+      if (Number.isFinite(v) && v > 0 && v !== _checkEveryS) { _checkEveryS = v; redrawStatusLine(); }
+    })
+    .catch(() => { /* the line says nothing of the interval */ });
+}
+let _checkNoteTimer = null;
+function _checkNow() {
+  const note = t => { _checkNowNote = t; redrawStatusLine(); };
+  if (_checkAsking) return;
+  _checkAsking = true;
+  _checkTakenAt = 0;
+  clearTimeout(_checkNoteTimer);
+  note('asking…');
+  authFetch(API + '/forecast/refresh', { method: 'POST' }, null)
+    .then(r => {
+      if (!r.ok) return _apiErrorText(r).then(t => Promise.reject(new Error(t)));
+      // The Date header has whole seconds, cut down: a check after the request is never earlier than it.
+      const at = Date.parse(r.headers.get('date') || '');
+      _checkTakenAt = Number.isFinite(at) ? at : Date.now();
+      return r.json();
+    })
+    .then(() => {
+      note('asked: every source is being checked, and each says what it found when it is done');
+      setTimeout(loadPluginStatus, 4000);
+      setTimeout(loadPluginStatus, 15000);
+      _checkNoteTimer = setTimeout(() => { _checkAsking = false; note(''); }, _CHECK_ROUND_MAX_MS);
+    })
+    .catch(err => {
+      _checkAsking = false;
+      note('could not ask: ' + err.message);
+      _checkNoteTimer = setTimeout(() => note(''), 60000);
+    });
+}
 function _freshPill(name) {
   const f = _fresh.get(name);
   if (!f) return '';
@@ -1200,19 +1319,23 @@ function _regionalWind(r, area) {
       : d && d.cycle && x.run.slice(0, 13).replace(/[-T]/g, '') === d.cycle ? ' (decoded)'
       : ' (decoding)';
     const here = !x.domain || _meets(x.domain, area);
-    return escapeHtml(x.name) + ' ' + _shortUtc(x.run) + (x.validTo ? ', to ' + _shortLocal(x.validTo) : '') + state + _freshPill(x.name) + off + (here ? '' : _NOT_HERE);
+    return escapeHtml(x.name) + ' ' + _shortUtc(x.run) + (x.validTo ? ', to ' + _shortLocal(x.validTo) : '') + state + _freshPill(x.name) + off + (here ? '' : _NOT_HERE)
+      + (_statusCollapsed ? '' : _freshDetail(x.name));
   });
 }
 
 function _statusLine(s) {
   const f = s.forecast;
   _fresh = new Map((s.freshness || []).map(x => [x.source, x]));
+  _checks = s.checks || {};
+  const detail = name => (_statusCollapsed ? '' : _freshDetail(name));
   if (s.starting) return '<span class="warn">' + unitTextHtml(s.starting) + '</span>';
+  // No forecast after a failed first load: Check now there too, to try again.
   if (!f) return s.forecast_error && !s.forecast_loading
-    ? '<span class="warn">no forecast loaded</span>: ' + unitTextHtml(s.forecast_error)
+    ? '<span class="warn">no forecast loaded</span>: ' + unitTextHtml(s.forecast_error) + _checkLine(s)
     : '<span class="warn">loading the forecast</span> (see below)';
   const area = _area();
-  const run = escapeHtml(f.model || 'forecast') + ' <span class="nowrap">' + _shortUtc(f.cycle) + ' → ' + _shortLocal(f.valid_to) + '</span>' + _freshPill('ECMWF');
+  const run = escapeHtml(f.model || 'forecast') + ' <span class="nowrap">' + _shortUtc(f.cycle) + ' → ' + _shortLocal(f.valid_to) + '</span>' + _freshPill('ECMWF') + detail('ECMWF');
   // Only the current sources that apply to the route or the map view. SMOC
   // is worldwide (any area loads on demand), its box is only the standing
   // area around the boat; the others cover their own box.
@@ -1222,7 +1345,7 @@ function _statusLine(s) {
   const t = s.tides;
   const tides = s.tides_enabled === false ? 'off (Settings)'
     : s.tides_error ? '<span class="warn">' + unitTextHtml(s.tides_error) + '</span>'
-    : t ? escapeHtml(t.name.replace(/ hourly sea level \((\S+) tide\)/, ' ($1)')) + (t.run ? ', run ' + _shortUtc(t.run) : '') + _freshPill(t.name)
+    : t ? escapeHtml(t.name.replace(/ hourly sea level \((\S+) tide\)/, ' ($1)')) + (t.run ? ', run ' + _shortUtc(t.run) : '') + _freshPill(t.name) + detail(t.name)
     : 'loading';
   // Sources that are enabled but have nothing loaded have no row entry of their own: their red pill goes on the currents row.
   const curNames = new Set(curList.map(c => c.name));
@@ -1233,8 +1356,8 @@ function _statusLine(s) {
   // RTOFS where no product covers the vessel: nothing is loaded for it, and that is not late (no pill).
   const rtofsNone = s.rtofs && !s.rtofs.auto && s.rtofs.auto_reason ? ['RTOFS: ' + escapeHtml(s.rtofs.auto_reason)] : [];
   const currents = curList
-    .map(c => escapeHtml(c.name) + _freshPill(c.name) + (applies(c) ? '' : _NOT_HERE))
-    .concat(missing.map(x => escapeHtml(x.source) + _freshPill(x.source)))
+    .map(c => escapeHtml(c.name) + _freshPill(c.name) + (applies(c) ? '' : _NOT_HERE) + detail(c.name))
+    .concat(missing.map(x => escapeHtml(x.source) + _freshPill(x.source) + detail(x.source)))
     .concat(rtofsNone);
   const toggle = '<button type="button" class="ds-toggle" aria-expanded="' + !_statusCollapsed + '" title="'
     + (_statusCollapsed ? 'Show the data sources in full' : 'Collapse the data sources to one line') + '">'
@@ -1251,7 +1374,8 @@ function _statusLine(s) {
       + row('waves', [f.has_waves ? escapeHtml(f.model || 'forecast') + ', same run' + _freshPill('ECMWF') : '<span class="warn">none in this run</span>'])
       + row('currents', currents.length ? currents : ['none here'])
       + row('tides', [tides])
-      + (s.jobs ? '<span class="statusKey">jobs</span> ' + (s.jobs.running ? 'running' : 'idle') + ', ' + s.jobs.queued + ' queued' : '');
+      + (s.jobs ? '<span class="statusKey">jobs</span> ' + (s.jobs.running ? 'running' : 'idle') + ', ' + s.jobs.queued + ' queued' : '')
+      + _FRESH_LEGEND + _checkLine(s);
   return body
     + _processingLine(s)
     + _lateLine()
@@ -1338,6 +1462,7 @@ export function loadPluginStatus() {
     .then(r => r.json())
     .then(s => {
       _lastStatus = s;
+      _checkSettled(s);
       window.dispatchEvent(new CustomEvent('rp:status', { detail: s }));
       if (el) el.innerHTML = _statusLine(s);
       const net = document.getElementById('netStatus');
@@ -1369,6 +1494,9 @@ export function loadPluginStatus() {
 }
 loadPluginStatus();
 setInterval(loadPluginStatus, 30000);
+if (!_statusCollapsed) _loadCheckEvery();   // the list was left open: its check line names the interval too
+// The units (or the ship's time zone) arrived after the status: the pills read "— old" until the next status, 30 s on.
+window.addEventListener('rp:units', redrawStatusLine);
 loadShipTime();
 setInterval(loadShipTime, 600000);
 document.getElementById('refreshForecast').addEventListener('click', function() {
