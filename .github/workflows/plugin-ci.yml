@@ -15,7 +15,7 @@ jobs:
   plugin-ci:
     permissions:
       contents: read
-    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@dbbbad1d426cea43b1c6530939b375426897a3ce # master 2026-07-17
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@0c8c59f6f948a67ca0df3e6a11bc7ae89a374543 # master 2026-07-17
     with:
       test-command: 'npm test'
       build-command: 'npm run build'
