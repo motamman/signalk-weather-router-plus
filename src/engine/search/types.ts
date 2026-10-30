@@ -9,7 +9,7 @@
 
 import type { LandTest } from '../../geo/landmask';
 import type { CurrentSource, WindSource } from '../environment';
-import type { ModePolicy, SimOptions } from '../legsim';
+import type { LimitMode, ModePolicy, SimOptions } from '../legsim';
 import type { Route, StageFront } from '../route';
 import type { PolarDiagram } from '../../vessel/polar';
 import type { VesselParams } from '../../vessel/vessel';
@@ -91,9 +91,20 @@ export interface ComputeRouteArgs {
   vias?: Via[];
   /** Corridor from the global water grid or the chart mesh route; replaces the internal coarse A* skeleton. */
   corridor?: CorridorInput;
-  /** Wind speed (m/s) and significant wave height (m) a leg must not exceed; candidates over them are not allowed. */
+  /** Wind speed (m/s) and significant wave height (m) limits; over one, a candidate is not allowed (block) or costs more (avoid). */
   maxWindMs?: number;
   maxSwhM?: number;
+  /**
+   * 'water': the end is where the leg joins a chart mesh (a crossing chosen by the waters plan, mesh/waters.ts), which can
+   * lie at the end of a channel the search's straight moves cannot enter. When the search finds no clear straight final
+   * leg to it, the last part follows the shortest path over water on the search's own raster (terminal.ts
+   * waterApproach) instead of failing. Absent: as every other search.
+   */
+  endApproach?: 'water';
+  /** What exceeding each limit does (absent: block), and the avoid surcharge (engine/legsim.ts SimOptions). */
+  maxWindMode?: LimitMode;
+  maxSwhMode?: LimitMode;
+  limitAvoidStrength?: number;
   /** Comfort weight (0 or absent: off): the search prefers calmer water, as the boat meets it, at some cost in time (engine/seas.ts). */
   comfortWeight?: number;
   /** The forecast's last valid step (ms); conditions after it are held at that step. Named in a boxed-in search's error. */
@@ -187,4 +198,9 @@ export interface SearchContext extends PropagatorParams {
   fronts: StageFront[];
   /** Set when start and end coincide: the one-waypoint route to return. */
   degenerateRoute?: Route;
+  /**
+   * With `args.endApproach` 'water': the error the stall detector would have thrown with every via crossed (the front
+   * near the end, no clear final leg), kept while the terminal tries the water path; thrown when that fails too.
+   */
+  stallError?: Error;
 }

@@ -8,6 +8,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An open stretch ending where the leg joins the chart mesh no longer
+  stalls when that point lies up a channel the search's straight moves
+  cannot enter: with no clear straight final leg, the last part follows
+  the shortest path over water to it, as straight moves clear of land.
+
 - Accept `auto` and `signalk-active` selections when submitting routes and
   departure windows. Their provider check stays at dispatch; local file tokens
   are still checked before queuing. Tokenless previews follow `polarSource`,
@@ -16,7 +21,58 @@ uses [Semantic Versioning](https://semver.org/).
   the existing linear polar model and per-wind-speed no-go floors.
 - Keep the polar picker filter during automatic refresh; motor-only routes
   accept managed-polar tokens without resolving them as local files.
+- A chart-mesh segment the route could not make said "cannot be made
+  against the current" whatever the cause; it now names it: over the wind
+  or wave limit, a current stronger than the boat, the polar's no-go
+  angle, or no boat speed.
+- A chart mesh's tiles with no chart data are no longer mesh water. Each
+  mesh covers its district's whole rectangle, and tiles no chart covers
+  (Canadian water off Nova Scotia in 01CGD, much of the open Gulf in 07CGD)
+  were water of unknown depth that the open-water search had to keep out
+  of. That made the rectangle's straight edge a wall at sea, and a leg from
+  open water into the charts could be aimed at a point the search could not
+  reach: a route from Greenland to Block Island stalled 25 km off Cape
+  Sable, at the top of a channel one raster cell wide between the mesh's
+  edge and the coast. Those tiles are now left to the open-water search, and
+  a leg joins the charts where they begin. The rough cuts and joins are
+  rebuilt once for this (the first route that needs one, or Rebuild in the
+  plugin configuration).
+- A route boxed in near a point close to the shore no longer says "the
+  front reached the destination" when it stopped kilometres short, or
+  calls a waypoint ending the leg "the destination": it says how close the
+  search came to which point. A search stopped by land alone is no longer
+  told to choose another departure or offered a longer forecast horizon.
+- A laid-out leg stopped by a wind or wave limit set to block said
+  "(limited); raise Min sail speed so that stretch is motored"; it now
+  says it is over the limit and advises raising the limit, setting it to
+  Avoid, or changing the departure.
 
+
+- **Where a leg joins the charts is chosen by distance over water.** The
+  planner costed each place where open water meets a chart mesh by a
+  straight line, through land. From Greenland to a waypoint at Block Island
+  it aimed the open-water part at the charts off Grand Manan, nearest as the
+  crow flies but the long way round Nova Scotia by sea, and the coastline
+  search stalled about 290 km short. Entries (and exits into the open water
+  a leg ends in) are now costed by the shortest way over the open-water map,
+  and one the water does not reach is not used.
+- **Find Route works in power-boat mode without a boat name or cruise
+  speed.** It stayed off until both were filled in; an empty one is now
+  simply not sent, and the plugin's own vessel settings (its motor speed)
+  apply, the line under the fields saying so for the speed. A route
+  sent before the display units have loaded uses the saved cruise speed as
+  saved (m/s), and the line is checked again once they have.
+- **Power boats see the wind and wave limits.** They sat in the
+  sail-only Sailing strategy section, so a power boat's routes were sent
+  with limits its user could not see or change; they now sit with Comfort
+  in the Route tab's Limits and comfort section, for every vessel type.
+- **Compare departures no longer shows another route's departures.** The
+  table stayed until Compare departures was pressed again, through Reset,
+  a new Find Route, another saved route opened or the markers moved, and
+  the newest comparison came back on every page load whatever route was
+  planned. It now leaves the screen when its route does (one still
+  computing stays, so it can be cancelled), is marked out of date when the
+  markers move, and comes back on load only for the plan on the page.
 
 ### Added
 
@@ -29,6 +85,31 @@ uses [Semantic Versioning](https://semver.org/).
   `signalk-active` API polar tokens. Managed tables are adapted from canonical
   SI resources into the existing `PolarDiagram`; interpolation and routing math
   are unchanged. Each sailing route uses a fixed provider snapshot.
+- **The wind and wave limits can avoid instead of block.** Each limit has
+  a mode: Block (as before: the leg is not allowed) or Avoid (allowed, but
+  time over the limit counts (1 + strength) times as long when the route
+  is chosen, however far over; strength 1 by default). Settings
+  `routing.maxWindMode`, `routing.maxSwhMode`, `routing.limitAvoidStrength`;
+  request fields `max_wind_mode`, `max_swh_mode`, `limit_avoid_strength`;
+  a Block/Avoid switch beside each limit and an Avoid strength on the web
+  page and in the Freeboard panel. The search alone rarely goes round
+  costly water (it keeps one branch per bin on its cost so far, so the
+  wide one is dropped before the straight one pays), so a leg that goes
+  over a limit set to avoid is searched again with the limit blocking, and
+  the cheaper on time plus surcharge is kept. Each leg over a limit set to
+  avoid carries a warning with the seconds over, worked out on the final
+  route, so simplification no longer drops it. The web page and the Freeboard
+  panel send a mode or strength only once the user has chosen it or the
+  routing settings have loaded, so the server's own setting applies until
+  then.
+
+- **Comfort on the Route tab.** The comfort setting (how much the route
+  avoids rough water) is now a slider in the Route tab's new Limits and
+  comfort section, for sail and power boats alike, and beside the limits in the Freeboard
+  panel, chosen per route and remembered per user (synced like the other
+  route choices); the routing setting is where it starts, and is what a
+  route gets until the user chooses. It was only in Settings, for the
+  whole server.
 
 ### Changed
 

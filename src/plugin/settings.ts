@@ -16,6 +16,7 @@
  */
 
 import { DRAWBRIDGE_CHOICES, type DrawbridgeChoice } from '../engine/mesh/route';
+import { LIMIT_MODES, type LimitMode } from '../engine/legsim';
 import * as fs from 'node:fs';
 import { HOUR_S } from '../geo/units';
 import * as path from 'node:path';
@@ -80,6 +81,11 @@ export interface AppSettings {
     maxWind: number | null;
     /** A leg is not allowed where the significant wave height (m) exceeds this; null = no limit. */
     maxSwh: number | null;
+    /** What exceeding each limit does: block (impassable) or avoid (allowed, time over it counting extra). */
+    maxWindMode: LimitMode;
+    maxSwhMode: LimitMode;
+    /** Avoid: each second over a limit counts (1 + this) seconds in the search's choices. */
+    limitAvoidStrength: number;
     comfortWeight: number;
     simStep: number;
     landRasterMaxCells: number;
@@ -599,6 +605,38 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     default: null,
     nullable: true,
     help: 'A leg is not allowed where the significant wave height is above this. Empty = no limit. Needs wave data in the forecast. A route request can override it.',
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.maxWindMode',
+    group: 'routing',
+    label: 'Over the wind limit',
+    type: 'enum',
+    enum: LIMIT_MODES,
+    default: 'block',
+    help: "block: a leg is not allowed where the wind is above the maximum (the route goes round, or fails when it cannot). avoid: it is allowed, but each hour over the maximum counts extra in the search's choices (Avoid strength), and the route shows a warning on each leg that goes over. A route request can choose (max_wind_mode).",
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.maxSwhMode',
+    group: 'routing',
+    label: 'Over the wave limit',
+    type: 'enum',
+    enum: LIMIT_MODES,
+    default: 'block',
+    help: "block: a leg is not allowed where the significant wave height is above the maximum (the route goes round, or fails when it cannot). avoid: it is allowed, but each hour over the maximum counts extra in the search's choices (Avoid strength), and the route shows a warning on each leg that goes over. A route request can choose (max_swh_mode).",
+    reload: 'next_job',
+  },
+  {
+    key: 'routing.limitAvoidStrength',
+    group: 'routing',
+    label: 'Avoid strength',
+    type: 'number',
+    min: 0,
+    max: 10,
+    step: 0.5,
+    default: 1,
+    help: 'How hard the route tries to stay under a limit set to avoid. Higher means it will sail further out of its way to avoid it; 0 means it never detours, it only warns. The times shown stay the real times. A route request can override it (limit_avoid_strength).',
     reload: 'next_job',
   },
   {

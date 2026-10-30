@@ -5,6 +5,21 @@
  * the search reaches them (paged.ts) and drops them as it goes; the tests
  * also read a box of tiles into one set of typed arrays (load).
  *
+ * A tile without chart data is not part of the mesh as read here. The build
+ * meshes every 0.25° tile of a district's rectangle, and a tile no chart
+ * covers (water outside the district's charts, e.g. off Nova Scotia in
+ * 01CGD) comes out as open water of unknown depth in every triangle. As mesh
+ * water it was a wall for the coastline search along the rectangle's straight
+ * edge, and the joining points between the two lay in the sliver it left
+ * against the coast (brain, 2026-10-30: a leg from Greenland to Block Island
+ * aimed at a point at the top of a channel one raster cell wide off Cape
+ * Sable and stalled 25 km out). Such a tile is left out of the index, and a
+ * side facing it is an outer edge (neighbour -1): the coastline search has
+ * that water, and the mesh begins where the charts do. Measured on brain
+ * (2026-10-30): 190 of 01CGD's 538 tiles, 2,670 of 07CGD Gulf's 3,111. The
+ * set is found from the depth column alone and kept beside index.json
+ * (NOCHART_FILE), so a mesh opened per leg does not read it again.
+ *
  * Tile file (little-endian): 32-byte header (magic 'WRPMESH1', uint32 n,
  * float64 originLon, float64 originLat, 4 bytes pad), then
  *   corners    float64[n*6]  (x0, y0, x1, y1, x2, y2): x = lon × xScale (the
@@ -47,6 +62,63 @@ export const HAZARD_DEPTH_UNKNOWN = -1e9;
 
 const MAGIC = 'WRPMESH1';
 const HEADER_BYTES = 32;
+/** The tiles without chart data, kept in the mesh folder: { version, indexSize, indexMtimeMs, files }. */
+export const NOCHART_FILE = '.wrp-nochart.json';
+const NOCHART_VERSION = 1;
+
+/** The tile files of a mesh folder in which every triangle has no depth (no chart data), from each tile's depth column alone. */
+export function scanNoChartTiles(dir: string, index: MeshIndex): string[] {
+  const out: string[] = [];
+  for (const t of index.tiles) {
+    const fd = fs.openSync(path.join(dir, t.file), 'r');
+    try {
+      const buf = Buffer.alloc(t.n * 4);
+      // The depth column follows the header, the corners, the neighbours and the multipliers.
+      fs.readSync(fd, buf, 0, buf.length, HEADER_BYTES + t.n * (48 + 12 + 4));
+      let none = t.n > 0;
+      for (let a = 0; a < t.n && none; a++) none = buf.readFloatLE(a * 4) === NO_VALUE;
+      if (none) out.push(t.file);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  return out;
+}
+
+/** This process's answers, per mesh folder and index.json state. */
+const noChartSeen = new Map<string, { size: number; mtimeMs: number; files: Set<string> }>();
+
+/**
+ * The tiles without chart data of a mesh folder: from this process's last answer, else the folder's NOCHART_FILE when
+ * it was written for this index.json (size and date), else scanned (scanNoChartTiles) and written there; a folder
+ * that cannot be written is scanned each time a process opens it.
+ */
+function noChartTiles(dir: string, index: MeshIndex): Set<string> {
+  const st = fs.statSync(path.join(dir, 'index.json'));
+  const seen = noChartSeen.get(dir);
+  if (seen && seen.size === st.size && seen.mtimeMs === st.mtimeMs) return seen.files;
+  let files: string[] | null = null;
+  try {
+    const kept = JSON.parse(fs.readFileSync(path.join(dir, NOCHART_FILE), 'utf8'));
+    if (kept.version === NOCHART_VERSION && kept.indexSize === st.size && kept.indexMtimeMs === st.mtimeMs && Array.isArray(kept.files))
+      files = kept.files;
+  } catch {
+    /* none yet, or unreadable: scanned below */
+  }
+  if (!files) {
+    files = scanNoChartTiles(dir, index);
+    try {
+      const tmp = path.join(dir, `${NOCHART_FILE}.${process.pid}.tmp`);
+      fs.writeFileSync(tmp, JSON.stringify({ version: NOCHART_VERSION, indexSize: st.size, indexMtimeMs: st.mtimeMs, files }));
+      fs.renameSync(tmp, path.join(dir, NOCHART_FILE));
+    } catch {
+      /* a folder that cannot be written: scanned again next time */
+    }
+  }
+  const set = new Set(files);
+  noChartSeen.set(dir, { size: st.size, mtimeMs: st.mtimeMs, files: set });
+  return set;
+}
 /** Metres per degree of the mesh's metres frame. */
 export const M_PER_DEG_MESH = 111320;
 
@@ -109,19 +181,50 @@ export interface TileArrays {
 
 export class MeshStore {
   private readonly byIJ = new Map<string, MeshTileInfo>();
+  /** The global id ranges [first, end) of the tiles left out (no chart data), ascending by first. */
+  private readonly gaps: [number, number][];
 
   private constructor(
     readonly dir: string,
-    readonly index: MeshIndex
+    /** The index with the tiles without chart data left out (the triangle count as built). */
+    readonly index: MeshIndex,
+    gaps: [number, number][] = []
   ) {
     for (const t of index.tiles) this.byIJ.set(`${t.i},${t.j}`, t);
+    this.gaps = gaps.sort((a, b) => a[0] - b[0]);
   }
 
-  /** Open a mesh folder; throws when index.json is missing or not a version this code reads. */
+  /** Open a mesh folder; throws when index.json is missing or not a version this code reads. Tiles without chart data are left out. */
   static open(dir: string): MeshStore {
     const index = JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8')) as MeshIndex;
     if (index.version !== 1) throw new Error(`mesh ${dir}: index version ${index.version}, this plugin reads version 1`);
-    return new MeshStore(dir, index);
+    const none = noChartTiles(dir, index);
+    if (!none.size) return new MeshStore(dir, index);
+    const left = index.tiles.filter(t => none.has(t.file));
+    return new MeshStore(
+      dir,
+      { ...index, tiles: index.tiles.filter(t => !none.has(t.file)) },
+      left.map(t => [t.first, t.first + t.n])
+    );
+  }
+
+  /** How many tiles were left out for having no chart data. */
+  get tilesWithoutCharts(): number {
+    return this.gaps.length;
+  }
+
+  /** A global id in a tile left out (no chart data)? */
+  private inGap(g: number): boolean {
+    const G = this.gaps;
+    let lo = 0;
+    let hi = G.length - 1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      if (g < G[m][0]) hi = m - 1;
+      else if (g >= G[m][1]) lo = m + 1;
+      else return true;
+    }
+    return false;
   }
 
   tileIJ(lon: number, lat: number): [number, number] {
@@ -235,6 +338,12 @@ export class MeshStore {
     at += n * 48;
     const nb = new Int32Array(buf.buffer, at, n * 3);
     at += n * 12;
+    // A neighbour in a tile left out (no chart data): the side is the mesh's outer edge.
+    if (this.gaps.length)
+      for (let q = 0; q < n * 3; q++) {
+        const g = nb[q];
+        if (g >= 0 && (g < info.first || g >= info.first + n) && this.inGap(g)) nb[q] = -1;
+      }
     const mult = f32(n);
     const depth = f32(n);
     const clear = f32(n);

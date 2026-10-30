@@ -77,6 +77,8 @@ export interface LegPlan {
   snapToExact: boolean;
   /** Circle radius for an approximate leg (undefined when exact). */
   arrivalRadiusM?: number;
+  /** 'water': `end` is where the leg joins a chart mesh, reached along the water path when no straight leg can (search/types.ts ComputeRouteArgs). */
+  endApproach?: 'water';
 }
 
 /**

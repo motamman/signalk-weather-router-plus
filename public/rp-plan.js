@@ -32,6 +32,13 @@ let _routeReady = false;      // start, end (power mode: the boat) set; Find Rou
 // mode. routeSource.getFeatures() is not in route order (spatial index).
 let _routePoints = [];
 
+// The departure window on screen (Best departure, below): declared here, before any start-up code, because
+// markRouteStale, _clearRoute and _loadRouteJob reach it and a `let` further down is not initialised yet then.
+let _win = null;        // the window on screen (GET /api/windows/:id)
+let _winTimer = null;
+let _winOpenJob = null; // the departure's route opened from the table
+let _winStale = false;  // the markers moved since the window on screen was started
+
 let _activeReplanES = null;
 function closeReplanStream() { if (_activeReplanES) { try { _activeReplanES.close(); } catch (_) {} _activeReplanES = null; } }
 
@@ -469,6 +476,8 @@ function _loadRouteJob(id, given) {
   }
   _currentRouteJobId = id;
   _currentRouteName = job && job.request ? (job.request.name || '') : '';
+  // Another saved route: the departures compared for the one before leave the screen; one of the window's own keeps them.
+  if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
   authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(geojson => {
@@ -620,8 +629,16 @@ function getVesselType() {
 function readPowerBoat() {
   return {
     name: (/** @type {HTMLInputElement} */ (document.getElementById('pb_name')).value || '').trim(),
-    cruise_ms: _limitSI('pb_cruise'),
+    cruise_ms: _cruiseSI(),
   };
+}
+// The cruise speed in m/s: the field, read in the user's unit; before that unit has loaded the field cannot be read,
+// so the speed saved in m/s is used as it is (PR #91 review: a route sent in that moment went without it).
+function _cruiseSI() {
+  const v = _limitSI('pb_cruise');
+  if (v !== null || UI_UNITS[_LIMITS.pb_cruise]) return v;
+  const s = prefs.get('routeVar:pb_cruise:si');
+  return s !== null && s !== '' && Number.isFinite(+s) ? +s : null;
 }
 function validatePowerBoat() {
   const pb = readPowerBoat();
@@ -643,22 +660,17 @@ function loadPowerBoat() {
   } catch (_) {}
 }
 function refreshFindRouteEnabled() {
-  // Find Route stays disabled until start + end are set; power mode
-  // additionally requires the boat's name and cruise speed.
+  // Find Route stays disabled until start + end are set. The power boat's
+  // name and cruise speed are not required: one left empty is not sent, and
+  // the plugin's own vessel settings (its motor speed) apply; the line under
+  // them says so.
   const btn = /** @type {HTMLButtonElement} */ (document.getElementById('findRoute'));
   const haveEndpoints = !!(startCoord && endCoord);
   let blocked = !haveEndpoints;
   const status = document.getElementById('pb_status');
-  if (getVesselType() === 'power') {
-    const missing = validatePowerBoat();
-    if (missing.length) {
-      blocked = true;
-      if (status) status.textContent = 'Fill in: ' + missing.join(', ');
-    } else if (status) {
-      status.textContent = '';
-    }
-  } else if (status) {
-    status.textContent = '';
+  if (status) {
+    const missing = getVesselType() === 'power' ? validatePowerBoat() : [];
+    status.textContent = missing.includes('cruise speed') ? 'No cruise speed: the plugin\'s motor speed setting is used.' : '';
   }
   _routeReady = !blocked; // Compare departures needs the same, but may start while a route computes
   if (_routeComputing) blocked = true;
@@ -1291,6 +1303,7 @@ function updatePlanHint() {
 // so marker changes during the first computation (routeActive still
 // false) still flag the result as stale when it lands.
 function markRouteStale() {
+  _winMarkStale();
   if ((!routeActive && !_routeComputing) || _routeStale) { updatePlanHint(); return; }
   _routeStale = true;
   if (_lastRouteProps) renderResultStrip(_lastRouteProps, _lastNavWarns);
@@ -1338,6 +1351,60 @@ function _initRouteChoices() {
     if (saved && [...el.options].some(o => o.value === saved)) el.value = saved;
     el.addEventListener('change', () => { prefs.set(key, el.value); });
   }
+}
+// Block / Avoid for each limit and the avoid strength: remembered per browser and Signal K user (rp-prefs.js); until
+// the user chooses, the plugin's routing settings. The strength shows only when a limit is set to avoid.
+function _initLimitModes() {
+  const modes = [['maxWindMode', 'routeVar:maxWindMode'], ['maxSwhMode', 'routeVar:maxSwhMode']];
+  const strength = /** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength'));
+  if (!strength) return;
+  const sync = () => {
+    const shown = document.getElementById('limitAvoidStrengthValue');
+    if (shown) shown.textContent = strength.value;
+    const any = modes.some(([id]) => /** @type {HTMLSelectElement} */ (document.getElementById(id)).value === 'avoid');
+    document.getElementById('limitStrengthRow').hidden = !any;
+    document.getElementById('limitStrengthHint').hidden = !any;
+  };
+  for (const [id, key] of modes) {
+    const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
+    const saved = prefs.get(key);
+    if (saved === 'block' || saved === 'avoid') { el.value = saved; el.dataset.known = '1'; }
+    el.addEventListener('change', () => { el.dataset.known = '1'; prefs.set(key, el.value); sync(); });
+  }
+  // Comfort, per route as the limits are: remembered, the routing setting until the user chooses.
+  const comfort = /** @type {HTMLInputElement} */ (document.getElementById('comfortWeight'));
+  // Until the user chooses or the routing setting has loaded, the slider's position is not what a route gets: no
+  // number is shown for it (PR #91 review), and none is sent (buildRoutePayload).
+  const showComfort = () => {
+    document.getElementById('comfortWeightValue').textContent = comfort.dataset.known ? comfort.value : 'server setting';
+  };
+  const savedC = prefs.get('routeVar:comfortWeight');
+  if (savedC && Number.isFinite(+savedC)) { comfort.value = savedC; comfort.dataset.known = '1'; }
+  comfort.addEventListener('input', () => { comfort.dataset.known = '1'; showComfort(); });
+  comfort.addEventListener('change', () => { comfort.dataset.known = '1'; showComfort(); prefs.set('routeVar:comfortWeight', comfort.value); });
+  showComfort();
+  const savedS = prefs.get('routeVar:limitAvoidStrength');
+  if (savedS && Number.isFinite(+savedS)) { strength.value = savedS; strength.dataset.known = '1'; }
+  strength.addEventListener('input', () => { strength.dataset.known = '1'; sync(); });
+  strength.addEventListener('change', () => { strength.dataset.known = '1'; prefs.set('routeVar:limitAvoidStrength', strength.value); });
+  sync();
+  authFetch(API + '/settings', { cache: 'no-store' }, null)
+    .then(r => (r.ok ? r.json() : null))
+    .then(s => {
+      const r = (s && s.values && s.values.routing) || {};
+      for (const [id, key] of modes) {
+        const v = r[id];
+        const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
+        if (!prefs.get(key) && (v === 'block' || v === 'avoid')) { el.value = v; el.dataset.known = '1'; }
+      }
+      if (!prefs.get('routeVar:limitAvoidStrength') && Number.isFinite(r.limitAvoidStrength)) {
+        strength.value = String(r.limitAvoidStrength);
+        strength.dataset.known = '1';
+      }
+      if (!prefs.get('routeVar:comfortWeight') && Number.isFinite(r.comfortWeight)) { comfort.value = String(r.comfortWeight); comfort.dataset.known = '1'; showComfort(); }
+      sync();
+    })
+    .catch(() => {});
 }
 // Smoothing applies to both routers (the owner's decision, 2026-10-08): a
 // shortcut replaces laid-out tacks only where the straight course can be
@@ -1400,6 +1467,7 @@ document.getElementById('resetBtn').addEventListener('click', function() {
 // The route and every marker gone (the Reset button, and "Clear route and start new" in the far-waypoint prompt).
 function _clearRoute() {
   _hideRecompute();
+  _winRouteGone();
   startCoord = null;
   endCoord = null;
   waypointCoords = [];
@@ -1489,6 +1557,7 @@ function _restorePlan() {
 }
 _restorePlan();
 _initRouteChoices();
+_initLimitModes();
 _syncSmoothing();
 document.getElementById('departure').addEventListener('change', _savePlan);
 
@@ -1752,6 +1821,7 @@ function showModal() {
   modalItinerary.style.display = 'block';
   modalStatus.textContent = 'Starting...';
   _routeStale = false;
+  _winRouteGone();
   _routeComputing = true;
   // A new request: the route on the map goes with its strip and name (the owner, 2026-10-12); a request that fails
   // leaves the map without a route and shows the error. The markers and waypoints stay.
@@ -1816,6 +1886,10 @@ function _warningKind(w) {
   if (w.violation === 'beat_motored') {
     const s = Number(w.detail);
     return 'motored a beat: no room to tack there' + (s > 0 && fmtTime(s) ? ', ' + fmtTime(s) + ' under motor' : '');
+  }
+  if (w.violation === 'wind_over_limit' || w.violation === 'waves_over_limit') {
+    const s = Number(w.detail);
+    return 'over the ' + (w.violation === 'wind_over_limit' ? 'wind' : 'wave') + ' limit' + (s > 0 && fmtTime(s) ? ' for ' + fmtTime(s) : '');
   }
   return escapeHtml(String(w.violation || 'warning').replace(/_/g, ' '));
 }
@@ -2247,6 +2321,23 @@ function buildRoutePayload(overrides) {
   const maxWindMs = _limitSI('maxWind'), maxSwhM = _limitSI('maxSwh');
   if (maxWindMs !== null) body.max_wind_ms = maxWindMs;
   if (maxSwhM !== null) body.max_swh_m = maxSwhM;
+  // Block / Avoid for each limit, and the avoid strength when one avoids: each only when the user chose it or the
+  // routing settings gave it; the controls' built-in starts (Block, 1) are not sent, so a request made before the
+  // settings load, or when they fail, keeps the server's own (PR #91 review).
+  for (const [id, field] of [['maxWindMode', 'max_wind_mode'], ['maxSwhMode', 'max_swh_mode']]) {
+    const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
+    if (el && el.value && el.dataset.known) body[field] = el.value;
+  }
+  // Only a value the user chose or the routing setting gave: the slider's built-in start is not sent (PR #91 review).
+  const comfortEl = /** @type {HTMLInputElement} */ (document.getElementById('comfortWeight'));
+  const comfort = parseFloat(comfortEl.value);
+  if (comfortEl.dataset.known && Number.isFinite(comfort) && comfort >= 0) body.comfort_weight = comfort;
+  const strengthEl = /** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength'));
+  const avoiding = ['maxWindMode', 'maxSwhMode'].some(id => /** @type {HTMLSelectElement} */ (document.getElementById(id)).value === 'avoid');
+  if (avoiding && strengthEl.dataset.known) {
+    const v = parseFloat(strengthEl.value);
+    if (Number.isFinite(v) && v >= 0) body.limit_avoid_strength = v;
+  }
   if (overrides.departure !== undefined) body.departure = overrides.departure;
   else if (fromClockInput(depVal)) body.departure = fromClockInput(depVal).toISOString();
   const name = (/** @type {HTMLInputElement} */ (document.getElementById('routeName')).value || '').trim();
@@ -2271,9 +2362,10 @@ function buildRoutePayload(overrides) {
   // and sends the boat's name and cruise speed as a per-request override.
   if (getVesselType() === 'power') {
     body.mode = 'motor';
+    // Each only when filled in: an empty one leaves the plugin's own vessel settings (its motor speed) to apply.
     const pb = readPowerBoat();
-    vessel.name = pb.name;
-    vessel.motor_speed_ms = pb.cruise_ms;
+    if (pb.name) vessel.name = pb.name;
+    if (pb.cruise_ms != null && pb.cruise_ms > 0) vessel.motor_speed_ms = pb.cruise_ms;
   } else {
     const polarPath = /** @type {HTMLSelectElement} */ (document.getElementById('polarSelect')).value;
     if (polarPath) vessel.polar = polarPath;
@@ -2328,6 +2420,8 @@ function _initLimitInputs() {
       prefs.set('routeVar:' + id + ':si', v === null ? '' : String(v));
     };
   }
+  // The cruise speed restored: the line under the power boat's fields says what a route now gets (PR #91 review).
+  refreshFindRouteEnabled();
 }
 window.addEventListener('rp:units', _initLimitInputs);
 
@@ -3619,9 +3713,33 @@ const _WIN_SORTS = {
   upwind:   { label: 'least time close-hauled', key: m => m.upwind_time_s },
 };
 const _WIN_STATUS_TEXT = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled', skipped: 'skipped' };
-let _win = null;        // the window on screen (GET /api/windows/:id)
-let _winTimer = null;
-let _winOpenJob = null; // the departure's route opened from the table
+// (Its state is declared with the route state at the top: markRouteStale and _clearRoute reach it from start-up code.)
+
+// The window on screen belongs to a route that is gone (Reset, a new Find Route, another saved route opened): it leaves
+// the screen, kept on the server. One still running stays, marked out of date, so it can still be cancelled.
+function _winRouteGone() {
+  if (!_win) return;
+  if (_win.status === 'running') { _winMarkStale(); return; }
+  clearTimeout(_winTimer);
+  _win = null;
+  _winOpenJob = null;
+  _winStale = false;
+  _winRender();
+}
+// The markers moved: the window on screen compared the route before.
+function _winMarkStale() {
+  if (!_win || _winStale) return;
+  _winStale = true;
+  _winRender();
+}
+// Does a window's request describe the plan on the page (start, destination, waypoints)?
+function _winMatchesPlan(w) {
+  const rt = w && w.request && w.request.route;
+  if (!rt || !rt.start || !rt.end || !startCoord || !endCoord) return false;
+  const same = (p, c) => Math.abs(p.lat - c[1]) < 1e-6 && Math.abs(p.lon - c[0]) < 1e-6;
+  const wps = Array.isArray(rt.waypoints) ? rt.waypoints : [];
+  return same(rt.start, startCoord) && same(rt.end, endCoord) && wps.length === waypointCoords.length && wps.every((p, i) => same(p, waypointCoords[i]));
+}
 
 // The departures the inputs describe (ms), or null with the reason.
 function _winPlan() {
@@ -3679,6 +3797,9 @@ function _winPoll(id) {
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(w => {
       started();
+      // Another window replacing the one on screen: the out-of-date note belonged to the old one (PR #91 review: it
+      // was cleared on Start, while the old rows were still shown).
+      if (!_win || _win.id !== w.id) _winStale = false;
       _win = w;
       _winRender();
       // After a cancel the departure computing ends a moment later: followed until it has.
@@ -3769,6 +3890,7 @@ function _winRender() {
   html += '</tbody></table></div>';
   if (w.departures.some(d => d.metrics && d.metrics.beyond_forecast)) html += '<div class="ctl-hint">* arrives after the forecast ends; not ranked.</div>';
   html += '<div class="ctl-hint">The forecast grows less certain with every day ahead: compare the late departures again on a newer run.</div>';
+  if (_winStale) html = '<div class="rs-stale">Compared for the route before the markers changed; Compare departures again for this one.</div>' + html;
   out.innerHTML = html;
   /** @type {HTMLSelectElement} */ (out.querySelector('#windowSort')).onchange = e => {
     try { localStorage.setItem('rp:windowSort', /** @type {HTMLSelectElement} */ (e.target).value); } catch (_) { /* not remembered */ }
@@ -3816,7 +3938,8 @@ function _winOpen(jobId) {
   // The newest window, if any: shown again (and followed while it runs).
   authFetch(API + '/windows?limit=1', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : []))
-    .then(list => { if (Array.isArray(list) && list.length) _winPoll(list[0].id); })
+    // Only when it compared the plan on the page: another route's departures would sit beside this one's.
+    .then(list => { if (Array.isArray(list) && list.length && _winMatchesPlan(list[0])) _winPoll(list[0].id); })
     .catch(() => { /* none: nothing to show */ });
 })();
 

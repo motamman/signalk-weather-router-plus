@@ -235,7 +235,15 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
       <input id="maxSwh" type="number" step="0.5" min="0" placeholder="max waves" aria-label="Maximum wave height">
       <span id="maxSwhUnit" class="muted"></span>
     </div>
-    <span class="muted small">Legs with more wind or higher waves than this are not allowed. Empty = no limit.</span>
+    <div class="row">
+      <label class="small">Wind <select id="maxWindMode" aria-label="Over the wind limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
+      <label class="small">Waves <select id="maxSwhMode" aria-label="Over the wave limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
+      <label class="small" id="limitStrengthRow" hidden>Avoid strength <input id="limitAvoidStrength" type="range" step="0.5" min="0" max="10" value="1" aria-label="Avoid strength"> <span id="limitAvoidStrengthValue"></span></label>
+    </div>
+    <div class="row">
+      <label class="small">Comfort <input id="comfortWeight" type="range" step="0.1" min="0" max="3" value="1" aria-label="Comfort"> <span id="comfortWeightValue"></span></label>
+    </div>
+    <span class="muted small">Comfort: how much the route avoids rough water as the boat meets it; higher gives up more time for a smoother passage, 0 turns it off. Block: legs with more wind or higher waves than this are not allowed. Avoid: the route tries to stay under the limit, and warns where it goes over; the higher the avoid strength, the further out of its way it will sail to avoid it (0: it never detours, it only warns). Empty = no limit.</span>
   </div>
   <div class="row">
     <button id="cancel" type="button" hidden>Cancel</button>
@@ -1215,6 +1223,17 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     if (mw !== null) body.max_wind_ms = mw;
     var mh = limitSI('maxSwh', lengthUnit());
     if (mh !== null) body.max_swh_m = mh;
+    // Only a value the user chose or the routing setting gave: the slider's built-in start is not sent (PR #91 review).
+    var comfort = num('comfortWeight');
+    if ($('comfortWeight').dataset.known && comfort !== null && comfort >= 0) body.comfort_weight = comfort;
+    // Each only when the user chose it or the routing settings gave it: the controls' built-in starts (Block, 1) are
+    // not sent, so a request made before the settings load, or when they fail, keeps the server's own (PR #91 review).
+    if ($('maxWindMode').dataset.known) body.max_wind_mode = $('maxWindMode').value;
+    if ($('maxSwhMode').dataset.known) body.max_swh_mode = $('maxSwhMode').value;
+    if (($('maxWindMode').value === 'avoid' || $('maxSwhMode').value === 'avoid') && $('limitAvoidStrength').dataset.known) {
+      var strength = num('limitAvoidStrength');
+      if (strength !== null && strength >= 0) body.limit_avoid_strength = strength;
+    }
     return body;
   }
 
@@ -1226,6 +1245,53 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
   function limitKey(id) { return 'routeVar:' + id + ':si'; }
   function oldLimitKey(id) { return 'wrp-plotterext-' + id + '-ms'; }
   var limitDefaultsMs = { maxWind: null, maxSwh: null };
+  // Block / Avoid per limit and the avoid strength, kept with the user's choices under the web app's keys; until the
+  // user chooses, the plugin's routing settings. The strength shows only when a limit avoids.
+  var limitModeDefaults = { maxWindMode: 'block', maxSwhMode: 'block', limitAvoidStrength: 1, comfortWeight: 1 };
+  function syncLimitModes() {
+    $('limitStrengthRow').hidden = $('maxWindMode').value !== 'avoid' && $('maxSwhMode').value !== 'avoid';
+    $('limitAvoidStrengthValue').textContent = $('limitAvoidStrength').value;
+  }
+  function showLimitModes() {
+    ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
+      var v = choice('routeVar:' + id, 'wrp-plotterext-' + id);
+      var saved = v === 'block' || v === 'avoid';
+      $(id).value = saved ? v : limitModeDefaults[id];
+      if (saved || limitModeDefaults.modesKnown) $(id).dataset.known = '1';
+    });
+    var cw = choice('routeVar:comfortWeight', 'wrp-plotterext-comfortWeight');
+    var savedCw = cw !== null && cw !== '' && isFinite(+cw);
+    $('comfortWeight').value = savedCw ? cw : String(limitModeDefaults.comfortWeight);
+    if (savedCw || limitModeDefaults.comfortKnown) $('comfortWeight').dataset.known = '1';
+    showComfort();
+    var s = choice('routeVar:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength');
+    var savedS = s !== null && s !== '' && isFinite(+s);
+    $('limitAvoidStrength').value = savedS ? s : String(limitModeDefaults.limitAvoidStrength);
+    if (savedS || limitModeDefaults.modesKnown) $('limitAvoidStrength').dataset.known = '1';
+    syncLimitModes();
+  }
+  ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
+    $(id).addEventListener('change', function () {
+      this.dataset.known = '1';
+      setChoice('routeVar:' + id, 'wrp-plotterext-' + id, this.value);
+      syncLimitModes();
+    });
+  });
+  $('limitAvoidStrength').addEventListener('input', function () { this.dataset.known = '1'; syncLimitModes(); });
+  // Until the user chooses or the routing setting has loaded, the slider's position is not what a route gets: no
+  // number is shown for it (PR #91 review), and none is sent (requestBody).
+  function showComfort() {
+    var el = $('comfortWeight');
+    $('comfortWeightValue').textContent = el.dataset.known ? el.value : 'server setting';
+  }
+  $('comfortWeight').addEventListener('input', function () { this.dataset.known = '1'; showComfort(); });
+  $('comfortWeight').addEventListener('change', function () {
+    this.dataset.known = '1';
+    setChoice('routeVar:comfortWeight', 'wrp-plotterext-comfortWeight', this.value);
+  });
+  $('limitAvoidStrength').addEventListener('change', function () {
+    setChoice('routeVar:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength', this.value);
+  });
   function showLimits() {
     [['maxWind', speedUnit()], ['maxSwh', lengthUnit()]].forEach(function (pair) {
       var id = pair[0], u = pair[1];
@@ -1274,9 +1340,17 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
       if (isFinite(r.sailThreshold)) sailThreshDefaultMs = r.sailThreshold;
       if (r.maxWind !== null && isFinite(r.maxWind)) limitDefaultsMs.maxWind = r.maxWind;
       if (r.maxSwh !== null && isFinite(r.maxSwh)) limitDefaultsMs.maxSwh = r.maxSwh;
+      ['maxWindMode', 'maxSwhMode'].forEach(function (id) { if (r[id] === 'block' || r[id] === 'avoid') limitModeDefaults[id] = r[id]; });
+      limitModeDefaults.modesKnown = true;
+      if (isFinite(r.limitAvoidStrength)) limitModeDefaults.limitAvoidStrength = r.limitAvoidStrength;
+      if (isFinite(r.comfortWeight)) {
+        limitModeDefaults.comfortWeight = r.comfortWeight;
+        limitModeDefaults.comfortKnown = true;
+      }
       showSailThresh();
       showLimits();
-    }).catch(function () { showSailThresh(); showLimits(); });
+      showLimitModes();
+    }).catch(function () { showSailThresh(); showLimits(); showLimitModes(); });
   }
   $('mode').addEventListener('change', showSailThresh);
   $('sailThresh').addEventListener('change', function () {

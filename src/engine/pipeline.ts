@@ -23,7 +23,7 @@ import { CorridorError, mergeVias, planCorridor, type ChainVia, type Corridor } 
 import { NoWind, type CurrentSource } from './environment';
 import { RouteError } from './errors';
 import { forecastHorizonNote, type LegWind } from './horizon';
-import type { ModePolicy } from './legsim';
+import type { LimitMode, ModePolicy } from './legsim';
 import { stitchLegParts } from './mesh/handover';
 import { isRefusal, type LegReach, type MeshLegRunner, type MeshRefusal, meshRulesFor } from './mesh/leg';
 import { type DrawbridgeChoice, MESH_BOX_PAD_MAX_DEG, type MeshRules } from './mesh/route';
@@ -32,7 +32,8 @@ import { DEFAULT_ROUTER, makeRouter, type RouterKind } from './router';
 import { enrichLegRanges, enrichWaypoints, RouteCancelled, ViasNotCrossedError, type PropagatorOptions } from './propagator';
 import type { ProgressFn } from './progress';
 import { recomputePerWaypointMetadata, type Route, type StageFront } from './route';
-import { rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother } from './smoother';
+import { limitWarnings, rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother } from './smoother';
+import { computeAvoidingLimits } from './limitavoid';
 
 export type { LegWind } from './horizon';
 
@@ -56,6 +57,9 @@ export interface LegPipelineInputs {
     simStepM: number;
     maxWindMs?: number;
     maxSwhM?: number;
+    maxWindMode?: LimitMode;
+    maxSwhMode?: LimitMode;
+    limitAvoidStrength?: number;
     comfortWeight?: number;
     tackPenaltyS?: number;
   };
@@ -307,6 +311,8 @@ async function chartsLeg(
   const coastal: LegPipelineInputs = { ...inp, landFor: b => (mask ? inp.landFor(b).withExtraLand(mask) : inp.landFor(b)) };
   if (p.kind === 'open') return openWaterLeg(coastal, plan, legIndex, legStart, legDeparture, tag, null, false, box);
   const exactAt = (end: [number, number]): LegPlan => ({ ...plan, end, snapToExact: true, arrivalRadiusM: undefined });
+  // An open stretch ending where the leg joins the charts: that point may lie up a channel the search cannot enter.
+  const joinAt = (end: [number, number]): LegPlan => ({ ...exactAt(end), endApproach: 'water' });
   const where = (q: [number, number]): string => `${q[1].toFixed(4)}, ${q[0].toFixed(4)}`;
   const parts: Route[] = [];
   let at = legDeparture;
@@ -321,7 +327,8 @@ async function chartsLeg(
           `the chart mesh cannot take the leg's stretch on the charts from ${where(st.from)} to ${where(st.to)}: ${mr.refused}`
         );
       part = mr;
-    } else part = await openWaterLeg(coastal, sub, legIndex, st.from, at, tag, null, false, box);
+    } else
+      part = await openWaterLeg(coastal, k === p.stretches.length - 1 ? sub : joinAt(st.to), legIndex, st.from, at, tag, null, false, box);
     inp.releaseAreas?.();
     parts.push(part);
     at = part.waypoints[part.waypoints.length - 1].time;
@@ -495,6 +502,9 @@ async function openWaterLeg(
     sailThreshMs: inp.sim.sailThreshMs,
     maxWindMs: inp.sim.maxWindMs,
     maxSwhM: inp.sim.maxSwhM,
+    maxWindMode: inp.sim.maxWindMode,
+    maxSwhMode: inp.sim.maxSwhMode,
+    limitAvoidStrength: inp.sim.limitAvoidStrength,
     comfortWeight: inp.sim.comfortWeight,
     tackPenaltyS: inp.sim.tackPenaltyS,
     forecastEndMs: legWind ? legWind.validRange[1].getTime() : undefined,
@@ -503,14 +513,22 @@ async function openWaterLeg(
     corridor: corridor ? { skeleton: corridor.skeleton, widthM: corridor.widthM } : undefined,
     arrivalRadiusM: plan.arrivalRadiusM,
     snapToExact: plan.snapToExact,
+    endApproach: plan.endApproach,
     onProgress: multi ? (st: number, tot: number, m: string) => progress(st, tot, `${tag}${m}`) : progress,
     // Each stage's front, streamed for the web app's display (never stored with the job).
     onFrontier: inp.onFrontier ? (front: StageFront) => inp.onFrontier!(legIndex, front) : undefined,
     shouldCancel,
   };
+  // Limits set to avoid: the route searched through, compared with the way round (engine/limitavoid.ts).
+  const search = (a: typeof legArgs): Route =>
+    computeAvoidingLimits(
+      x => prop.computeRoute(x),
+      a,
+      m => progress(0, 0, `${tag}${m}`)
+    );
   let r: Route;
   try {
-    r = prop.computeRoute(legArgs);
+    r = search(legArgs);
   } catch (err) {
     // The corridor's automatic vias are only guidance: when the search
     // finds another passage (e.g. The Race instead of the gap past
@@ -525,7 +543,7 @@ async function openWaterLeg(
         .map(v => v.name ?? 'a narrow passage')
         .join(', ')}; routing again without them`
     );
-    r = prop.computeRoute({ ...legArgs, vias: plan.vias.length ? plan.vias : undefined });
+    r = search({ ...legArgs, vias: plan.vias.length ? plan.vias : undefined });
   }
   // Simplification: RDP, then the shortcut smoother.
   const nRdp = rdpSimplify(r, land, inp.simplifyM);
@@ -543,6 +561,9 @@ async function openWaterLeg(
           simStepM: inp.smootherSimStepM ?? legArgs.simStepM,
           maxWindMs: legArgs.maxWindMs,
           maxSwhM: legArgs.maxSwhM,
+          maxWindMode: legArgs.maxWindMode,
+          maxSwhMode: legArgs.maxSwhMode,
+          limitAvoidStrength: legArgs.limitAvoidStrength,
           comfortWeight: legArgs.comfortWeight,
         },
         tolerance: inp.smootherTolerance,
@@ -559,6 +580,14 @@ async function openWaterLeg(
       `${tag}simplified: ${nRdp} waypoint(s) within {length:${inp.simplifyM}} of a straight line, ${nSm} replaced by straight shortcuts; ${r.waypoints.length} left`
     );
   }
+  // Legs over a limit set to avoid, on the route as it now stands.
+  limitWarnings(r, {
+    vessel: inp.vessel,
+    polar: inp.polar,
+    wind: legWind ?? new NoWind(),
+    current,
+    sim: { ...inp.sim, simStepM: legArgs.simStepM },
+  });
   // The wind/wave range of each leg, for the briefing cards: a smoothed
   // leg can span many hours, where one end-of-leg sample misleads.
   enrichLegRanges(r, legWind ?? new NoWind());

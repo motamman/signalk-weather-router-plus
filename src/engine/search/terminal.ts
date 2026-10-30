@@ -14,6 +14,8 @@ import type { CurrentSource, WindSource } from '../environment';
 import { simulateLegTime, type LegSimResult, type ModePolicy, type SimOptions, DEFAULT_TACK_PENALTY_S } from '../legsim';
 import type { PolarDiagram } from '../../vessel/polar';
 import type { VesselParams } from '../../vessel/vessel';
+import { cellOf, LandMask, type CellMask } from '../../geo/landmask';
+import { waterFieldOver } from '../mesh/waters';
 import { forecastNote, tryNote } from './context';
 import { RouteError, TERMINAL_EVAL, ViasNotCrossedError, type Candidate, type SearchContext } from './types';
 import type { SkeletonGuide } from './zones';
@@ -25,6 +27,117 @@ export interface Terminal {
   tackCand: Candidate | null;
   /** The end of the final leg (null when the leg ends at bestC, inside the arrival circle). */
   finalCand: Candidate | null;
+  /** The final approach along the water path (waterApproach), after bestC, ending at the end; tackCand and finalCand are then null. */
+  approach?: Candidate[];
+}
+
+/**
+ * The last part of an open stretch that ends where the leg joins a chart mesh (`args.endApproach` 'water'), when no
+ * clear straight final leg reaches that point: the shortest path over water to it on the search's own raster (the
+ * coastline land as the search sees it, the meshes' water among it), from the front's candidate with the least cost
+ * so far plus the path's length at cruise speed (the bin cost's measure, search/stages.ts, with the water path in
+ * place of the straight remaining distance). The path is walked down the distance field cell by cell, cut to the
+ * fewest straight moves the search's own land test lets through, and each move timed under the search's rules. Null
+ * when the water does not reach the front, or a move cannot be made: the caller fails as it would have.
+ */
+function waterApproach(ctx: SearchContext, stages: Candidate[][]): { bestC: Candidate; stageOfBest: number; approach: Candidate[] } | null {
+  const { landMask, eLon, eLat, cruise, vessel, polar, wind, current, simOpts, progress } = ctx;
+  let stageOfBest = stages.length - 1;
+  while (stageOfBest > 0 && stages[stageOfBest].length === 0) stageOfBest--;
+  const front = stages[stageOfBest].filter(c => c.viaCount === ctx.nVias);
+  if (!front.length) return null;
+  // The coastline raster (a view of it with the meshes' water as land, pipeline.ts); a search on other land (a mesh
+  // stretch's, mesh/legrun.ts) has no raster to walk.
+  if (!(landMask instanceof LandMask)) return null;
+  const { nx, ny, resolutionDeg: r, bbox } = landMask;
+  const centre = (c: number): [number, number] => [bbox.west + ((c % nx) + 0.5) * r, bbox.south + (Math.floor(c / nx) + 0.5) * r];
+  const free = (c: number): boolean => {
+    const [lon, lat] = centre(c);
+    return !landMask.isLand(lon, lat);
+  };
+  // The raster's grid, for cellOf (which reads no cells).
+  const grid: CellMask = { nx, ny, resolutionDeg: r, bbox, cells: new Uint8Array(0) };
+  const endCell = cellOf(grid, eLon, eLat);
+  const field = waterFieldOver(grid, free, endCell);
+  if (!field) return null;
+  let bestC: Candidate | null = null;
+  let bestCost = Infinity;
+  for (const c of front) {
+    const cell = cellOf(grid, c.lon, c.lat);
+    if (cell < 0 || !Number.isFinite(field[cell])) continue;
+    const cost = c.costS + field[cell] / cruise;
+    if (cost < bestCost) {
+      bestCost = cost;
+      bestC = c;
+    }
+  }
+  if (!bestC) return null;
+  // Down the field to the end: the neighbour nearest it by water at each step (the field's own moves).
+  const cells: number[] = [];
+  let cur = cellOf(grid, bestC.lon, bestC.lat);
+  while (cur !== endCell) {
+    const i = cur % nx;
+    const j = Math.floor(cur / nx);
+    let next = -1;
+    for (let dj = -1; dj <= 1; dj++)
+      for (let di = -1; di <= 1; di++) {
+        if (di === 0 && dj === 0) continue;
+        const ii = i + di;
+        const jj = j + dj;
+        if (ii < 0 || ii >= nx || jj < 0 || jj >= ny) continue;
+        const n = jj * nx + ii;
+        // The field's own moves only: water, and a diagonal where both cells beside it are water (waterFieldOver), so
+        // the walk never slips between two land cells touching at a corner (PR #91 review).
+        // The end's own cell is the field's source, passable whatever it is.
+        if ((n !== endCell && !free(n)) || (di !== 0 && dj !== 0 && (!free(j * nx + ii) || !free(jj * nx + i)))) continue;
+        if (next < 0 || field[n] < field[next]) next = n;
+      }
+    if (next < 0 || !(field[next] < field[cur])) return null;
+    cur = next;
+    if (cur !== endCell) cells.push(cur);
+  }
+  const path: [number, number][] = [[bestC.lon, bestC.lat], ...cells.map(centre), [eLon, eLat]];
+  // The fewest straight moves: from each point, the farthest one ahead whose move is clear.
+  const pts: [number, number][] = [path[0]];
+  let k = 0;
+  const crosses = (a: [number, number], b: [number, number]): boolean =>
+    landMask.legsCrossLandBulk(Float64Array.of(a[0]), Float64Array.of(a[1]), Float64Array.of(b[0]), Float64Array.of(b[1]))[0] !== 0;
+  while (k < path.length - 1) {
+    // One cell on, unless that move crosses land too: then the water path is no way (the search fails as it would have).
+    if (crosses(path[k], path[k + 1])) return null;
+    let far = k + 1;
+    for (let q = path.length - 1; q > k + 1; q--) {
+      const hit = landMask.legsCrossLandBulk(
+        Float64Array.of(path[k][0]),
+        Float64Array.of(path[k][1]),
+        Float64Array.of(path[q][0]),
+        Float64Array.of(path[q][1])
+      );
+      if (!hit[0]) {
+        far = q;
+        break;
+      }
+    }
+    pts.push(path[far]);
+    k = far;
+  }
+  const approach: Candidate[] = [];
+  let from = bestC;
+  let lengthM = 0;
+  for (let q = 1; q < pts.length; q++) {
+    const [lon, lat] = pts[q];
+    const sim = simulateLegTime(from.lon, from.lat, new Date(from.timeMs), lon, lat, vessel, polar, wind, current, simOpts);
+    if (!Number.isFinite(sim.seconds) || sim.seconds <= 0) return null;
+    lengthM += haversineDistanceM(from.lon, from.lat, lon, lat);
+    from = hopCandidate(from, lon, lat, sim);
+    approach.push(from);
+  }
+  progress(
+    stages.length - 1,
+    stages.length - 1,
+    `final approach along the water path to where the leg joins the charts: {distance:${Math.round(lengthM)}} in ${approach.length} move(s), no clear straight final leg`
+  );
+  return { bestC, stageOfBest, approach };
 }
 
 /** The candidate at the end of a simulated straight hop from `from` to (lon, lat). */
@@ -134,6 +247,12 @@ export const BEAT_MARGINS_DEG = [3, 8, 15, 25, 40];
 export function chooseTerminal(ctx: SearchContext, guide: SkeletonGuide, stages: Candidate[][]): Terminal {
   const { args, wind, current, polar, vessel, modePolicy, simOpts, progress, checkCancel, eLon, eLat, snapToExact, nVias, limitNote } = ctx;
   const { kEff } = guide;
+  // The front stalled near an end where the leg joins the charts (stages.ts kept the error): the water path, or that error.
+  if (ctx.stallError) {
+    const w = waterApproach(ctx, stages);
+    if (!w) throw ctx.stallError;
+    return { ...w, tackCand: null, finalCand: null };
+  }
   const terminals = stages[stages.length - 1];
   if (terminals.length === 0) throw new RouteError('front went empty before reaching the destination; no path found');
   const score = (c: Candidate): [number, number] => [haversineDistanceM(c.lon, c.lat, eLon, eLat), c.costS];
@@ -270,6 +389,10 @@ export function chooseTerminal(ctx: SearchContext, guide: SkeletonGuide, stages:
       Float64Array.of(hLon),
       Float64Array.of(hLat)
     );
+    if (finalCross[0] && args.endApproach === 'water') {
+      const w = waterApproach(ctx, stages);
+      if (w) return { ...w, tackCand: null, finalCand: null };
+    }
     if (finalCross[0]) {
       throw new RouteError(
         `terminal hop from (${bestC.lat.toFixed(4)}, ${bestC.lon.toFixed(4)}) to the destination crosses land; the propagation got close but the straight final leg is blocked. Try a via point or a closer endpoint.`

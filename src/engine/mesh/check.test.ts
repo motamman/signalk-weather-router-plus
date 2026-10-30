@@ -103,11 +103,13 @@ test('check: navigable shallow water and water with no charted depth pass, as th
     assert.deepEqual(r.violations, []);
     assert.equal(r.legs[0].shallowestM, 1);
   });
-  withMesh([10, 10, NO_VALUE, NO_VALUE], undefined, store => {
+  // No charted depth in A's lower triangle (the route's stretch in A); A's upper triangle is charted, so A has chart
+  // data and stays mesh water (a tile with none is left out of the mesh, store.ts).
+  withMesh([NO_VALUE, 10, 10, 10], undefined, store => {
     const r = checkRouteOnMeshes([store], ACROSS, [0], 1, RULES);
     assert.deepEqual(r.violations, []);
-    const inB = haversineDistanceM(1, 0.1, 1.75, 0.1);
-    assert.ok(near(r.legs[0].unknownDepthM, inB), `${r.legs[0].unknownDepthM} of ${inB}`);
+    const inA = haversineDistanceM(0.25, 0.1, 1, 0.1);
+    assert.ok(near(r.legs[0].unknownDepthM, inA), `${r.legs[0].unknownDepthM} of ${inA}`);
     assert.equal(r.legs[0].shallowestM, 10);
   });
 });

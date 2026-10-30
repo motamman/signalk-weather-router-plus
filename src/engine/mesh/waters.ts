@@ -26,10 +26,13 @@
  * taken (the owner's choice, 2026-10-13): its mesh routes plus the straight runs across open water.
  *
  * Each charted stretch is one mesh search, from where it starts (the leg's start, the transfer point, or any entry
- * from the open piece before it, each costed by the straight run from the previous crossing, which never
- * overestimates the open part) to where it ends (the leg's end, or any exit into the next open piece or transfer into
- * the next mesh, each costed on by the straight run to the leg's end). So a stretch's entry and exit are chosen
- * together, towards the end. A transfer is a triangle of this mesh, in a piece the joins link to the next mesh's
+ * from the open piece before it, each costed by the distance over open water from the previous crossing) to where it
+ * ends (the leg's end, or any exit into the next open piece, costed on by the distance over open water to the leg's
+ * end, or a transfer into the next mesh, costed on by the straight run). So a stretch's entry and exit are chosen
+ * together, towards the end. The open-water distances are walked on the open-water map itself (waterField): a straight
+ * run ignored land, and from Greenland to Block Island the entry nearest as the crow flies was off Grand Manan, the
+ * long way round Nova Scotia by sea, where the coastline search stalled (brain, 2026-10-30). An entry or exit the
+ * water does not reach is no candidate. A transfer is a triangle of this mesh, in a piece the joins link to the next mesh's
  * group, whose centre the next mesh calls usable in that group (the step 2 test, made only on those pieces). The open
  * stretches lie between, for the coastline search with every mesh's water as land.
  *
@@ -37,7 +40,10 @@
  * water joins.
  */
 
+import { DEG } from '../../geo/geodesy';
 import { cellOf, type CellMask, type LandMask } from '../../geo/landmask';
+import { M_PER_DEG } from '../../geo/units';
+import { MinHeap } from '../heap';
 import { meshAstar, type SearchExits } from './astar';
 import { type CoarseMap, PieceGraph } from './coarse';
 import { emptyMask, forEachEdgeSide, isFree, markMeshWater } from './exit';
@@ -74,6 +80,8 @@ export type WatersPlan =
       changes: number;
       transfers: number;
       ways: number;
+      /** The open-water distance fields walked for the crossings' costs (waterField): how many, cells each, ms in all. */
+      water?: { fields: number; cells: number; ms: number };
     }
   | { ok: false; reason: string };
 
@@ -118,7 +126,7 @@ export function planWaters(
 
   // The map of waters as links: charted groups (c<mesh>:<group>) and open pieces (o<piece>); a join between meshes
   // weighs nothing, an exit or entry one change. The exits by charted group and open piece they join.
-  const sides = new Map<string, { tri: number; x: number; y: number }[]>();
+  const sides = new Map<string, { tri: number; x: number; y: number; cell: number }[]>();
   const adj = new Map<string, Map<string, number>>();
   const link = (u: string, v: string, w: number): void => {
     let m = adj.get(u);
@@ -156,6 +164,10 @@ export function planWaters(
     }
   });
 
+  // The distance over open water from a point to every cell (set once the open-water map is built; a way on the
+  // charts alone has no open stretch and never asks).
+  let overWater: (p: [number, number]) => Float32Array | null = () => null;
+
   // The charts alone first: a way through them and the joins between meshes is no change at all, so none through open
   // water can do better (the owner's rule: fewest changes); the open-water map is built only when there is none.
   if (rules && sAt.length && eAt.length) {
@@ -171,6 +183,26 @@ export function planWaters(
   const mask = emptyMask(land);
   for (const m of meshes) markMeshWater(m.store, mask);
   const labels = labelOpen(land, mask);
+  // The open-water distance fields, walked when first asked for (crossings): the leg's start's and end's, which every
+  // tied way asks for again, and at most one other (a crossing between two charted stretches). Each is a whole raster
+  // (up to the cell budget, 4 bytes a cell), so no more than three are held: another point's field replaces the last
+  // such one (PR #91 review: one was kept per point across the tied ways; then, capped at two, the start's was evicted
+  // and walked again for every way when the end lies on the charts and its field is never asked for).
+  const endCell = cellOf(mask, end[0], end[1]);
+  const startCell = cellOf(mask, start[0], start[1]);
+  const fields = new Map<number, Float32Array | null>();
+  const waterStats = { fields: 0, cells: land.nx * land.ny, ms: 0 };
+  overWater = (p: [number, number]): Float32Array | null => {
+    const c = cellOf(mask, p[0], p[1]);
+    if (fields.has(c)) return fields.get(c)!;
+    for (const k of [...fields.keys()]) if (k !== endCell && k !== startCell) fields.delete(k);
+    const t0 = Date.now();
+    const f = waterField(land, mask, c);
+    waterStats.fields++;
+    waterStats.ms += Date.now() - t0;
+    fields.set(c, f);
+    return f;
+  };
   const openAt = (p: [number, number]): number => {
     const c = cellOf(mask, p[0], p[1]);
     return c >= 0 ? labels[c] : -1;
@@ -198,8 +230,8 @@ export function planWaters(
       if (g === null) return;
       const k = `${i}:${g}|${labels[c]}`;
       const list = sides.get(k);
-      if (list) list.push({ tri: t, x: mx, y: my });
-      else sides.set(k, [{ tri: t, x: mx, y: my }]);
+      if (list) list.push({ tri: t, x: mx, y: my, cell: c });
+      else sides.set(k, [{ tri: t, x: mx, y: my, cell: c }]);
       link(`c${i}:${g}`, `o${labels[c]}`, 1);
       link(`o${labels[c]}`, `c${i}:${g}`, 1);
     });
@@ -215,7 +247,7 @@ export function planWaters(
       ok: false,
       reason: `${names.start}'s water and ${names.end}'s water do not connect for this boat (draught {depth:${rules.draughtM}}, air draft {length:${rules.airDraftM}}), on the charts or through open water beyond them, within the area`,
     };
-  return way;
+  return way.ok && way.kind === 'chain' ? { ...way, water: waterStats } : way;
 
   /**
    * The way through the waters linked so far with the fewest changes from the start's waters to the end's, the
@@ -297,6 +329,8 @@ export function planWaters(
     let prevPoint = start;
     let transfers = 0;
     let cost = 0;
+    // The open water from the last exit on to the leg's end, as its exit was costed (the distance over open water).
+    let openRestS = 0;
     for (let p = 0; p < path.length; p++) {
       if (path[p][0] === 'o') continue;
       const [i, g] = path[p].slice(1).split(':').map(Number);
@@ -309,11 +343,20 @@ export function planWaters(
       const before = p > 0 ? path[p - 1] : null;
       if (before && before[0] === 'o') {
         const best = new Map<number, { x: number; y: number; g: number }>();
+        // Each entry costed by the distance over open water from the previous crossing; one the water does not reach is none.
+        const from = overWater(prevPoint);
         for (const sd of sides.get(`${i}:${g}|${before.slice(1)}`) ?? []) {
-          const c = Math.hypot(sd.x - px, sd.y - py) / speed;
+          const d = from && sd.cell >= 0 ? from[sd.cell] : Infinity;
+          if (!Number.isFinite(d)) continue;
+          const c = d / speed;
           const b = best.get(sd.tri);
           if (!b || c < b.g) best.set(sd.tri, { x: sd.x, y: sd.y, g: c });
         }
+        if (!best.size)
+          return {
+            ok: false,
+            reason: `no entry into ${meshes[i].name}'s charted water can be reached over open water from ${prevPoint[1].toFixed(4)}, ${prevPoint[0].toFixed(4)}`,
+          };
         for (const [t, a] of best) {
           startTris.push(t);
           startAt.push(a);
@@ -339,11 +382,23 @@ export function planWaters(
         goals = new Map(ends.map(t => [t, { x: gx, y: gy, restS: 0 }]));
       } else if (after[0] === 'o') {
         const best = new Map<number, { x: number; y: number; restS: number }>();
+        // Into the open water the leg ends in: each exit costed on by the distance over open water to the leg's end, one
+        // the water does not join to it none. Into open water that leads to more charts: by the straight run, as only a
+        // guide towards the end (the next charted stretch's entry is then costed over open water from the exit chosen).
+        const last = p + 1 === path.length - 1;
+        const to = last ? overWater(end) : null;
         for (const sd of sides.get(`${i}:${g}|${after.slice(1)}`) ?? []) {
-          const r = Math.hypot(ex - sd.x, ey - sd.y) / speed;
+          const d = last ? (to && sd.cell >= 0 ? to[sd.cell] : Infinity) : Math.hypot(ex - sd.x, ey - sd.y);
+          if (!Number.isFinite(d)) continue;
+          const r = d / speed;
           const b = best.get(sd.tri);
           if (!b || r < b.restS) best.set(sd.tri, { x: sd.x, y: sd.y, restS: r });
         }
+        if (!best.size)
+          return {
+            ok: false,
+            reason: `no exit from ${meshes[i].name}'s charted water is joined over open water to ${end[1].toFixed(4)}, ${end[0].toFixed(4)}`,
+          };
         goals = best;
       } else {
         const [j, h] = after.slice(1).split(':').map(Number);
@@ -359,6 +414,7 @@ export function planWaters(
         };
       const k = startTris.indexOf(res.startTri);
       const goal = goals.get(res.goalTri)!;
+      if (after && after[0] === 'o') openRestS = goal.restS;
       const entry: [number, number] = before && before[0] === 'o' ? pm.fromXY(startAt[k].x, startAt[k].y) : prevPoint;
       const exit: [number, number] = after ? pm.fromXY(goal.x, goal.y) : end;
       if (before && before[0] === 'o') stretches.push({ kind: 'open', from: prevPoint, to: entry });
@@ -368,9 +424,7 @@ export function planWaters(
     }
     if (path[path.length - 1][0] === 'o') {
       stretches.push({ kind: 'open', from: prevPoint, to: end });
-      const [ax, ay] = pms[0].toXY(prevPoint[0], prevPoint[1]);
-      const [bx, by] = pms[0].toXY(end[0], end[1]);
-      cost += Math.hypot(bx - ax, by - ay) / speed;
+      cost += openRestS;
     }
     return { ok: true, stretches, transfers, cost };
   }
@@ -437,4 +491,65 @@ function labelOpen(land: LandMask, mask: CellMask): Int32Array {
     next++;
   }
   return labels;
+}
+
+/**
+ * The distance over open water (metres) from raster cell `s` to every cell: 8-connected moves through free cells
+ * (isFree: neither coastline land, buffered, nor any mesh's water), each its true length (east-west by the cosine of the
+ * row's latitude, a diagonal their hypotenuse; a diagonal only where both cells beside it are free, so the walk never
+ * slips between two land cells touching at a corner, as the open pieces, 4-connected, do not), Dijkstra on the
+ * engine's one heap. The source counts as water whatever its cell (a crossing on a mesh's edge lies in a cell of mesh
+ * water, a stop moved off the coast may lie in a buffered one). Infinity where the water does not reach; null off the
+ * raster. Float32: seven significant digits, a few metres on a leg of thousands of kilometres; each value stored
+ * rounded (Math.fround) so a popped key matches its cell's.
+ */
+export function waterField(land: LandMask, mask: CellMask, s: number): Float32Array | null {
+  return waterFieldOver(mask, c => isFree(land, mask, c), s);
+}
+
+/**
+ * waterField over any grid and any notion of free water (`free`, per cell index): the search's own land as it sees it
+ * for an open stretch's final approach (search/terminal.ts waterApproach), where the meshes' water is a view over the
+ * raster, not a mask beside it.
+ */
+export function waterFieldOver(
+  grid: { nx: number; ny: number; resolutionDeg: number; bbox: { south: number } },
+  free: (c: number) => boolean,
+  s: number
+): Float32Array | null {
+  if (s < 0) return null;
+  const { nx, ny } = grid;
+  const r = grid.resolutionDeg;
+  const dy = r * M_PER_DEG;
+  const dist = new Float32Array(nx * ny).fill(Infinity);
+  const heap = new MinHeap();
+  dist[s] = 0;
+  heap.push(0, s);
+  while (heap.size > 0) {
+    const d = heap.peekKey();
+    const c = heap.pop();
+    if (d > dist[c]) continue; // a stale entry
+    const i = c % nx;
+    const j = (c - i) / nx;
+    const dx = dy * Math.cos((grid.bbox.south + (j + 0.5) * r) * DEG);
+    const dd = Math.hypot(dx, dy);
+    for (let dj = -1; dj <= 1; dj++) {
+      const jj = j + dj;
+      if (jj < 0 || jj >= ny) continue;
+      for (let di = -1; di <= 1; di++) {
+        if (di === 0 && dj === 0) continue;
+        const ii = i + di;
+        if (ii < 0 || ii >= nx) continue;
+        const n = jj * nx + ii;
+        if (!free(n)) continue;
+        if (di !== 0 && dj !== 0 && (!free(j * nx + ii) || !free(jj * nx + i))) continue;
+        const nd = Math.fround(d + (di !== 0 && dj !== 0 ? dd : di !== 0 ? dx : dy));
+        if (nd < dist[n]) {
+          dist[n] = nd;
+          heap.push(nd, n);
+        }
+      }
+    }
+  }
+  return dist;
 }

@@ -36,8 +36,13 @@ export interface LegSimResult {
   motoringNoGoSeconds: number;
   /** Why the leg is stuck: over a wind/wave limit, heading in the polar's no-go angle, the current cancelling the boat's speed, or no boat speed at all. */
   reason?: 'limited' | 'no_go' | 'current' | 'no_speed';
-  /** Comfort cost of the leg in seconds (engine/seas.ts comfortRate), on top of `seconds`; 0 without a comfort weight. */
+  /** Comfort cost of the leg in seconds (engine/seas.ts comfortRate), and the surcharge for time over a limit set to avoid, on top of `seconds`; 0 without either. */
   penaltySeconds: number;
+  /** Seconds of the leg spent over the wind limit, and over the wave limit, when that limit is set to avoid (0 otherwise). */
+  overWindSeconds: number;
+  overSwhSeconds: number;
+  /** Seconds over either limit set to avoid (a second over both counts once: what the surcharge is charged on). */
+  overLimitSeconds: number;
 }
 
 /**
@@ -50,13 +55,34 @@ export interface SimOptions {
   modePolicy: ModePolicy;
   sailThreshMs: number;
   simStepM: number;
-  /** A leg is not allowed where the wind speed (m/s) or the significant wave height (m) exceeds these. */
+  /** The wind speed (m/s) and significant wave height (m) limits; what exceeding one does is its mode below. */
   maxWindMs?: number;
   maxSwhM?: number;
+  /**
+   * Per limit: 'block' (absent: the default) makes water over it impassable; 'avoid' lets the search through, each
+   * second spent over a limit counting (1 + limitAvoidStrength) seconds in its choices (a second over both counts
+   * once). The flat surcharge keeps the limit the only number: how far over does not matter (the owner, 2026-10-30).
+   */
+  maxWindMode?: LimitMode;
+  maxSwhMode?: LimitMode;
+  /** The avoid surcharge: extra seconds per second spent over a limit set to avoid (absent: DEFAULT_LIMIT_AVOID_STRENGTH). */
+  limitAvoidStrength?: number;
   /** Comfort weight (0 or absent: off): rough water, as the boat meets it, costs extra seconds in the search's choices (engine/seas.ts). */
   comfortWeight?: number;
   /** Seconds lost per tack or gybe (absent: DEFAULT_TACK_PENALTY_S). */
   tackPenaltyS?: number;
+}
+
+/** What exceeding a wind or wave limit does: block (impassable) or avoid (allowed, at a price in the search). */
+export const LIMIT_MODES = ['block', 'avoid'] as const;
+export type LimitMode = (typeof LIMIT_MODES)[number];
+
+/** The avoid surcharge when none is set: time over a limit counts double. */
+export const DEFAULT_LIMIT_AVOID_STRENGTH = 1;
+
+/** A limit set to avoid adds to the penalty, so the penalty matters wherever one is set (the smoother's check). */
+export function limitAvoidActive(opts: Pick<SimOptions, 'maxWindMs' | 'maxSwhM' | 'maxWindMode' | 'maxSwhMode'>): boolean {
+  return (opts.maxWindMs !== undefined && opts.maxWindMode === 'avoid') || (opts.maxSwhM !== undefined && opts.maxSwhMode === 'avoid');
 }
 
 /** Seconds lost per tack or gybe when the request sets none (the refined router's constant before the setting existed). */
@@ -142,7 +168,17 @@ export function simulateLegTime(
 ): LegSimResult {
   const totalDistM = haversineDistanceM(aLon, aLat, cLon, cLat);
   if (totalDistM <= 0) {
-    return { seconds: 0, dominantMode: 'motoring', sailingSeconds: 0, motoringSeconds: 0, motoringNoGoSeconds: 0, penaltySeconds: 0 };
+    return {
+      seconds: 0,
+      dominantMode: 'motoring',
+      sailingSeconds: 0,
+      motoringSeconds: 0,
+      motoringNoGoSeconds: 0,
+      penaltySeconds: 0,
+      overWindSeconds: 0,
+      overSwhSeconds: 0,
+      overLimitSeconds: 0,
+    };
   }
   const bearingDeg = haversineBearing(aLon, aLat, cLon, cLat);
   const sc = scoreCandidatesFromParent(
@@ -167,6 +203,9 @@ export function simulateLegTime(
       motoringNoGoSeconds: 0,
       reason,
       penaltySeconds: Infinity,
+      overWindSeconds: 0,
+      overSwhSeconds: 0,
+      overLimitSeconds: 0,
     };
   }
   return {
@@ -176,6 +215,9 @@ export function simulateLegTime(
     motoringSeconds: sc.motoring[0],
     motoringNoGoSeconds: sc.motoringNoGo[0],
     penaltySeconds: sc.penalty[0],
+    overWindSeconds: sc.overWind[0],
+    overSwhSeconds: sc.overSwh[0],
+    overLimitSeconds: sc.overAny[0],
   };
 }
 
@@ -257,7 +299,7 @@ export interface CandidateScores {
   motoringNoGo: Float64Array;
   /** 1 = sailing dominant, 0 = motoring, -1 = stuck. */
   dominant: Int8Array;
-  /** 1 when the candidate was stopped by a wind or wave limit. */
+  /** 1 when the candidate was stopped by a wind or wave limit set to block. */
   limited: Uint8Array;
   /** 1 when the candidate was stopped because its heading lies in the polar's no-go angle (dead upwind). */
   noGo: Uint8Array;
@@ -265,8 +307,13 @@ export interface CandidateScores {
   foul: Uint8Array;
   /** 1 when a current sample above MAX_CURRENT_MS was read as no data along the candidate. */
   badCurrent: Uint8Array;
-  /** Comfort cost in seconds per candidate (0 without a comfort weight; Infinity when stuck). */
+  /** Comfort cost and avoid surcharge in seconds per candidate (0 without either; Infinity when stuck). */
   penalty: Float64Array;
+  /** Seconds spent over the wind limit, and over the wave limit, set to avoid. */
+  overWind: Float64Array;
+  overSwh: Float64Array;
+  /** Seconds over either (a second over both counts once). */
+  overAny: Float64Array;
 }
 
 /**
@@ -306,8 +353,15 @@ export function scoreCandidatesFromParent(
   const foul = new Uint8Array(n);
   const badCurrent = new Uint8Array(n);
   const penalty = new Float64Array(n);
-  if (n === 0) return { seconds, sailing, motoring, motoringNoGo, dominant, limited, noGo, foul, badCurrent, penalty };
+  const overWind = new Float64Array(n);
+  const overSwh = new Float64Array(n);
+  const overAny = new Float64Array(n);
+  if (n === 0)
+    return { seconds, sailing, motoring, motoringNoGo, dominant, limited, noGo, foul, badCurrent, penalty, overWind, overSwh, overAny };
   const comfortW = opts.comfortWeight && opts.comfortWeight > 0 && wind.hasWaves ? opts.comfortWeight : 0;
+  const avoidWind = opts.maxWindMode === 'avoid';
+  const avoidSwh = opts.maxSwhMode === 'avoid';
+  const surcharge = opts.limitAvoidStrength ?? DEFAULT_LIMIT_AVOID_STRENGTH;
 
   const motor = vessel.motorSpeedMs;
   let maxDist = 0;
@@ -357,7 +411,9 @@ export function scoreCandidatesFromParent(
       const i = liveIdx[q];
       let ws = w.speed[q];
       let wd = w.dir[q];
-      if ((opts.maxWindMs !== undefined && ws > opts.maxWindMs) || (swh !== null && opts.maxSwhM !== undefined && swh[q] > opts.maxSwhM)) {
+      const windOver = opts.maxWindMs !== undefined && ws > opts.maxWindMs;
+      const swhOver = swh !== null && opts.maxSwhM !== undefined && swh[q] > opts.maxSwhM;
+      if ((windOver && !avoidWind) || (swhOver && !avoidSwh)) {
         stuck[i] = 1;
         limited[i] = 1;
         continue;
@@ -392,6 +448,13 @@ export function scoreCandidatesFromParent(
       }
       const stepS = stepPerCand[i] / progress;
       seconds[i] += stepS;
+      // Over a limit set to avoid: allowed, at a price in the search's choices (once for both limits).
+      if (windOver) overWind[i] += stepS;
+      if (swhOver) overSwh[i] += stepS;
+      if (windOver || swhOver) {
+        overAny[i] += stepS;
+        penalty[i] += stepS * surcharge;
+      }
       if (full && Number.isFinite(full.swh[q])) {
         // The sea as this candidate meets it: the index of the water (wind and
         // swell against the current) weighted by the angle of the waves to the heading.
@@ -427,5 +490,5 @@ export function scoreCandidatesFromParent(
       dominant[i] = sailing[i] >= motoring[i] ? 1 : 0;
     }
   }
-  return { seconds, sailing, motoring, motoringNoGo, dominant, limited, noGo, foul, badCurrent, penalty };
+  return { seconds, sailing, motoring, motoringNoGo, dominant, limited, noGo, foul, badCurrent, penalty, overWind, overSwh, overAny };
 }

@@ -7,7 +7,7 @@
  * arithmetic is unchanged; the golden routes hold that.
  */
 
-import { haversineDistanceM, perpendicularOffsetM } from '../../geo/geodesy';
+import { haversineDistanceM, latLonText, perpendicularOffsetM } from '../../geo/geodesy';
 import type { StageFront } from '../route';
 import { fmtUtc, forecastNote, refuseDeadEnd, resetTry, tryNote } from './context';
 import { propose } from './propose';
@@ -254,26 +254,36 @@ export function runStages(ctx: SearchContext, guide: SkeletonGuide): Candidate[]
           `the search is boxed in before crossing all ${nVias} via(s): deepest branch crossed ${deepest}, and for ${stagesWithoutGain} stages no candidate came closer than ${(bestEver / 1000).toFixed(0)} km to the next via${g.name ? ` at ${g.name}` : ''}; ${tryNote(ctx)}.${forecastNote(ctx)}`
         );
       }
-      // The front at the destination with no clear final leg: the point
-      // sits in a land cell of the raster (too close to the shore).
+      // The front within one step of the point this search heads for (the
+      // destination, or a waypoint ending this leg) with no clear final
+      // leg: the point sits in a land cell of the raster (too close to the
+      // shore). Said as how close it came, not "reached".
       const atGoal =
         bestEver <= candStepM
-          ? ' The front reached the destination but no final leg to it was clear of land: the point is too close to the shore for the land raster.'
+          ? ` The search came within {length:${Math.round(bestEver)}} of the point it was heading for (${latLonText(eLat, eLon)}), but no final leg to it was clear of land: the point is too close to the shore for the coastline data.`
           : '';
       const stalled = `the search is boxed in: for ${stagesWithoutGain} stages no candidate came closer than ${(bestEver / 1000).toFixed(1)} km to the destination`;
       progress(stage + 1, Math.max(kEff, stage + 1), `${stalled}; ${tryNote(ctx)}`);
       // Moves stopped by a limit, the coast, the wind or no boat speed: when they are at least half the moves tried, the
       // user is told that reason, then the stall; fewer, and the stall is told on its own.
       const stopped = lastTry.limited + lastTry.land + lastTry.noGo + lastTry.stuck;
-      if (lastTry.tried > 0 && 2 * stopped >= lastTry.tried)
-        // The parents: the candidates whose moves lastTry counted.
-        throw refuseDeadEnd(
-          ctx,
-          parents,
-          'boxed_in',
-          ` The front made no progress for ${stagesWithoutGain} stages.${atGoal}${forecastNote(ctx)}`
-        );
-      throw new RouteError(`${stalled}.${atGoal}${forecastNote(ctx)}`, 'boxed_in');
+      const err =
+        lastTry.tried > 0 && 2 * stopped >= lastTry.tried
+          ? // The parents: the candidates whose moves lastTry counted.
+            refuseDeadEnd(
+              ctx,
+              parents,
+              'boxed_in',
+              ` The front made no progress for ${stagesWithoutGain} stages.${atGoal}${forecastNote(ctx)}`
+            )
+          : new RouteError(`${stalled}.${atGoal}${forecastNote(ctx)}`, 'boxed_in');
+      // An end where the leg joins a chart mesh: the terminal tries the water path first (terminal.ts waterApproach)
+      // and throws this when that fails too.
+      if (args.endApproach === 'water') {
+        ctx.stallError = err;
+        break;
+      }
+      throw err;
     }
     for (const c of retained) {
       for (const vi of c.viaIdxs) {
