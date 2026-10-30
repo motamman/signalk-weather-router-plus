@@ -59,7 +59,9 @@ uses [Semantic Versioning](https://semver.org/).
 - **Find Route works in power-boat mode without a boat name or cruise
   speed.** It stayed off until both were filled in; an empty one is now
   simply not sent, and the plugin's own vessel settings (its motor speed)
-  apply, the line under the fields saying so for the speed.
+  apply, the line under the fields saying so for the speed. A route
+  sent before the display units have loaded uses the saved cruise speed as
+  saved (m/s), and the line is checked again once they have.
 - **Power boats see the wind and wave limits.** They sat in the
   sail-only Sailing strategy section, so a power boat's routes were sent
   with limits its user could not see or change; they now sit with Comfort

@@ -629,8 +629,16 @@ function getVesselType() {
 function readPowerBoat() {
   return {
     name: (/** @type {HTMLInputElement} */ (document.getElementById('pb_name')).value || '').trim(),
-    cruise_ms: _limitSI('pb_cruise'),
+    cruise_ms: _cruiseSI(),
   };
+}
+// The cruise speed in m/s: the field, read in the user's unit; before that unit has loaded the field cannot be read,
+// so the speed saved in m/s is used as it is (PR #91 review: a route sent in that moment went without it).
+function _cruiseSI() {
+  const v = _limitSI('pb_cruise');
+  if (v !== null || UI_UNITS[_LIMITS.pb_cruise]) return v;
+  const s = prefs.get('routeVar:pb_cruise:si');
+  return s !== null && s !== '' && Number.isFinite(+s) ? +s : null;
 }
 function validatePowerBoat() {
   const pb = readPowerBoat();
@@ -2404,6 +2412,8 @@ function _initLimitInputs() {
       prefs.set('routeVar:' + id + ':si', v === null ? '' : String(v));
     };
   }
+  // The cruise speed restored: the line under the power boat's fields says what a route now gets (PR #91 review).
+  refreshFindRouteEnabled();
 }
 window.addEventListener('rp:units', _initLimitInputs);
 
