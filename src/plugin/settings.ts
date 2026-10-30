@@ -636,7 +636,7 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     max: 10,
     step: 0.5,
     default: 1,
-    help: "For a limit set to avoid: each hour over it counts as (1 + this) hours in the search's choices, however far over. 1 = time over a limit counts double; 0 = no cost, warnings only. The times shown stay the real times. A route request can override it (limit_avoid_strength).",
+    help: 'How hard the route tries to stay under a limit set to avoid. Higher means it will sail further out of its way to avoid it; 0 means it never detours, it only warns. The times shown stay the real times. A route request can override it (limit_avoid_strength).',
     reload: 'next_job',
   },
   {

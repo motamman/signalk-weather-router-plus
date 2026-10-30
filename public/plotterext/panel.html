@@ -238,9 +238,9 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     <div class="row">
       <label class="small">Wind <select id="maxWindMode" aria-label="Over the wind limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
       <label class="small">Waves <select id="maxSwhMode" aria-label="Over the wave limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
-      <label class="small" id="limitStrengthRow" hidden>Strength <input id="limitAvoidStrength" type="number" step="0.5" min="0" max="10" value="1" aria-label="Avoid strength"></label>
+      <label class="small" id="limitStrengthRow" hidden>Avoid strength <input id="limitAvoidStrength" type="range" step="0.5" min="0" max="10" value="1" aria-label="Avoid strength"> <span id="limitAvoidStrengthValue"></span></label>
     </div>
-    <span class="muted small">Block: legs with more wind or higher waves than this are not allowed. Avoid: they are allowed, but time over a limit counts (1 + strength) times as long when choosing the route, and the route warns. Empty = no limit.</span>
+    <span class="muted small">Block: legs with more wind or higher waves than this are not allowed. Avoid: the route tries to stay under the limit, and warns where it goes over; the higher the avoid strength, the further out of its way it will sail to avoid it (0: it never detours, it only warns). Empty = no limit.</span>
   </div>
   <div class="row">
     <button id="cancel" type="button" hidden>Cancel</button>
@@ -1242,6 +1242,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
   var limitModeDefaults = { maxWindMode: 'block', maxSwhMode: 'block', limitAvoidStrength: 1 };
   function syncLimitModes() {
     $('limitStrengthRow').hidden = $('maxWindMode').value !== 'avoid' && $('maxSwhMode').value !== 'avoid';
+    $('limitAvoidStrengthValue').textContent = $('limitAvoidStrength').value;
   }
   function showLimitModes() {
     ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
@@ -1255,6 +1256,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
   ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
     $(id).addEventListener('change', function () { setChoice('rp:' + id, 'wrp-plotterext-' + id, this.value); syncLimitModes(); });
   });
+  $('limitAvoidStrength').addEventListener('input', syncLimitModes);
   $('limitAvoidStrength').addEventListener('change', function () {
     setChoice('rp:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength', this.value);
   });

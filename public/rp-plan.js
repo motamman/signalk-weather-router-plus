@@ -32,6 +32,13 @@ let _routeReady = false;      // start, end (power mode: the boat) set; Find Rou
 // mode. routeSource.getFeatures() is not in route order (spatial index).
 let _routePoints = [];
 
+// The departure window on screen (Best departure, below): declared here, before any start-up code, because
+// markRouteStale, _clearRoute and _loadRouteJob reach it and a `let` further down is not initialised yet then.
+let _win = null;        // the window on screen (GET /api/windows/:id)
+let _winTimer = null;
+let _winOpenJob = null; // the departure's route opened from the table
+let _winStale = false;  // the markers moved since the window on screen was started
+
 let _activeReplanES = null;
 function closeReplanStream() { if (_activeReplanES) { try { _activeReplanES.close(); } catch (_) {} _activeReplanES = null; } }
 
@@ -469,6 +476,8 @@ function _loadRouteJob(id, given) {
   }
   _currentRouteJobId = id;
   _currentRouteName = job && job.request ? (job.request.name || '') : '';
+  // Another saved route: the departures compared for the one before leave the screen; one of the window's own keeps them.
+  if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
   authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(geojson => {
@@ -1291,6 +1300,7 @@ function updatePlanHint() {
 // so marker changes during the first computation (routeActive still
 // false) still flag the result as stale when it lands.
 function markRouteStale() {
+  _winMarkStale();
   if ((!routeActive && !_routeComputing) || _routeStale) { updatePlanHint(); return; }
   _routeStale = true;
   if (_lastRouteProps) renderResultStrip(_lastRouteProps, _lastNavWarns);
@@ -1346,6 +1356,8 @@ function _initLimitModes() {
   const strength = /** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength'));
   if (!strength) return;
   const sync = () => {
+    const shown = document.getElementById('limitAvoidStrengthValue');
+    if (shown) shown.textContent = strength.value;
     const any = modes.some(([id]) => /** @type {HTMLSelectElement} */ (document.getElementById(id)).value === 'avoid');
     document.getElementById('limitStrengthRow').hidden = !any;
     document.getElementById('limitStrengthHint').hidden = !any;
@@ -1358,6 +1370,7 @@ function _initLimitModes() {
   }
   const savedS = prefs.get('rp:limitAvoidStrength');
   if (savedS && Number.isFinite(+savedS)) strength.value = savedS;
+  strength.addEventListener('input', sync);
   strength.addEventListener('change', () => { prefs.set('rp:limitAvoidStrength', strength.value); });
   sync();
   authFetch(API + '/settings', { cache: 'no-store' }, null)
@@ -1434,6 +1447,7 @@ document.getElementById('resetBtn').addEventListener('click', function() {
 // The route and every marker gone (the Reset button, and "Clear route and start new" in the far-waypoint prompt).
 function _clearRoute() {
   _hideRecompute();
+  _winRouteGone();
   startCoord = null;
   endCoord = null;
   waypointCoords = [];
@@ -1787,6 +1801,7 @@ function showModal() {
   modalItinerary.style.display = 'block';
   modalStatus.textContent = 'Starting...';
   _routeStale = false;
+  _winRouteGone();
   _routeComputing = true;
   // A new request: the route on the map goes with its strip and name (the owner, 2026-10-12); a request that fails
   // leaves the map without a route and shows the error. The markers and waypoints stay.
@@ -3667,9 +3682,33 @@ const _WIN_SORTS = {
   upwind:   { label: 'least time close-hauled', key: m => m.upwind_time_s },
 };
 const _WIN_STATUS_TEXT = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled', skipped: 'skipped' };
-let _win = null;        // the window on screen (GET /api/windows/:id)
-let _winTimer = null;
-let _winOpenJob = null; // the departure's route opened from the table
+// (Its state is declared with the route state at the top: markRouteStale and _clearRoute reach it from start-up code.)
+
+// The window on screen belongs to a route that is gone (Reset, a new Find Route, another saved route opened): it leaves
+// the screen, kept on the server. One still running stays, marked out of date, so it can still be cancelled.
+function _winRouteGone() {
+  if (!_win) return;
+  if (_win.status === 'running') { _winMarkStale(); return; }
+  clearTimeout(_winTimer);
+  _win = null;
+  _winOpenJob = null;
+  _winStale = false;
+  _winRender();
+}
+// The markers moved: the window on screen compared the route before.
+function _winMarkStale() {
+  if (!_win || _winStale) return;
+  _winStale = true;
+  _winRender();
+}
+// Does a window's request describe the plan on the page (start, destination, waypoints)?
+function _winMatchesPlan(w) {
+  const rt = w && w.request && w.request.route;
+  if (!rt || !rt.start || !rt.end || !startCoord || !endCoord) return false;
+  const same = (p, c) => Math.abs(p.lat - c[1]) < 1e-6 && Math.abs(p.lon - c[0]) < 1e-6;
+  const wps = Array.isArray(rt.waypoints) ? rt.waypoints : [];
+  return same(rt.start, startCoord) && same(rt.end, endCoord) && wps.length === waypointCoords.length && wps.every((p, i) => same(p, waypointCoords[i]));
+}
 
 // The departures the inputs describe (ms), or null with the reason.
 function _winPlan() {
@@ -3705,6 +3744,7 @@ function _winStart() {
   delete route.publish;
   const body = { route, from: p.from.toISOString(), to: p.to.toISOString(), step_s: Number(/** @type {HTMLSelectElement} */ (document.getElementById('windowStep')).value) };
   document.getElementById('windowStatus').textContent = 'Starting…';
+  _winStale = false;
   // Off until the window's first poll shows Cancel: a second click would start a second window (PR #51 review).
   // Marked on the button, which _winRefresh reads, so a refresh meanwhile keeps it off: 'post' while the
   // request is out, then the window's id until its first poll (a poll of an older window does not count).
@@ -3817,6 +3857,7 @@ function _winRender() {
   html += '</tbody></table></div>';
   if (w.departures.some(d => d.metrics && d.metrics.beyond_forecast)) html += '<div class="ctl-hint">* arrives after the forecast ends; not ranked.</div>';
   html += '<div class="ctl-hint">The forecast grows less certain with every day ahead: compare the late departures again on a newer run.</div>';
+  if (_winStale) html = '<div class="rs-stale">Compared for the route before the markers changed; Compare departures again for this one.</div>' + html;
   out.innerHTML = html;
   /** @type {HTMLSelectElement} */ (out.querySelector('#windowSort')).onchange = e => {
     try { localStorage.setItem('rp:windowSort', /** @type {HTMLSelectElement} */ (e.target).value); } catch (_) { /* not remembered */ }
@@ -3864,7 +3905,8 @@ function _winOpen(jobId) {
   // The newest window, if any: shown again (and followed while it runs).
   authFetch(API + '/windows?limit=1', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : []))
-    .then(list => { if (Array.isArray(list) && list.length) _winPoll(list[0].id); })
+    // Only when it compared the plan on the page: another route's departures would sit beside this one's.
+    .then(list => { if (Array.isArray(list) && list.length && _winMatchesPlan(list[0])) _winPoll(list[0].id); })
     .catch(() => { /* none: nothing to show */ });
 })();
 

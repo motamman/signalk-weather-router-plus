@@ -56,6 +56,13 @@ uses [Semantic Versioning](https://semver.org/).
   search stalled about 290 km short. Entries (and exits into the open water
   a leg ends in) are now costed by the shortest way over the open-water map,
   and one the water does not reach is not used.
+- **Compare departures no longer shows another route's departures.** The
+  table stayed until Compare departures was pressed again, through Reset,
+  a new Find Route, another saved route opened or the markers moved, and
+  the newest comparison came back on every page load whatever route was
+  planned. It now leaves the screen when its route does (one still
+  computing stays, so it can be cancelled), is marked out of date when the
+  markers move, and comes back on load only for the plan on the page.
 
 ### Added
 

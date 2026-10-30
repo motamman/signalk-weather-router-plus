@@ -535,7 +535,10 @@ computed with what that request says, not with the user's saved Setup.
   best by the measure chosen (shortest passage, least motoring, lightest
   wind, smallest waves, least upwind) is starred; a passage that arrives
   after the forecast ends is marked and not ranked. A row opens that
-  departure's route. The newest window shows again when the page opens.
+  departure's route. The newest window shows again when the page opens, if it
+  compared the start, destination and waypoints on the page. The table leaves
+  the screen on Reset, a new Find Route or another saved route opened (one still
+  computing stays), and is marked out of date when the markers move.
 - **Meteogram** (Itinerary → Meteogram): the weather along the route on
   the map, as TimeZero shows it. Charts stacked on one time axis from
   departure to arrival: wind and gust with its direction, the boat (speed
