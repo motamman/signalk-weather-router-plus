@@ -16,6 +16,13 @@ uses [Semantic Versioning](https://semver.org/).
   the existing linear polar model and per-wind-speed no-go floors.
 - Keep the polar picker filter during automatic refresh; motor-only routes
   accept managed-polar tokens without resolving them as local files.
+- **The panel fits the screen on an iPad.** Its height was capped with
+  `vh`, which is the viewport with the browser's bars retracted (MDN,
+  `<length>`). This page never scrolls, so Safari's bars stay out, and
+  the panel ran under the bottom edge: its last part (Best departure)
+  could not be scrolled to. The cap is in `dvh` now, the viewport as it
+  is, with `vh` kept for browsers without it; the conditions card on a
+  phone held sideways likewise.
 
 
 ### Added

@@ -129,8 +129,12 @@
     border-radius: var(--r-md);
     box-shadow: var(--shadow-panel);
     width: var(--panel-w-desktop); box-sizing: border-box;
-    /* Stops above the map's attribution line so nothing hides behind it. */
-    max-height: calc(100vh - 20px - var(--attrib-h, 48px)); overflow-y: auto;
+    /* Stops above the map's attribution line so nothing hides behind it. dvh where the browser has it: vh is the
+       viewport with the browser's bars retracted (MDN, <length>), and this page never scrolls, so they never do: on
+       an iPad the panel ran under the screen's bottom edge, and its last part (Best departure) could not be reached. */
+    max-height: calc(100vh - 20px - var(--attrib-h, 48px));
+    max-height: calc(100dvh - 20px - var(--attrib-h, 48px));
+    overflow-y: auto;
     font-size: var(--f-base);
     color: var(--text);
     display: flex; flex-direction: column;
@@ -432,7 +436,7 @@
   html[data-panel-mode="landscape"] #legendBox { max-height: 60vh; overflow-y: auto; max-width: min(50vw, 320px); }
   html[data-panel-mode="landscape"] #tabBar button { min-height: 40px; }
   /* The conditions card down the left side, the map to its right. */
-  html[data-panel-mode="landscape"] #condCard { right: auto; width: min(52vw, 520px); max-height: calc(100vh - 20px); }
+  html[data-panel-mode="landscape"] #condCard { right: auto; width: min(52vw, 520px); max-height: calc(100vh - 20px); max-height: calc(100dvh - 20px); }
   /* The drawer open covers the card's side of the screen too (52vw + 60vw): the card waits, folded with the drawer
      it comes back; the conditions stay loaded and the marker on the map. */
   html[data-panel-mode="landscape"][data-panel="open"] #condCard { display: none; }
