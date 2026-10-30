@@ -1352,7 +1352,7 @@ function _initRouteChoices() {
 // Block / Avoid for each limit and the avoid strength: remembered per browser and Signal K user (rp-prefs.js); until
 // the user chooses, the plugin's routing settings. The strength shows only when a limit is set to avoid.
 function _initLimitModes() {
-  const modes = [['maxWindMode', 'rp:maxWindMode'], ['maxSwhMode', 'rp:maxSwhMode']];
+  const modes = [['maxWindMode', 'routeVar:maxWindMode'], ['maxSwhMode', 'routeVar:maxSwhMode']];
   const strength = /** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength'));
   if (!strength) return;
   const sync = () => {
@@ -1371,15 +1371,15 @@ function _initLimitModes() {
   // Comfort, per route as the limits are: remembered, the routing setting until the user chooses.
   const comfort = /** @type {HTMLInputElement} */ (document.getElementById('comfortWeight'));
   const showComfort = () => { document.getElementById('comfortWeightValue').textContent = comfort.value; };
-  const savedC = prefs.get('rp:comfortWeight');
-  if (savedC && Number.isFinite(+savedC)) comfort.value = savedC;
+  const savedC = prefs.get('routeVar:comfortWeight');
+  if (savedC && Number.isFinite(+savedC)) { comfort.value = savedC; comfort.dataset.known = '1'; }
   comfort.addEventListener('input', showComfort);
-  comfort.addEventListener('change', () => { prefs.set('rp:comfortWeight', comfort.value); });
+  comfort.addEventListener('change', () => { comfort.dataset.known = '1'; prefs.set('routeVar:comfortWeight', comfort.value); });
   showComfort();
-  const savedS = prefs.get('rp:limitAvoidStrength');
+  const savedS = prefs.get('routeVar:limitAvoidStrength');
   if (savedS && Number.isFinite(+savedS)) strength.value = savedS;
   strength.addEventListener('input', sync);
-  strength.addEventListener('change', () => { prefs.set('rp:limitAvoidStrength', strength.value); });
+  strength.addEventListener('change', () => { prefs.set('routeVar:limitAvoidStrength', strength.value); });
   sync();
   authFetch(API + '/settings', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : null))
@@ -1389,8 +1389,8 @@ function _initLimitModes() {
         const v = r[id];
         if (!prefs.get(key) && (v === 'block' || v === 'avoid')) /** @type {HTMLSelectElement} */ (document.getElementById(id)).value = v;
       }
-      if (!prefs.get('rp:limitAvoidStrength') && Number.isFinite(r.limitAvoidStrength)) strength.value = String(r.limitAvoidStrength);
-      if (!prefs.get('rp:comfortWeight') && Number.isFinite(r.comfortWeight)) { comfort.value = String(r.comfortWeight); showComfort(); }
+      if (!prefs.get('routeVar:limitAvoidStrength') && Number.isFinite(r.limitAvoidStrength)) strength.value = String(r.limitAvoidStrength);
+      if (!prefs.get('routeVar:comfortWeight') && Number.isFinite(r.comfortWeight)) { comfort.value = String(r.comfortWeight); comfort.dataset.known = '1'; showComfort(); }
       sync();
     })
     .catch(() => {});
@@ -2315,8 +2315,10 @@ function buildRoutePayload(overrides) {
     const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
     if (el && el.value) body[field] = el.value;
   }
-  const comfort = parseFloat(/** @type {HTMLInputElement} */ (document.getElementById('comfortWeight')).value);
-  if (Number.isFinite(comfort) && comfort >= 0) body.comfort_weight = comfort;
+  // Only a value the user chose or the routing setting gave: the slider's built-in start is not sent (PR #91 review).
+  const comfortEl = /** @type {HTMLInputElement} */ (document.getElementById('comfortWeight'));
+  const comfort = parseFloat(comfortEl.value);
+  if (comfortEl.dataset.known && Number.isFinite(comfort) && comfort >= 0) body.comfort_weight = comfort;
   if (body.max_wind_mode === 'avoid' || body.max_swh_mode === 'avoid') {
     const v = parseFloat(/** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength')).value);
     if (Number.isFinite(v) && v >= 0) body.limit_avoid_strength = v;

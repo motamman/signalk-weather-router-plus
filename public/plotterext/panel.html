@@ -243,7 +243,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     <div class="row">
       <label class="small">Comfort <input id="comfortWeight" type="range" step="0.1" min="0" max="3" value="1" aria-label="Comfort"> <span id="comfortWeightValue"></span></label>
     </div>
-    <span class="muted small">Comfort: how much the route avoids rough water as the boat meets it; higher gives up more time for a smoother passage, 0 is the fastest route. Block: legs with more wind or higher waves than this are not allowed. Avoid: the route tries to stay under the limit, and warns where it goes over; the higher the avoid strength, the further out of its way it will sail to avoid it (0: it never detours, it only warns). Empty = no limit.</span>
+    <span class="muted small">Comfort: how much the route avoids rough water as the boat meets it; higher gives up more time for a smoother passage, 0 turns it off. Block: legs with more wind or higher waves than this are not allowed. Avoid: the route tries to stay under the limit, and warns where it goes over; the higher the avoid strength, the further out of its way it will sail to avoid it (0: it never detours, it only warns). Empty = no limit.</span>
   </div>
   <div class="row">
     <button id="cancel" type="button" hidden>Cancel</button>
@@ -1223,8 +1223,9 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     if (mw !== null) body.max_wind_ms = mw;
     var mh = limitSI('maxSwh', lengthUnit());
     if (mh !== null) body.max_swh_m = mh;
+    // Only a value the user chose or the routing setting gave: the slider's built-in start is not sent (PR #91 review).
     var comfort = num('comfortWeight');
-    if (comfort !== null && comfort >= 0) body.comfort_weight = comfort;
+    if ($('comfortWeight').dataset.known && comfort !== null && comfort >= 0) body.comfort_weight = comfort;
     body.max_wind_mode = $('maxWindMode').value;
     body.max_swh_mode = $('maxSwhMode').value;
     if (body.max_wind_mode === 'avoid' || body.max_swh_mode === 'avoid') {
@@ -1251,24 +1252,29 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
   }
   function showLimitModes() {
     ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
-      var v = choice('rp:' + id, 'wrp-plotterext-' + id);
+      var v = choice('routeVar:' + id, 'wrp-plotterext-' + id);
       $(id).value = v === 'block' || v === 'avoid' ? v : limitModeDefaults[id];
     });
-    var cw = choice('rp:comfortWeight', 'wrp-plotterext-comfortWeight');
-    $('comfortWeight').value = cw !== null && cw !== '' && isFinite(+cw) ? cw : String(limitModeDefaults.comfortWeight);
+    var cw = choice('routeVar:comfortWeight', 'wrp-plotterext-comfortWeight');
+    var savedCw = cw !== null && cw !== '' && isFinite(+cw);
+    $('comfortWeight').value = savedCw ? cw : String(limitModeDefaults.comfortWeight);
+    if (savedCw || limitModeDefaults.comfortKnown) $('comfortWeight').dataset.known = '1';
     $('comfortWeightValue').textContent = $('comfortWeight').value;
-    var s = choice('rp:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength');
+    var s = choice('routeVar:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength');
     $('limitAvoidStrength').value = s !== null && s !== '' && isFinite(+s) ? s : String(limitModeDefaults.limitAvoidStrength);
     syncLimitModes();
   }
   ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
-    $(id).addEventListener('change', function () { setChoice('rp:' + id, 'wrp-plotterext-' + id, this.value); syncLimitModes(); });
+    $(id).addEventListener('change', function () { setChoice('routeVar:' + id, 'wrp-plotterext-' + id, this.value); syncLimitModes(); });
   });
   $('limitAvoidStrength').addEventListener('input', syncLimitModes);
   $('comfortWeight').addEventListener('input', function () { $('comfortWeightValue').textContent = this.value; });
-  $('comfortWeight').addEventListener('change', function () { setChoice('rp:comfortWeight', 'wrp-plotterext-comfortWeight', this.value); });
+  $('comfortWeight').addEventListener('change', function () {
+    this.dataset.known = '1';
+    setChoice('routeVar:comfortWeight', 'wrp-plotterext-comfortWeight', this.value);
+  });
   $('limitAvoidStrength').addEventListener('change', function () {
-    setChoice('rp:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength', this.value);
+    setChoice('routeVar:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength', this.value);
   });
   function showLimits() {
     [['maxWind', speedUnit()], ['maxSwh', lengthUnit()]].forEach(function (pair) {
@@ -1320,7 +1326,10 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
       if (r.maxSwh !== null && isFinite(r.maxSwh)) limitDefaultsMs.maxSwh = r.maxSwh;
       ['maxWindMode', 'maxSwhMode'].forEach(function (id) { if (r[id] === 'block' || r[id] === 'avoid') limitModeDefaults[id] = r[id]; });
       if (isFinite(r.limitAvoidStrength)) limitModeDefaults.limitAvoidStrength = r.limitAvoidStrength;
-      if (isFinite(r.comfortWeight)) limitModeDefaults.comfortWeight = r.comfortWeight;
+      if (isFinite(r.comfortWeight)) {
+        limitModeDefaults.comfortWeight = r.comfortWeight;
+        limitModeDefaults.comfortKnown = true;
+      }
       showSailThresh();
       showLimits();
       showLimitModes();

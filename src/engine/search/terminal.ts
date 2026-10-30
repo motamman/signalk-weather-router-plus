@@ -86,6 +86,10 @@ function waterApproach(ctx: SearchContext, stages: Candidate[][]): { bestC: Cand
         const jj = j + dj;
         if (ii < 0 || ii >= nx || jj < 0 || jj >= ny) continue;
         const n = jj * nx + ii;
+        // The field's own moves only: water, and a diagonal where both cells beside it are water (waterFieldOver), so
+        // the walk never slips between two land cells touching at a corner (PR #91 review).
+        // The end's own cell is the field's source, passable whatever it is.
+        if ((n !== endCell && !free(n)) || (di !== 0 && dj !== 0 && (!free(j * nx + ii) || !free(jj * nx + i)))) continue;
         if (next < 0 || field[n] < field[next]) next = n;
       }
     if (next < 0 || !(field[next] < field[cur])) return null;
@@ -96,7 +100,11 @@ function waterApproach(ctx: SearchContext, stages: Candidate[][]): { bestC: Cand
   // The fewest straight moves: from each point, the farthest one ahead whose move is clear.
   const pts: [number, number][] = [path[0]];
   let k = 0;
+  const crosses = (a: [number, number], b: [number, number]): boolean =>
+    landMask.legsCrossLandBulk(Float64Array.of(a[0]), Float64Array.of(a[1]), Float64Array.of(b[0]), Float64Array.of(b[1]))[0] !== 0;
   while (k < path.length - 1) {
+    // One cell on, unless that move crosses land too: then the water path is no way (the search fails as it would have).
+    if (crosses(path[k], path[k + 1])) return null;
     let far = k + 1;
     for (let q = path.length - 1; q > k + 1; q--) {
       const hit = landMask.legsCrossLandBulk(

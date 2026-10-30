@@ -56,6 +56,10 @@ uses [Semantic Versioning](https://semver.org/).
   search stalled about 290 km short. Entries (and exits into the open water
   a leg ends in) are now costed by the shortest way over the open-water map,
   and one the water does not reach is not used.
+- **Power boats see the wind and wave limits.** They sat in the
+  sail-only Sailing strategy section, so a power boat's routes were sent
+  with limits its user could not see or change; they now sit with Comfort
+  in the Route tab's Limits and comfort section, for every vessel type.
 - **Compare departures no longer shows another route's departures.** The
   table stayed until Compare departures was pressed again, through Reset,
   a new Find Route, another saved route opened or the markers moved, and
@@ -90,11 +94,13 @@ uses [Semantic Versioning](https://semver.org/).
   avoid carries a warning with the seconds over, worked out on the final
   route, so simplification no longer drops it.
 
-- **Comfort beside the limits.** The comfort setting (how much the route
-  avoids rough water) is now a slider on the Route tab, beside the wind and
-  wave limits, and in the Freeboard panel, chosen per route and remembered
-  per user; the routing setting is where it starts. It was only in
-  Settings, for the whole server.
+- **Comfort on the Route tab.** The comfort setting (how much the route
+  avoids rough water) is now a slider in the Route tab's new Limits and
+  comfort section, for sail and power boats alike, and beside the limits in the Freeboard
+  panel, chosen per route and remembered per user (synced like the other
+  route choices); the routing setting is where it starts, and is what a
+  route gets until the user chooses. It was only in Settings, for the
+  whole server.
 
 ### Changed
 

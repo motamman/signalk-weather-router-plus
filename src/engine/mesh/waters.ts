@@ -183,12 +183,16 @@ export function planWaters(
   const mask = emptyMask(land);
   for (const m of meshes) markMeshWater(m.store, mask);
   const labels = labelOpen(land, mask);
-  // The open-water distance fields, one per point a cost is measured from, walked when first asked for (crossings).
+  // The open-water distance fields, walked when first asked for (crossings): the leg's end's, and the one point's a
+  // way is being costed from. Each is a whole raster (up to the cell budget, 4 bytes a cell), so no more than those two
+  // are held: another point's field replaces the last one (PR #91 review: one kept per point across the tied ways).
+  const endCell = cellOf(mask, end[0], end[1]);
   const fields = new Map<number, Float32Array | null>();
   const waterStats = { fields: 0, cells: land.nx * land.ny, ms: 0 };
   overWater = (p: [number, number]): Float32Array | null => {
     const c = cellOf(mask, p[0], p[1]);
     if (fields.has(c)) return fields.get(c)!;
+    for (const k of [...fields.keys()]) if (k !== endCell) fields.delete(k);
     const t0 = Date.now();
     const f = waterField(land, mask, c);
     waterStats.fields++;

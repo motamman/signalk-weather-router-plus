@@ -988,6 +988,14 @@
     <option value="motor">Motor Only</option>
   </select>
 
+  </div>
+  </details>
+
+  <!-- Limits and comfort: for every vessel type (the limits and the sea apply to motoring legs too). -->
+  <details class="subsection">
+  <summary>Limits and comfort</summary>
+  <div class="subsection-body">
+
   <label>Max wind: <input type="number" id="maxWind" min="0" step="1" placeholder="none" style="width:5em;" aria-label="Maximum wind speed"> <span class="unitOf" data-q="speed"></span></label>
   <label>Over the wind limit: <select id="maxWindMode" aria-label="Over the wind limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
   <div class="ctl-hint">Block: legs where the forecast wind is above the limit are not allowed. Avoid: they are allowed, but time over it counts extra when choosing the route, and the route warns. Empty limit = no limit.</div>
@@ -997,7 +1005,7 @@
   <label id="limitStrengthRow" hidden>Avoid strength: <input type="range" id="limitAvoidStrength" min="0" max="10" step="0.5" value="1" style="width:8em;vertical-align:middle;" aria-label="Avoid strength"> <span id="limitAvoidStrengthValue"></span></label>
   <div class="ctl-hint" id="limitStrengthHint" hidden>How hard the route tries to stay under a limit set to Avoid. Higher means it will sail further out of its way to avoid it. 0 means it never detours, it only warns.</div>
   <label>Comfort: <input type="range" id="comfortWeight" min="0" max="3" step="0.1" value="1" style="width:8em;vertical-align:middle;" aria-label="Comfort"> <span id="comfortWeightValue"></span></label>
-  <div class="ctl-hint">How much the route avoids rough water, as the boat meets it (head seas count more than following seas). Higher means it gives up more time for a smoother passage. 0 means the fastest route. Needs wave data in the forecast.</div>
+  <div class="ctl-hint">How much the route avoids rough water, as the boat meets it (head seas count more than following seas). Higher means it gives up more time for a smoother passage. 0 turns comfort off. Needs wave data in the forecast.</div>
 
   </div>
   </details>
