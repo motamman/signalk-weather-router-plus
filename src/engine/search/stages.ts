@@ -267,15 +267,23 @@ export function runStages(ctx: SearchContext, guide: SkeletonGuide): Candidate[]
       // Moves stopped by a limit, the coast, the wind or no boat speed: when they are at least half the moves tried, the
       // user is told that reason, then the stall; fewer, and the stall is told on its own.
       const stopped = lastTry.limited + lastTry.land + lastTry.noGo + lastTry.stuck;
-      if (lastTry.tried > 0 && 2 * stopped >= lastTry.tried)
-        // The parents: the candidates whose moves lastTry counted.
-        throw refuseDeadEnd(
-          ctx,
-          parents,
-          'boxed_in',
-          ` The front made no progress for ${stagesWithoutGain} stages.${atGoal}${forecastNote(ctx)}`
-        );
-      throw new RouteError(`${stalled}.${atGoal}${forecastNote(ctx)}`, 'boxed_in');
+      const err =
+        lastTry.tried > 0 && 2 * stopped >= lastTry.tried
+          ? // The parents: the candidates whose moves lastTry counted.
+            refuseDeadEnd(
+              ctx,
+              parents,
+              'boxed_in',
+              ` The front made no progress for ${stagesWithoutGain} stages.${atGoal}${forecastNote(ctx)}`
+            )
+          : new RouteError(`${stalled}.${atGoal}${forecastNote(ctx)}`, 'boxed_in');
+      // An end where the leg joins a chart mesh: the terminal tries the water path first (terminal.ts waterApproach)
+      // and throws this when that fails too.
+      if (args.endApproach === 'water') {
+        ctx.stallError = err;
+        break;
+      }
+      throw err;
     }
     for (const c of retained) {
       for (const vi of c.viaIdxs) {

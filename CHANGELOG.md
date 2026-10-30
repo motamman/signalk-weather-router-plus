@@ -8,6 +8,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An open stretch ending where the leg joins the chart mesh no longer
+  stalls when that point lies up a channel the search's straight moves
+  cannot enter: with no clear straight final leg, the last part follows
+  the shortest path over water to it, as straight moves clear of land.
+
 - Accept `auto` and `signalk-active` selections when submitting routes and
   departure windows. Their provider check stays at dispatch; local file tokens
   are still checked before queuing. Tokenless previews follow `polarSource`,

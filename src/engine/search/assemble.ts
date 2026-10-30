@@ -30,6 +30,7 @@ export function assembleRoute(ctx: SearchContext, guide: SkeletonGuide, stages: 
     curStage--;
   }
   chain.reverse();
+  if (t.approach) chain.push(...t.approach);
   if (tackCand) chain.push(tackCand);
   if (finalCand) chain.push(finalCand);
   // A candidate that landed on the destination (the stage step dividing

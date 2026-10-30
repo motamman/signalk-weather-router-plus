@@ -1042,7 +1042,12 @@ settings; a request can override them with
   leg's end; an exit into open water leading to more charts, and a transfer,
   by the straight run. Each open
   stretch is the coastline search with every mesh's water as land, so it
-  never enters charted water. A leg the waters do not join fails with the
+  never enters charted water. An open stretch ending where the leg joins a
+  mesh may find that point up a channel its straight moves cannot enter:
+  when no clear straight final leg reaches it, the last part follows the
+  shortest path over water on the search's own raster, cut to the fewest
+  clear straight moves, from the front's branch with the least cost plus
+  that path at cruise speed. A leg the waters do not join fails with the
   reason.
 - **No search area.** The mesh search reads the chart a 0.25° tile at a
   time, as it reaches each tile, and lets a tile go once nothing it still

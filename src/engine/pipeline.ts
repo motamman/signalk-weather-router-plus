@@ -311,6 +311,8 @@ async function chartsLeg(
   const coastal: LegPipelineInputs = { ...inp, landFor: b => (mask ? inp.landFor(b).withExtraLand(mask) : inp.landFor(b)) };
   if (p.kind === 'open') return openWaterLeg(coastal, plan, legIndex, legStart, legDeparture, tag, null, false, box);
   const exactAt = (end: [number, number]): LegPlan => ({ ...plan, end, snapToExact: true, arrivalRadiusM: undefined });
+  // An open stretch ending where the leg joins the charts: that point may lie up a channel the search cannot enter.
+  const joinAt = (end: [number, number]): LegPlan => ({ ...exactAt(end), endApproach: 'water' });
   const where = (q: [number, number]): string => `${q[1].toFixed(4)}, ${q[0].toFixed(4)}`;
   const parts: Route[] = [];
   let at = legDeparture;
@@ -325,7 +327,8 @@ async function chartsLeg(
           `the chart mesh cannot take the leg's stretch on the charts from ${where(st.from)} to ${where(st.to)}: ${mr.refused}`
         );
       part = mr;
-    } else part = await openWaterLeg(coastal, sub, legIndex, st.from, at, tag, null, false, box);
+    } else
+      part = await openWaterLeg(coastal, k === p.stretches.length - 1 ? sub : joinAt(st.to), legIndex, st.from, at, tag, null, false, box);
     inp.releaseAreas?.();
     parts.push(part);
     at = part.waypoints[part.waypoints.length - 1].time;
@@ -510,6 +513,7 @@ async function openWaterLeg(
     corridor: corridor ? { skeleton: corridor.skeleton, widthM: corridor.widthM } : undefined,
     arrivalRadiusM: plan.arrivalRadiusM,
     snapToExact: plan.snapToExact,
+    endApproach: plan.endApproach,
     onProgress: multi ? (st: number, tot: number, m: string) => progress(st, tot, `${tag}${m}`) : progress,
     // Each stage's front, streamed for the web app's display (never stored with the job).
     onFrontier: inp.onFrontier ? (front: StageFront) => inp.onFrontier!(legIndex, front) : undefined,

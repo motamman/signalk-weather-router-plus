@@ -94,6 +94,13 @@ export interface ComputeRouteArgs {
   /** Wind speed (m/s) and significant wave height (m) limits; over one, a candidate is not allowed (block) or costs more (avoid). */
   maxWindMs?: number;
   maxSwhM?: number;
+  /**
+   * 'water': the end is where the leg joins a chart mesh (a crossing chosen by the waters plan, mesh/waters.ts), which can
+   * lie at the end of a channel the search's straight moves cannot enter. When the search finds no clear straight final
+   * leg to it, the last part follows the shortest path over water on the search's own raster (terminal.ts
+   * waterApproach) instead of failing. Absent: as every other search.
+   */
+  endApproach?: 'water';
   /** What exceeding each limit does (absent: block), and the avoid surcharge (engine/legsim.ts SimOptions). */
   maxWindMode?: LimitMode;
   maxSwhMode?: LimitMode;
@@ -191,4 +198,9 @@ export interface SearchContext extends PropagatorParams {
   fronts: StageFront[];
   /** Set when start and end coincide: the one-waypoint route to return. */
   degenerateRoute?: Route;
+  /**
+   * With `args.endApproach` 'water': the error the stall detector would have thrown with every via crossed (the front
+   * near the end, no clear final leg), kept while the terminal tries the water path; thrown when that fails too.
+   */
+  stallError?: Error;
 }

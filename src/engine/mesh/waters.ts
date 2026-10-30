@@ -497,9 +497,22 @@ function labelOpen(land: LandMask, mask: CellMask): Int32Array {
  * rounded (Math.fround) so a popped key matches its cell's.
  */
 export function waterField(land: LandMask, mask: CellMask, s: number): Float32Array | null {
+  return waterFieldOver(mask, c => isFree(land, mask, c), s);
+}
+
+/**
+ * waterField over any grid and any notion of free water (`free`, per cell index): the search's own land as it sees it
+ * for an open stretch's final approach (search/terminal.ts waterApproach), where the meshes' water is a view over the
+ * raster, not a mask beside it.
+ */
+export function waterFieldOver(
+  grid: { nx: number; ny: number; resolutionDeg: number; bbox: { south: number } },
+  free: (c: number) => boolean,
+  s: number
+): Float32Array | null {
   if (s < 0) return null;
-  const { nx, ny } = mask;
-  const r = mask.resolutionDeg;
+  const { nx, ny } = grid;
+  const r = grid.resolutionDeg;
   const dy = r * M_PER_DEG;
   const dist = new Float32Array(nx * ny).fill(Infinity);
   const heap = new MinHeap();
@@ -511,7 +524,7 @@ export function waterField(land: LandMask, mask: CellMask, s: number): Float32Ar
     if (d > dist[c]) continue; // a stale entry
     const i = c % nx;
     const j = (c - i) / nx;
-    const dx = dy * Math.cos((mask.bbox.south + (j + 0.5) * r) * DEG);
+    const dx = dy * Math.cos((grid.bbox.south + (j + 0.5) * r) * DEG);
     const dd = Math.hypot(dx, dy);
     for (let dj = -1; dj <= 1; dj++) {
       const jj = j + dj;
@@ -521,8 +534,8 @@ export function waterField(land: LandMask, mask: CellMask, s: number): Float32Ar
         const ii = i + di;
         if (ii < 0 || ii >= nx) continue;
         const n = jj * nx + ii;
-        if (!isFree(land, mask, n)) continue;
-        if (di !== 0 && dj !== 0 && (!isFree(land, mask, j * nx + ii) || !isFree(land, mask, jj * nx + i))) continue;
+        if (!free(n)) continue;
+        if (di !== 0 && dj !== 0 && (!free(j * nx + ii) || !free(jj * nx + i))) continue;
         const nd = Math.fround(d + (di !== 0 && dj !== 0 ? dd : di !== 0 ? dx : dy));
         if (nd < dist[n]) {
           dist[n] = nd;
