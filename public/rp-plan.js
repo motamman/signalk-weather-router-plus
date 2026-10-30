@@ -1339,6 +1339,40 @@ function _initRouteChoices() {
     el.addEventListener('change', () => { prefs.set(key, el.value); });
   }
 }
+// Block / Avoid for each limit and the avoid strength: remembered per browser and Signal K user (rp-prefs.js); until
+// the user chooses, the plugin's routing settings. The strength shows only when a limit is set to avoid.
+function _initLimitModes() {
+  const modes = [['maxWindMode', 'rp:maxWindMode'], ['maxSwhMode', 'rp:maxSwhMode']];
+  const strength = /** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength'));
+  if (!strength) return;
+  const sync = () => {
+    const any = modes.some(([id]) => /** @type {HTMLSelectElement} */ (document.getElementById(id)).value === 'avoid');
+    document.getElementById('limitStrengthRow').hidden = !any;
+    document.getElementById('limitStrengthHint').hidden = !any;
+  };
+  for (const [id, key] of modes) {
+    const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
+    const saved = prefs.get(key);
+    if (saved === 'block' || saved === 'avoid') el.value = saved;
+    el.addEventListener('change', () => { prefs.set(key, el.value); sync(); });
+  }
+  const savedS = prefs.get('rp:limitAvoidStrength');
+  if (savedS && Number.isFinite(+savedS)) strength.value = savedS;
+  strength.addEventListener('change', () => { prefs.set('rp:limitAvoidStrength', strength.value); });
+  sync();
+  authFetch(API + '/settings', { cache: 'no-store' }, null)
+    .then(r => (r.ok ? r.json() : null))
+    .then(s => {
+      const r = (s && s.values && s.values.routing) || {};
+      for (const [id, key] of modes) {
+        const v = r[id];
+        if (!prefs.get(key) && (v === 'block' || v === 'avoid')) /** @type {HTMLSelectElement} */ (document.getElementById(id)).value = v;
+      }
+      if (!prefs.get('rp:limitAvoidStrength') && Number.isFinite(r.limitAvoidStrength)) strength.value = String(r.limitAvoidStrength);
+      sync();
+    })
+    .catch(() => {});
+}
 // Smoothing applies to both routers (the owner's decision, 2026-10-08): a
 // shortcut replaces laid-out tacks only where the straight course can be
 // sailed within the tolerance, which the smoother times with the real polar.
@@ -1489,6 +1523,7 @@ function _restorePlan() {
 }
 _restorePlan();
 _initRouteChoices();
+_initLimitModes();
 _syncSmoothing();
 document.getElementById('departure').addEventListener('change', _savePlan);
 
@@ -1816,6 +1851,10 @@ function _warningKind(w) {
   if (w.violation === 'beat_motored') {
     const s = Number(w.detail);
     return 'motored a beat: no room to tack there' + (s > 0 && fmtTime(s) ? ', ' + fmtTime(s) + ' under motor' : '');
+  }
+  if (w.violation === 'wind_over_limit' || w.violation === 'waves_over_limit') {
+    const s = Number(w.detail);
+    return 'over the ' + (w.violation === 'wind_over_limit' ? 'wind' : 'wave') + ' limit' + (s > 0 && fmtTime(s) ? ' for ' + fmtTime(s) : '');
   }
   return escapeHtml(String(w.violation || 'warning').replace(/_/g, ' '));
 }
@@ -2247,6 +2286,15 @@ function buildRoutePayload(overrides) {
   const maxWindMs = _limitSI('maxWind'), maxSwhM = _limitSI('maxSwh');
   if (maxWindMs !== null) body.max_wind_ms = maxWindMs;
   if (maxSwhM !== null) body.max_swh_m = maxSwhM;
+  // Block / Avoid for each limit, and the avoid strength when one avoids.
+  for (const [id, field] of [['maxWindMode', 'max_wind_mode'], ['maxSwhMode', 'max_swh_mode']]) {
+    const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
+    if (el && el.value) body[field] = el.value;
+  }
+  if (body.max_wind_mode === 'avoid' || body.max_swh_mode === 'avoid') {
+    const v = parseFloat(/** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength')).value);
+    if (Number.isFinite(v) && v >= 0) body.limit_avoid_strength = v;
+  }
   if (overrides.departure !== undefined) body.departure = overrides.departure;
   else if (fromClockInput(depVal)) body.departure = fromClockInput(depVal).toISOString();
   const name = (/** @type {HTMLInputElement} */ (document.getElementById('routeName')).value || '').trim();

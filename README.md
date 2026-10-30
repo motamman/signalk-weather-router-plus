@@ -757,8 +757,10 @@ and the panel runs in a sandboxed iframe served from
   max, Fastest, Motor) and, under sail, the **min sail speed** (the boat
   speed under sail below which the router motors; the plugin's routing
   setting by default, in Freeboard's speed unit), and the **Limits**: a
-  maximum wind speed and wave height that no leg may exceed (empty = no
-  limit; the routing settings' values by default). With a min sail speed
+  maximum wind speed and wave height (empty = no limit; the routing
+  settings' values by default), each set to **Block** (no leg may exceed
+  it) or **Avoid** (allowed, at a cost, with the **strength**; see
+  [Limits: block or avoid](#limits-block-or-avoid)). With a min sail speed
   of 0 (never motor) a stretch the boat cannot sail or tack out of fails
   the route, saying "set Min sail speed above 0". The polar, mode, min
   sail speed and limits are the web app's Setup choices: the panel reads
@@ -1186,6 +1188,35 @@ beam and a middle one are the **Effort** choice on the Route tab
 beside the **Router** choice. The (i) beside each opens the same page
 (`public/routers.html`): the routers, and at its Effort section what each
 effort sets, what it cost and gained on these requests, and which to pick.
+
+### Limits: block or avoid
+
+The wind and wave limits (`max_wind_ms`, `max_swh_m`, or the routing
+settings) each have a mode. **Block** (the default): water over the
+limit is impassable; the route goes round it, or fails as boxed in when
+it cannot. **Avoid**: the route may go through it, but each second spent
+over a limit counts as (1 + strength) seconds when the route is chosen
+(`limit_avoid_strength`, default 1: time over a limit counts double),
+however far over; a second over both limits counts once. The route's
+times, ETAs and summary stay the real times, and each leg that goes over
+carries a `wind_over_limit` or `waves_over_limit` warning with the
+seconds over (worked out on the final route).
+
+The search keeps one branch per bin on its cost so far, so a branch that
+swings wide round water over a limit is dropped before the straight one
+reaches it and pays; on its own it would rarely go round. So when the
+route searched with avoid goes over a limit, the leg is searched again
+with that limit on block (the best way round), and the cheaper on time
+plus surcharge (strength × the seconds over) is kept; when there is no
+way round, the route goes through. The job log says which was kept and
+why. It chooses between going through and going round: a route that
+only clips the water, if cheaper than both, is not looked for. The second
+search runs only on legs that go over a limit.
+
+The limits need the forecast: a Motor route loads none, so neither mode
+does anything there. They apply on coastline legs and on chart-mesh legs
+alike (the mesh search itself is motor only; its stretches are then
+timed with the limits).
 
 ### Comfort (rough water)
 
@@ -1618,7 +1649,7 @@ the Signal K user's unit preferences. Saving needs a `readwrite` login.
 | `forecast` | horizon (72 h = 259200 s, 3–360 h; above 144 h only 00z/12z cycles qualify; every source's horizon: SMOC, RTOFS and the tide map follow it, each to the end of its own data), check interval (15 min = 900 s; every source is checked at it: ECMWF, SMOC, RTOFS, sea level; an existing settings.json keeps its value), cached cycles kept (2), extra fields (on), memory kept free (1 GB = 1e9 B) | horizon / extra fields / memory kept free reload the forecast (the horizon also currents and tides); the interval restarts the timer |
 | `currents` | SMOC on, SMOC step (3 h = 10800 s; 1 h or 3 h only), SMOC area half-width (15°, 2–30°), RTOFS on (the product that contains the vessel is loaded, and changes as the vessel moves), also load RTOFS products (none; a list of products loaded wherever the vessel is), RTOFS step (3 h) | reloads currents |
 | `tides` | Copernicus Marine sea level on, tide map area half-width (15°, 1–30°) | reloads tides only |
-| `routing` | stages (20), subsectors (30), headings (30), heading increment (1°), sail threshold (4.9 kt), tacking penalty (30 s, charged per tack or gybe by both routers), buffer from land (0 m: the route keeps at least this far from the coastline; a start or end closer is moved out to it, a passage narrower than twice it closes), buffer from unusable water (0 m: on a mesh leg the route keeps at least this far from every triangle the boat cannot use), drawbridges (ask: plan as open and report the ones crossed; open; avoid), wait at a drawbridge (0 s), simulation step (200 m), land raster cell budget (25 M), allow canals (off), route simplification (10 m, 0 = off), shortcut smoother (off), comfort weight (1, 0 = off), shortcut may be slower by (0.05 = 5%), finished routes kept (50), max wind (none), max wave height (none) | applies to the next route |
+| `routing` | stages (20), subsectors (30), headings (30), heading increment (1°), sail threshold (4.9 kt), tacking penalty (30 s, charged per tack or gybe by both routers), buffer from land (0 m: the route keeps at least this far from the coastline; a start or end closer is moved out to it, a passage narrower than twice it closes), buffer from unusable water (0 m: on a mesh leg the route keeps at least this far from every triangle the boat cannot use), drawbridges (ask: plan as open and report the ones crossed; open; avoid), wait at a drawbridge (0 s), simulation step (200 m), land raster cell budget (25 M), allow canals (off), route simplification (10 m, 0 = off), shortcut smoother (off), comfort weight (1, 0 = off), shortcut may be slower by (0.05 = 5%), finished routes kept (50), max wind (none), max wave height (none), over the wind limit and over the wave limit (block; avoid: allowed, time over counting extra), avoid strength (1) | applies to the next route |
 | `publish` | save to the Resources API (on), route name prefix (`WRP`), notifications (on) | applies to the next route |
 
 **Resource guard.** The decoded forecast is on disk, so the guard
@@ -1947,6 +1978,8 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `sail_thresh_ms` | number | m/s | setting `routing.sailThreshold` | ≥ 0 |
 | `max_wind_ms` | number | m/s | setting `routing.maxWind` (none) | 0..100; a leg is not allowed where the forecast wind speed is above this |
 | `max_swh_m` | number | m | setting `routing.maxSwh` (none) | 0..30; a leg is not allowed where the significant wave height is above this (needs wave data) |
+| `max_wind_mode`, `max_swh_mode` | string | | settings `routing.maxWindMode`, `routing.maxSwhMode` (`block`) | what exceeding each limit does: `block`, the leg is not allowed; `avoid`, see [Limits: block or avoid](#limits-block-or-avoid) |
+| `limit_avoid_strength` | number | | setting `routing.limitAvoidStrength` (1) | 0..10; for a limit set to avoid, extra seconds per second spent over it (1 = time over counts double, 0 = warnings only) |
 | `simplify_m` | number | m | setting `routing.simplify` | 0..5000; route simplification tolerance, 0 = off |
 | `smoother` | boolean | | setting `routing.smoother` | run the shortcut smoother |
 | `smoother_tolerance` | number | ratio | setting `routing.smootherTolerance` | 0..0.5; how much slower a shortcut may be (0.05 = 5%). The Route tab's *Smoothing* (Default / On / Off) sends `smoother`; it runs for both routers |
@@ -2149,7 +2182,7 @@ LineString `properties`:
 | `stop_count` | number | count | start + waypoints + destination; present with `snaps` |
 | `start_original`, `start_anchor`, `start_snap_distance_m` | `[lon, lat]`, `[lon, lat]`, number | degrees, m | present when the start was moved: the drawn point, where the route starts, and the distance between them |
 | `end_original`, `end_anchor`, `end_snap_distance_m` | as above | | present when the destination was moved |
-| `warnings` | array | | present when any; items `{leg_index, violation, from, to, repaired, detail?}`, `violation` `"leg_crosses_land"`, `"wind_over_limit"`, `"waves_over_limit"`, `"detour_motored"` (a depth-check detour that motored on a sailing route; `detail` its motoring time, seconds), `"search_failed"` (the search on an open stretch of a chart-mesh leg failed and the stretch follows the mesh route instead; `from`/`to` the stretch's ends, `detail` the search's reason) or `"beat_motored"` (the refined router found no room to tack and motored the leg straight; `detail` its motoring time, seconds), `from`/`to` `[lon, lat]` |
+| `warnings` | array | | present when any; items `{leg_index, violation, from, to, repaired, detail?}`, `violation` `"leg_crosses_land"`, `"wind_over_limit"`, `"waves_over_limit"` (for a limit set to avoid, `detail` the seconds the leg spends over it; under block, a leg whose waypoint sample is over it), `"detour_motored"` (a depth-check detour that motored on a sailing route; `detail` its motoring time, seconds), `"search_failed"` (the search on an open stretch of a chart-mesh leg failed and the stretch follows the mesh route instead; `from`/`to` the stretch's ends, `detail` the search's reason) or `"beat_motored"` (the refined router found no room to tack and motored the leg straight; `detail` its motoring time, seconds), `from`/`to` `[lon, lat]` |
 | `land_crossings` | number | count | present when a warning is `leg_crosses_land` |
 | `has_land_crossing` | boolean | | `true` when `land_crossings` is present |
 | `max_swh_m` | number | m | highest significant wave height at a route point; present when wave data was sampled |

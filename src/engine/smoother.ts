@@ -15,7 +15,7 @@ import { haversineDistanceM } from '../geo/geodesy';
 import { M_PER_DEG } from '../geo/units';
 import type { LandTest } from '../geo/landmask';
 import type { CurrentSource, WindSource } from './environment';
-import { simulateLegTime, type SimOptions } from './legsim';
+import { limitAvoidActive, simulateLegTime, type SimOptions } from './legsim';
 import type { Route, Waypoint } from './route';
 import type { PolarDiagram } from '../vessel/polar';
 import type { VesselParams } from '../vessel/vessel';
@@ -112,11 +112,11 @@ export function shortcutSmoother(route: Route, a: SmootherArgs): number {
   const tol = 1 + a.tolerance;
   let drops = 0;
   let anchor = wps.length - 1;
-  // With a comfort weight the shortcut is judged on time plus comfort cost,
-  // as the search chose the legs, so it never cuts back through the rough
-  // water the search went round. legPenalty[k]: the comfort cost of the leg
-  // into waypoint k.
-  const comfort = (a.sim.comfortWeight ?? 0) > 0;
+  // With a comfort weight, or a limit set to avoid, the shortcut is judged on
+  // time plus that cost, as the search chose the legs, so it never cuts back
+  // through the rough water, or the water over a limit, the search went
+  // round. legPenalty[k]: the cost of the leg into waypoint k.
+  const comfort = (a.sim.comfortWeight ?? 0) > 0 || limitAvoidActive(a.sim);
   const legPenalty = new Float64Array(wps.length);
   if (comfort) {
     for (let k = 1; k < wps.length; k++) {
@@ -232,6 +232,36 @@ export function revalidateLand(route: Route, land: LandTest): void {
     if (land.legCrossesLandExact(a.lon, a.lat, b.lon, b.lat)) {
       warns.push({ leg_index: i, violation: 'leg_crosses_land', from: [a.lon, a.lat], to: [b.lon, b.lat], repaired: false });
     }
+  }
+  route.warnings = warns.length ? warns : undefined;
+}
+
+/**
+ * The legs of the final route that spend time over a limit set to avoid, as warnings on the route: each leg timed
+ * again from its start waypoint's time, the sub-steps over the limit counted along the whole leg (`detail`: those
+ * seconds). Worked out on the route as it stands after the search, the layout, simplification and the land check, so
+ * the warnings are neither dropped by simplification nor numbered against the search's points. A limit set to block
+ * keeps the search's own warnings (search/assemble.ts), as before.
+ */
+export function limitWarnings(
+  route: Route,
+  env: { vessel: VesselParams; polar: PolarDiagram | null; wind: WindSource; current: CurrentSource; sim: SimOptions }
+): void {
+  const s = env.sim;
+  const avoidWind = s.maxWindMs !== undefined && s.maxWindMode === 'avoid';
+  const avoidSwh = s.maxSwhM !== undefined && s.maxSwhMode === 'avoid';
+  if (!avoidWind && !avoidSwh) return;
+  const warns: NonNullable<Route['warnings']> = (route.warnings ?? []).filter(
+    w => !(avoidWind && w.violation === 'wind_over_limit') && !(avoidSwh && w.violation === 'waves_over_limit')
+  );
+  const wps = route.waypoints;
+  for (let i = 0; i + 1 < wps.length; i++) {
+    const a = wps[i];
+    const b = wps[i + 1];
+    const r = simulateLegTime(a.lon, a.lat, a.time, b.lon, b.lat, env.vessel, env.polar, env.wind, env.current, s);
+    const at = { leg_index: i, from: [a.lon, a.lat] as [number, number], to: [b.lon, b.lat] as [number, number], repaired: false };
+    if (r.overWindSeconds > 0) warns.push({ ...at, violation: 'wind_over_limit', detail: String(Math.round(r.overWindSeconds)) });
+    if (r.overSwhSeconds > 0) warns.push({ ...at, violation: 'waves_over_limit', detail: String(Math.round(r.overSwhSeconds)) });
   }
   route.warnings = warns.length ? warns : undefined;
 }

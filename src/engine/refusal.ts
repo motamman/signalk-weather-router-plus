@@ -86,7 +86,12 @@ export function refusalText(r: RouteRefusal): string {
           ? `From ${whereText(r.at, r.atMs).slice(3)},`
           : 'At the start';
     const why = r.reasons.length ? `: its moves were stopped by ${r.reasons.map(k => REASON_TEXT[k]).join(', ')}` : '';
-    return `${lead} the search could not make progress${why}. Add a waypoint or choose another departure.`;
+    // Land alone: another departure changes nothing; the way out is a point in open water.
+    const what =
+      r.reasons.length === 1 && r.reasons[0] === 'land'
+        ? 'Add a waypoint in open water round the land, or move a point that is close to the shore into open water.'
+        : 'Add a waypoint or choose another departure.';
+    return `${lead} the search could not make progress${why}. ${what}`;
   }
   const where =
     r.kind === 'over_limit' && r.ahead && r.at

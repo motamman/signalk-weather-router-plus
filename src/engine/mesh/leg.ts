@@ -13,7 +13,7 @@
 import type { PolarDiagram } from '../../vessel/polar';
 import type { VesselParams } from '../../vessel/vessel';
 import type { CurrentSource, WindSource } from '../environment';
-import { simulateLegTime, type SimOptions } from '../legsim';
+import { simulateLegTime, type LegSimResult, type SimOptions } from '../legsim';
 import type { LegPlan } from '../multileg';
 import type { ProgressFn } from '../progress';
 import type { PropagatorOptions } from '../propagator';
@@ -303,7 +303,8 @@ export function pathLengthM(path: [number, number][]): number {
  * passage; the request's own policy for an open stretch the pipeline
  * follows along the mesh), then wind / wave / current enrichment. Null
  * when a segment cannot be made (stuck, or the current cancels the
- * boat's speed): the caller falls back to the coastline search. A
+ * boat's speed), with the simulator's reason in `stuck` when given: the
+ * caller falls back to the coastline search, or names the reason. A
  * sail_max stretch is not walked here but laid out with tacks
  * (experimental/propagator.ts sailPolyline).
  */
@@ -314,7 +315,8 @@ export function routeFromMeshPath(
   polar: PolarDiagram | null,
   wind: WindSource,
   current: CurrentSource,
-  sim: SimOptions
+  sim: SimOptions,
+  stuck?: { reason?: LegSimResult['reason'] }
 ): Route | null {
   const wps: Waypoint[] = [{ lon: path[0][0], lat: path[0][1], time: departure, sogMs: 0, cogDeg: 0, mode: 'motoring' }];
   let t = departure;
@@ -322,7 +324,10 @@ export function routeFromMeshPath(
     const a = path[i - 1];
     const c = path[i];
     const r = simulateLegTime(a[0], a[1], t, c[0], c[1], vessel, polar, wind, current, sim);
-    if (!Number.isFinite(r.seconds)) return null;
+    if (!Number.isFinite(r.seconds)) {
+      if (stuck) stuck.reason = r.reason;
+      return null;
+    }
     t = new Date(t.getTime() + r.seconds * 1000);
     wps.push({ lon: c[0], lat: c[1], time: t, sogMs: 0, cogDeg: 0, mode: r.dominantMode === 'sailing' ? 'sailing' : 'motoring' });
   }

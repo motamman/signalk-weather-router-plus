@@ -16,6 +16,19 @@ uses [Semantic Versioning](https://semver.org/).
   the existing linear polar model and per-wind-speed no-go floors.
 - Keep the polar picker filter during automatic refresh; motor-only routes
   accept managed-polar tokens without resolving them as local files.
+- A chart-mesh segment the route could not make said "cannot be made
+  against the current" whatever the cause; it now names it: over the wind
+  or wave limit, a current stronger than the boat, the polar's no-go
+  angle, or no boat speed.
+- A route boxed in near a point close to the shore no longer says "the
+  front reached the destination" when it stopped kilometres short, or
+  calls a waypoint ending the leg "the destination": it says how close the
+  search came to which point. A search stopped by land alone is no longer
+  told to choose another departure or offered a longer forecast horizon.
+- A laid-out leg stopped by a wind or wave limit set to block said
+  "(limited); raise Min sail speed so that stretch is motored"; it now
+  says it is over the limit and advises raising the limit, setting it to
+  Avoid, or changing the departure.
 
 
 ### Added
@@ -29,6 +42,20 @@ uses [Semantic Versioning](https://semver.org/).
   `signalk-active` API polar tokens. Managed tables are adapted from canonical
   SI resources into the existing `PolarDiagram`; interpolation and routing math
   are unchanged. Each sailing route uses a fixed provider snapshot.
+- **The wind and wave limits can avoid instead of block.** Each limit has
+  a mode: Block (as before: the leg is not allowed) or Avoid (allowed, but
+  time over the limit counts (1 + strength) times as long when the route
+  is chosen, however far over; strength 1 by default). Settings
+  `routing.maxWindMode`, `routing.maxSwhMode`, `routing.limitAvoidStrength`;
+  request fields `max_wind_mode`, `max_swh_mode`, `limit_avoid_strength`;
+  a Block/Avoid switch beside each limit and an Avoid strength on the web
+  page and in the Freeboard panel. The search alone rarely goes round
+  costly water (it keeps one branch per bin on its cost so far, so the
+  wide one is dropped before the straight one pays), so a leg that goes
+  over a limit set to avoid is searched again with the limit blocking, and
+  the cheaper on time plus surcharge is kept. Each leg over a limit set to
+  avoid carries a warning with the seconds over, worked out on the final
+  route, so simplification no longer drops it.
 
 ### Changed
 

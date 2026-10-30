@@ -989,9 +989,13 @@
   </select>
 
   <label>Max wind: <input type="number" id="maxWind" min="0" step="1" placeholder="none" style="width:5em;" aria-label="Maximum wind speed"> <span class="unitOf" data-q="speed"></span></label>
-  <div class="ctl-hint">Legs where the forecast wind is above this are not allowed. Empty = no limit.</div>
+  <label>Over the wind limit: <select id="maxWindMode" aria-label="Over the wind limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
+  <div class="ctl-hint">Block: legs where the forecast wind is above the limit are not allowed. Avoid: they are allowed, but time over it counts extra when choosing the route, and the route warns. Empty limit = no limit.</div>
   <label>Max wave height: <input type="number" id="maxSwh" min="0" step="0.5" placeholder="none" style="width:5em;" aria-label="Maximum wave height"> <span class="unitOf" data-q="wave_height"></span></label>
-  <div class="ctl-hint">Legs where the significant wave height is above this are not allowed. Empty = no limit.</div>
+  <label>Over the wave limit: <select id="maxSwhMode" aria-label="Over the wave limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
+  <div class="ctl-hint">Block: legs where the significant wave height is above the limit are not allowed. Avoid: they are allowed, but time over it counts extra when choosing the route, and the route warns. Empty limit = no limit.</div>
+  <label id="limitStrengthRow" hidden>Avoid strength: <input type="number" id="limitAvoidStrength" min="0" max="10" step="0.5" value="1" style="width:4em;" aria-label="Avoid strength"></label>
+  <div class="ctl-hint" id="limitStrengthHint" hidden>Time over a limit set to Avoid counts (1 + this) times as long when choosing the route, however far over: 1 = double, 0 = warnings only. The route goes round when that costs less. The times shown stay real.</div>
 
   </div>
   </details>

@@ -7,7 +7,7 @@
  * arithmetic is unchanged; the golden routes hold that.
  */
 
-import { haversineDistanceM, perpendicularOffsetM } from '../../geo/geodesy';
+import { haversineDistanceM, latLonText, perpendicularOffsetM } from '../../geo/geodesy';
 import type { StageFront } from '../route';
 import { fmtUtc, forecastNote, refuseDeadEnd, resetTry, tryNote } from './context';
 import { propose } from './propose';
@@ -254,11 +254,13 @@ export function runStages(ctx: SearchContext, guide: SkeletonGuide): Candidate[]
           `the search is boxed in before crossing all ${nVias} via(s): deepest branch crossed ${deepest}, and for ${stagesWithoutGain} stages no candidate came closer than ${(bestEver / 1000).toFixed(0)} km to the next via${g.name ? ` at ${g.name}` : ''}; ${tryNote(ctx)}.${forecastNote(ctx)}`
         );
       }
-      // The front at the destination with no clear final leg: the point
-      // sits in a land cell of the raster (too close to the shore).
+      // The front within one step of the point this search heads for (the
+      // destination, or a waypoint ending this leg) with no clear final
+      // leg: the point sits in a land cell of the raster (too close to the
+      // shore). Said as how close it came, not "reached".
       const atGoal =
         bestEver <= candStepM
-          ? ' The front reached the destination but no final leg to it was clear of land: the point is too close to the shore for the land raster.'
+          ? ` The search came within {length:${Math.round(bestEver)}} of the point it was heading for (${latLonText(eLat, eLon)}), but no final leg to it was clear of land: the point is too close to the shore for the coastline data.`
           : '';
       const stalled = `the search is boxed in: for ${stagesWithoutGain} stages no candidate came closer than ${(bestEver / 1000).toFixed(1)} km to the destination`;
       progress(stage + 1, Math.max(kEff, stage + 1), `${stalled}; ${tryNote(ctx)}`);

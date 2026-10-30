@@ -10,6 +10,7 @@
 
 import { Type, type Static, type TSchema } from 'typebox';
 import { DRAWBRIDGE_CHOICES } from '../engine/mesh/route';
+import { LIMIT_MODES } from '../engine/legsim';
 import { DEFAULT_ARRIVAL_RADIUS_M, MAX_ARRIVAL_RADIUS_M, validateLegOptions } from '../engine/multileg';
 import { ROUTER_KINDS } from '../engine/router';
 import { SEARCH_PRESETS } from '../engine/search/presets';
@@ -78,6 +79,27 @@ export const ROUTE_REQUEST_FIELDS = {
       ...settingRange('routing.maxSwh'),
       description:
         'A leg is not allowed where the significant wave height exceeds this (m); overrides routing.maxSwh. Needs wave data in the forecast',
+    })
+  ),
+  max_wind_mode: Type.Optional(
+    Type.Enum(LIMIT_MODES, {
+      type: 'string',
+      description:
+        'What exceeding max_wind_ms does: block (the leg is not allowed) or avoid (allowed, each second over it counting (1 + limit_avoid_strength) seconds in the search, with a wind_over_limit warning on each leg that goes over); default from routing.maxWindMode',
+    })
+  ),
+  max_swh_mode: Type.Optional(
+    Type.Enum(LIMIT_MODES, {
+      type: 'string',
+      description:
+        'What exceeding max_swh_m does: block or avoid, as max_wind_mode (warning waves_over_limit); default from routing.maxSwhMode',
+    })
+  ),
+  limit_avoid_strength: Type.Optional(
+    Type.Number({
+      ...settingRange('routing.limitAvoidStrength'),
+      description:
+        'For a limit set to avoid: extra seconds per second spent over it, however far over (1 = time over counts double, 0 = warnings only); overrides routing.limitAvoidStrength. Route times stay real',
     })
   ),
   comfort_weight: Type.Optional(

@@ -235,7 +235,12 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
       <input id="maxSwh" type="number" step="0.5" min="0" placeholder="max waves" aria-label="Maximum wave height">
       <span id="maxSwhUnit" class="muted"></span>
     </div>
-    <span class="muted small">Legs with more wind or higher waves than this are not allowed. Empty = no limit.</span>
+    <div class="row">
+      <label class="small">Wind <select id="maxWindMode" aria-label="Over the wind limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
+      <label class="small">Waves <select id="maxSwhMode" aria-label="Over the wave limit"><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
+      <label class="small" id="limitStrengthRow" hidden>Strength <input id="limitAvoidStrength" type="number" step="0.5" min="0" max="10" value="1" aria-label="Avoid strength"></label>
+    </div>
+    <span class="muted small">Block: legs with more wind or higher waves than this are not allowed. Avoid: they are allowed, but time over a limit counts (1 + strength) times as long when choosing the route, and the route warns. Empty = no limit.</span>
   </div>
   <div class="row">
     <button id="cancel" type="button" hidden>Cancel</button>
@@ -1215,6 +1220,12 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     if (mw !== null) body.max_wind_ms = mw;
     var mh = limitSI('maxSwh', lengthUnit());
     if (mh !== null) body.max_swh_m = mh;
+    body.max_wind_mode = $('maxWindMode').value;
+    body.max_swh_mode = $('maxSwhMode').value;
+    if (body.max_wind_mode === 'avoid' || body.max_swh_mode === 'avoid') {
+      var strength = num('limitAvoidStrength');
+      if (strength !== null && strength >= 0) body.limit_avoid_strength = strength;
+    }
     return body;
   }
 
@@ -1226,6 +1237,27 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
   function limitKey(id) { return 'routeVar:' + id + ':si'; }
   function oldLimitKey(id) { return 'wrp-plotterext-' + id + '-ms'; }
   var limitDefaultsMs = { maxWind: null, maxSwh: null };
+  // Block / Avoid per limit and the avoid strength, kept with the user's choices under the web app's keys; until the
+  // user chooses, the plugin's routing settings. The strength shows only when a limit avoids.
+  var limitModeDefaults = { maxWindMode: 'block', maxSwhMode: 'block', limitAvoidStrength: 1 };
+  function syncLimitModes() {
+    $('limitStrengthRow').hidden = $('maxWindMode').value !== 'avoid' && $('maxSwhMode').value !== 'avoid';
+  }
+  function showLimitModes() {
+    ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
+      var v = choice('rp:' + id, 'wrp-plotterext-' + id);
+      $(id).value = v === 'block' || v === 'avoid' ? v : limitModeDefaults[id];
+    });
+    var s = choice('rp:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength');
+    $('limitAvoidStrength').value = s !== null && s !== '' && isFinite(+s) ? s : String(limitModeDefaults.limitAvoidStrength);
+    syncLimitModes();
+  }
+  ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
+    $(id).addEventListener('change', function () { setChoice('rp:' + id, 'wrp-plotterext-' + id, this.value); syncLimitModes(); });
+  });
+  $('limitAvoidStrength').addEventListener('change', function () {
+    setChoice('rp:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength', this.value);
+  });
   function showLimits() {
     [['maxWind', speedUnit()], ['maxSwh', lengthUnit()]].forEach(function (pair) {
       var id = pair[0], u = pair[1];
@@ -1274,9 +1306,12 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
       if (isFinite(r.sailThreshold)) sailThreshDefaultMs = r.sailThreshold;
       if (r.maxWind !== null && isFinite(r.maxWind)) limitDefaultsMs.maxWind = r.maxWind;
       if (r.maxSwh !== null && isFinite(r.maxSwh)) limitDefaultsMs.maxSwh = r.maxSwh;
+      ['maxWindMode', 'maxSwhMode'].forEach(function (id) { if (r[id] === 'block' || r[id] === 'avoid') limitModeDefaults[id] = r[id]; });
+      if (isFinite(r.limitAvoidStrength)) limitModeDefaults.limitAvoidStrength = r.limitAvoidStrength;
       showSailThresh();
       showLimits();
-    }).catch(function () { showSailThresh(); showLimits(); });
+      showLimitModes();
+    }).catch(function () { showSailThresh(); showLimits(); showLimitModes(); });
   }
   $('mode').addEventListener('change', showSailThresh);
   $('sailThresh').addEventListener('change', function () {

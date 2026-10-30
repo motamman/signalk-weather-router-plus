@@ -15,6 +15,7 @@
  */
 
 import type { DrawbridgeChoice } from '../engine/mesh/route';
+import { DEFAULT_LIMIT_AVOID_STRENGTH, type LimitMode } from '../engine/legsim';
 import { makeVessel, type VesselParams } from '../vessel/vessel';
 import type { RouterKind } from '../engine/router';
 import { DEFAULT_MESH_CATALOG_URL } from './meshes';
@@ -164,6 +165,9 @@ export interface ResolvedConfig {
     noGoMinAngleDeg: number;
     maxWindMs: number | null;
     maxSwhM: number | null;
+    maxWindMode: LimitMode;
+    maxSwhMode: LimitMode;
+    limitAvoidStrength: number;
     comfortWeight: number;
     simStepM: number;
     landRasterMaxCells: number;
@@ -464,6 +468,9 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       noGoMinAngleDeg: r.noGoMinAngle ?? 0,
       maxWindMs: r.maxWind ?? null,
       maxSwhM: r.maxSwh ?? null,
+      maxWindMode: r.maxWindMode ?? 'block',
+      maxSwhMode: r.maxSwhMode ?? 'block',
+      limitAvoidStrength: r.limitAvoidStrength ?? DEFAULT_LIMIT_AVOID_STRENGTH,
       comfortWeight: r.comfortWeight ?? 0,
       simStepM: r.simStep,
       landRasterMaxCells: r.landRasterMaxCells,

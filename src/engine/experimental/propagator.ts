@@ -177,6 +177,9 @@ export class ExperimentalPropagator {
         simStepM: args.simStepM ?? 200,
         maxWindMs: args.maxWindMs,
         maxSwhM: args.maxSwhM,
+        maxWindMode: args.maxWindMode,
+        maxSwhMode: args.maxSwhMode,
+        limitAvoidStrength: args.limitAvoidStrength,
         comfortWeight: args.comfortWeight,
         tackPenaltyS: args.tackPenaltyS,
       },
@@ -226,8 +229,10 @@ export class ExperimentalPropagator {
   private timeLeg(a: Waypoint, b: Waypoint, env: Env): void {
     if (this.tryTimeLeg(a, b, env)) return;
     const r = simulateLegTime(a.lon, a.lat, a.time, b.lon, b.lat, env.vessel, env.polar, env.wind, env.current, env.sim);
+    // A leg stopped by a wind or wave limit set to block: the caller's advice (motor more) does not help; the limit does.
+    const limited = r.reason === 'limited';
     throw new RouteError(
-      `${env.who}: the leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} to ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be sailed under the ${env.sim.modePolicy} policy (${r.reason ?? 'no speed'}); ${env.advice}`
+      `${env.who}: the leg from ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)} to ${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} cannot be sailed under the ${env.sim.modePolicy} policy (${limited ? 'over the wind or wave limit' : (r.reason ?? 'no speed')}); ${limited ? 'raise the limit, set it to Avoid, or change the departure' : env.advice}`
     );
   }
 
