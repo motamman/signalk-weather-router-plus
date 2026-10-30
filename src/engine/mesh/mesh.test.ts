@@ -262,7 +262,9 @@ test('tile files: written in the on-disk format, read back, joined and routed', 
     [
       [-1, 2, 0],
       [2, -1, -1],
-    ]
+    ],
+    // Charted (a tile with no charted depth at all is left out of the mesh, store.ts).
+    [10, 10]
   );
   writeTile(
     dir,
@@ -275,7 +277,8 @@ test('tile files: written in the on-disk format, read back, joined and routed', 
     [
       [-1, -1, 0],
       [2, -1, 1],
-    ]
+    ],
+    [10, 10]
   );
   fs.writeFileSync(
     path.join(dir, 'index.json'),
@@ -344,7 +347,9 @@ test('meshRoute: a route that must swing away from its ends is found with no are
     [
       [-1, -1, 0],
       [2, 0, 1],
-    ]
+    ],
+    // Charted (a tile with no charted depth at all is left out of the mesh, store.ts).
+    [10, 10]
   );
   writeTile(
     dir,
@@ -357,7 +362,8 @@ test('meshRoute: a route that must swing away from its ends is found with no are
     [
       [1, 2, 0],
       [2, -1, -1],
-    ]
+    ],
+    [10, 10]
   );
   writeTile(
     dir,
@@ -370,7 +376,8 @@ test('meshRoute: a route that must swing away from its ends is found with no are
     [
       [1, -1, 0],
       [2, -1, 1],
-    ]
+    ],
+    [10, 10]
   );
   fs.writeFileSync(
     path.join(dir, 'index.json'),

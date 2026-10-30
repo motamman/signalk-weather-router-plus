@@ -32,7 +32,9 @@ import { FLAG_OPENING_BRIDGE, type MeshStore } from './store';
 // 4: the rules carry the under-keel and overhead clearances.
 // 5: the rules are to the centimetre (meshcoarse.ts coarseRulesOf), as the file name; a v4 file may hold more digits.
 // 6: the boundary record uses the rules' clearances (boundarySeeds); v5 used the fixed 0.5 m / 1 m there.
-export const COARSE_VERSION = 6;
+// 7: tiles without chart data are left out of the mesh (store.ts MeshStore.open): the pieces, links, boundary record
+//    and joins (named after the map) of a v6 cut include them.
+export const COARSE_VERSION = 7;
 
 /** The rules a rough cut is built for: the boat, the buffer from unusable water, and opening bridges open or avoided. */
 export interface CoarseRules {

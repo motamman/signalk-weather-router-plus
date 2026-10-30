@@ -1008,7 +1008,16 @@ settings; a request can override them with
   search's reason), so the page and the chartplotter show it: it can be
   slower than a searched stretch, with many short tacks.
 - **Across the limits of the charts.** The mesh decides wherever it has
-  triangles; the coastline data only where it has none. A leg whose area a
+  triangles; the coastline data only where it has none. A mesh tile with no
+  chart data (the build meshes every 0.25° tile of a district's rectangle,
+  and one no chart covers, such as Canadian water off Nova Scotia in 01CGD,
+  comes out as water of unknown depth throughout) is not part of the mesh:
+  that water belongs to the coastline search, and the mesh begins where the
+  charts do, so the edge where a leg changes between them lies in real
+  water, not along the rectangle's straight edge against a coast. The tiles
+  left out are found once per mesh build from their depths and kept in the
+  mesh folder (`.wrp-nochart.json`); a tile with some chart data keeps its
+  unknown-depth triangles as mesh water. A leg whose area a
   mesh meets, and that one mesh does not hold, is planned through the waters
   it crosses: leaving the charts, entering them, crossing open water between
   them (out and back in, or in, out and in again), or going from one
@@ -1024,7 +1033,14 @@ settings; a request can override them with
   planned and the cheapest taken. The charts alone are tried first, and the
   open-water map (the coastline search's raster, every mesh's water marked
   as land) is built only when they hold no way. Each mesh stretch is one
-  mesh search, its entry and exit chosen together towards the end; each open
+  mesh search, its entry and exit chosen together towards the end. An entry
+  from open water is costed by the distance over open water from where the
+  open stretch starts, walked on that map (diagonal moves only where neither
+  cell beside them is land), not by a straight line: one behind land costs
+  the way round it, and one the water does not reach is no candidate. An
+  exit into the open water the leg ends in is costed the same way to the
+  leg's end; an exit into open water leading to more charts, and a transfer,
+  by the straight run. Each open
   stretch is the coastline search with every mesh's water as land, so it
   never enters charted water. A leg the waters do not join fails with the
   reason.

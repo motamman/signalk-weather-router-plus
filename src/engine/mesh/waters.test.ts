@@ -13,14 +13,17 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ShapePolygon } from '../../geo/shapefile';
-import { LandMask, moveMeetsCells } from '../../geo/landmask';
+import { cellOf, LandMask, moveMeetsCells } from '../../geo/landmask';
+import { DEG } from '../../geo/geodesy';
+import { M_PER_DEG } from '../../geo/units';
+import { emptyMask } from './exit';
 import { boundarySeeds, buildCoarseMap, type CoarseMap, type CoarseRules, meshRulesOf, tilePieces } from './coarse';
 import { writeGridMesh } from './fixture';
 import { JoinFinder } from './joins';
 import { type BoundarySeeds, PagedMesh } from './paged';
 import type { MeshRules } from './route';
 import { MeshStore } from './store';
-import { planWaters, type WaterMesh, type WatersPlan } from './waters';
+import { planWaters, waterField, type WaterMesh, type WatersPlan } from './waters';
 
 function rect(recordNumber: number, lon0: number, lat0: number, lon1: number, lat1: number): ShapePolygon {
   const c = [lon0, lat0, lon1, lat0, lon1, lat1, lon0, lat1, lon0, lat0];
@@ -325,4 +328,45 @@ test('planWaters: without the draught and air draft only open water can join the
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('planWaters: the entry is the nearest by water, not the nearest as the crow flies behind land', () => {
+  // The mesh is one cell (lon 3–4, lat 0–1), the end inside it; land south of lat 0, and a wall at lat 1.2–1.4 from the
+  // west edge to lon 4.6. The start, north of the wall at (2, 2.5), is nearest the mesh's west edge as the crow flies,
+  // but by water it must round the wall's east end, which brings it to the east edge first (brain, 2026-10-30: from
+  // Greenland the entry nearest in a straight line was off Grand Manan, the long way round Nova Scotia).
+  const r = plan(
+    [cells(3, 4)],
+    [
+      [-1, -1, 7, 0],
+      [-1, 1.2, 4.6, 1.4],
+    ],
+    [2, 2.5],
+    [3.5, 0.5]
+  );
+  assert.ok(r.ok && r.kind === 'chain', JSON.stringify(r));
+  if (!r.ok || r.kind !== 'chain') return;
+  assert.deepEqual(kinds(r), ['open', 'mesh A']);
+  const entry = r.stretches[1].from;
+  assert.ok(near(entry[0], 4), `enters through the east edge, reached first by water: ${entry}`);
+  assert.ok(r.water && r.water.fields >= 1 && r.water.cells > 0, JSON.stringify(r.water));
+});
+
+test('waterField: in open water the distance is the straight one, within the raster; land is walked round, and a pocket not reached', () => {
+  const box = { west: 0, south: 0, east: 2, north: 1 };
+  const open = LandMask.fromPolygons([], box, 0.05);
+  const at = (m: LandMask, lon: number, lat: number): number => cellOf(emptyMask(m), lon, lat);
+  const f = waterField(open, emptyMask(open), at(open, 0.125, 0.525))!;
+  const dx = 0.05 * M_PER_DEG * Math.cos(0.525 * DEG);
+  assert.ok(Math.abs(f[at(open, 1.125, 0.525)] - 20 * dx) < 1, 'twenty cells east: twenty cell widths');
+  const diag = Math.hypot(dx, 0.05 * M_PER_DEG);
+  assert.ok(Math.abs(f[at(open, 0.325, 0.725)] - 4 * diag) / (4 * diag) < 0.01, 'four cells diagonally');
+  // A wall at lon 1–1.05 from lat 0 to 0.9: the far side is reached round its north end, longer than straight.
+  const walled = LandMask.fromPolygons([rect(1, 1, 0, 1.05, 0.9)], box, 0.05);
+  const g = waterField(walled, emptyMask(walled), at(walled, 0.525, 0.125))!;
+  assert.ok(g[at(walled, 1.525, 0.125)] > f[at(open, 1.125, 0.525)] + 10 * dx, 'round the wall, not through it');
+  // A pocket walled all round is not reached.
+  const pocket = LandMask.fromPolygons([rect(1, 1, 0, 2, 1), rect(2, 0, 0.5, 1, 1)], box, 0.05);
+  const h = waterField(pocket, emptyMask(pocket), at(pocket, 0.525, 0.125))!;
+  assert.equal(h[at(pocket, 1.525, 0.725)], Infinity);
 });

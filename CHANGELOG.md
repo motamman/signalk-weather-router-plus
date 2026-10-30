@@ -20,6 +20,18 @@ uses [Semantic Versioning](https://semver.org/).
   against the current" whatever the cause; it now names it: over the wind
   or wave limit, a current stronger than the boat, the polar's no-go
   angle, or no boat speed.
+- A chart mesh's tiles with no chart data are no longer mesh water. Each
+  mesh covers its district's whole rectangle, and tiles no chart covers
+  (Canadian water off Nova Scotia in 01CGD, much of the open Gulf in 07CGD)
+  were water of unknown depth that the open-water search had to keep out
+  of. That made the rectangle's straight edge a wall at sea, and a leg from
+  open water into the charts could be aimed at a point the search could not
+  reach: a route from Greenland to Block Island stalled 25 km off Cape
+  Sable, at the top of a channel one raster cell wide between the mesh's
+  edge and the coast. Those tiles are now left to the open-water search, and
+  a leg joins the charts where they begin. The rough cuts and joins are
+  rebuilt once for this (the first route that needs one, or Rebuild in the
+  plugin configuration).
 - A route boxed in near a point close to the shore no longer says "the
   front reached the destination" when it stopped kilometres short, or
   calls a waypoint ending the leg "the destination": it says how close the
@@ -30,6 +42,15 @@ uses [Semantic Versioning](https://semver.org/).
   says it is over the limit and advises raising the limit, setting it to
   Avoid, or changing the departure.
 
+
+- **Where a leg joins the charts is chosen by distance over water.** The
+  planner costed each place where open water meets a chart mesh by a
+  straight line, through land. From Greenland to a waypoint at Block Island
+  it aimed the open-water part at the charts off Grand Manan, nearest as the
+  crow flies but the long way round Nova Scotia by sea, and the coastline
+  search stalled about 290 km short. Entries (and exits into the open water
+  a leg ends in) are now costed by the shortest way over the open-water map,
+  and one the water does not reach is not used.
 
 ### Added
 
