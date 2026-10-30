@@ -1449,6 +1449,18 @@ resolution levels 1–4 (`GSHHS_f_L1.shp` through `GSHHS_f_L4.shp`):
 - Internet access for the forecast, current, tide and coastline
   downloads. On a metered link, see
   [Metered or no internet](#metered-or-no-internet-signalk-internet).
+- A Signal K resource provider for routes and notes, enabled. The
+  server's own **Resources Provider (built-in)**
+  (`@signalk/resources-provider`) comes installed and enabled with it;
+  check **Server → Plugin Config** if it was turned off. Finished routes
+  (saved there automatically, or with **Publish**) and the notes on the
+  map go through the Resources API, which is how Freeboard-SK and other
+  apps see them. Without a provider for notes, a route with **Avoid
+  marked areas** on (Route → Options; on by default) fails before it is
+  computed, saying the notes could not be read: the areas to avoid are
+  unknown. Turn that off to route without them. Without a provider for
+  routes, a route is still computed and kept in the Saved tab, and the
+  job log says why publishing failed.
 - Disk in the Signal K data directory: the decoded forecast (about
   1.35 GB for 72 h with the extra fields, 4.6 GB at 360 h), the GRIB files
   of the cached cycles, the coastline (about 156 MB when downloaded, and
