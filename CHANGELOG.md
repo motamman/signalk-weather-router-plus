@@ -56,6 +56,10 @@ uses [Semantic Versioning](https://semver.org/).
   search stalled about 290 km short. Entries (and exits into the open water
   a leg ends in) are now costed by the shortest way over the open-water map,
   and one the water does not reach is not used.
+- **Find Route works in power-boat mode without a boat name or cruise
+  speed.** It stayed off until both were filled in; an empty one is now
+  simply not sent, and the plugin's own vessel settings (its motor speed)
+  apply, the line under the fields saying so for the speed.
 - **Power boats see the wind and wave limits.** They sat in the
   sail-only Sailing strategy section, so a power boat's routes were sent
   with limits its user could not see or change; they now sit with Comfort

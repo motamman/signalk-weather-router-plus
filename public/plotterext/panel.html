@@ -1259,7 +1259,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     var savedCw = cw !== null && cw !== '' && isFinite(+cw);
     $('comfortWeight').value = savedCw ? cw : String(limitModeDefaults.comfortWeight);
     if (savedCw || limitModeDefaults.comfortKnown) $('comfortWeight').dataset.known = '1';
-    $('comfortWeightValue').textContent = $('comfortWeight').value;
+    showComfort();
     var s = choice('routeVar:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength');
     $('limitAvoidStrength').value = s !== null && s !== '' && isFinite(+s) ? s : String(limitModeDefaults.limitAvoidStrength);
     syncLimitModes();
@@ -1268,7 +1268,13 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     $(id).addEventListener('change', function () { setChoice('routeVar:' + id, 'wrp-plotterext-' + id, this.value); syncLimitModes(); });
   });
   $('limitAvoidStrength').addEventListener('input', syncLimitModes);
-  $('comfortWeight').addEventListener('input', function () { $('comfortWeightValue').textContent = this.value; });
+  // Until the user chooses or the routing setting has loaded, the slider's position is not what a route gets: no
+  // number is shown for it (PR #91 review), and none is sent (requestBody).
+  function showComfort() {
+    var el = $('comfortWeight');
+    $('comfortWeightValue').textContent = el.dataset.known ? el.value : 'server setting';
+  }
+  $('comfortWeight').addEventListener('input', function () { this.dataset.known = '1'; showComfort(); });
   $('comfortWeight').addEventListener('change', function () {
     this.dataset.known = '1';
     setChoice('routeVar:comfortWeight', 'wrp-plotterext-comfortWeight', this.value);

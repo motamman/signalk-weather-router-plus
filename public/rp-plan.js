@@ -652,22 +652,17 @@ function loadPowerBoat() {
   } catch (_) {}
 }
 function refreshFindRouteEnabled() {
-  // Find Route stays disabled until start + end are set; power mode
-  // additionally requires the boat's name and cruise speed.
+  // Find Route stays disabled until start + end are set. The power boat's
+  // name and cruise speed are not required: one left empty is not sent, and
+  // the plugin's own vessel settings (its motor speed) apply; the line under
+  // them says so.
   const btn = /** @type {HTMLButtonElement} */ (document.getElementById('findRoute'));
   const haveEndpoints = !!(startCoord && endCoord);
   let blocked = !haveEndpoints;
   const status = document.getElementById('pb_status');
-  if (getVesselType() === 'power') {
-    const missing = validatePowerBoat();
-    if (missing.length) {
-      blocked = true;
-      if (status) status.textContent = 'Fill in: ' + missing.join(', ');
-    } else if (status) {
-      status.textContent = '';
-    }
-  } else if (status) {
-    status.textContent = '';
+  if (status) {
+    const missing = getVesselType() === 'power' ? validatePowerBoat() : [];
+    status.textContent = missing.includes('cruise speed') ? 'No cruise speed: the plugin\'s motor speed setting is used.' : '';
   }
   _routeReady = !blocked; // Compare departures needs the same, but may start while a route computes
   if (_routeComputing) blocked = true;
@@ -1370,11 +1365,15 @@ function _initLimitModes() {
   }
   // Comfort, per route as the limits are: remembered, the routing setting until the user chooses.
   const comfort = /** @type {HTMLInputElement} */ (document.getElementById('comfortWeight'));
-  const showComfort = () => { document.getElementById('comfortWeightValue').textContent = comfort.value; };
+  // Until the user chooses or the routing setting has loaded, the slider's position is not what a route gets: no
+  // number is shown for it (PR #91 review), and none is sent (buildRoutePayload).
+  const showComfort = () => {
+    document.getElementById('comfortWeightValue').textContent = comfort.dataset.known ? comfort.value : 'server setting';
+  };
   const savedC = prefs.get('routeVar:comfortWeight');
   if (savedC && Number.isFinite(+savedC)) { comfort.value = savedC; comfort.dataset.known = '1'; }
-  comfort.addEventListener('input', showComfort);
-  comfort.addEventListener('change', () => { comfort.dataset.known = '1'; prefs.set('routeVar:comfortWeight', comfort.value); });
+  comfort.addEventListener('input', () => { comfort.dataset.known = '1'; showComfort(); });
+  comfort.addEventListener('change', () => { comfort.dataset.known = '1'; showComfort(); prefs.set('routeVar:comfortWeight', comfort.value); });
   showComfort();
   const savedS = prefs.get('routeVar:limitAvoidStrength');
   if (savedS && Number.isFinite(+savedS)) strength.value = savedS;
@@ -2347,9 +2346,10 @@ function buildRoutePayload(overrides) {
   // and sends the boat's name and cruise speed as a per-request override.
   if (getVesselType() === 'power') {
     body.mode = 'motor';
+    // Each only when filled in: an empty one leaves the plugin's own vessel settings (its motor speed) to apply.
     const pb = readPowerBoat();
-    vessel.name = pb.name;
-    vessel.motor_speed_ms = pb.cruise_ms;
+    if (pb.name) vessel.name = pb.name;
+    if (pb.cruise_ms != null && pb.cruise_ms > 0) vessel.motor_speed_ms = pb.cruise_ms;
   } else {
     const polarPath = /** @type {HTMLSelectElement} */ (document.getElementById('polarSelect')).value;
     if (polarPath) vessel.polar = polarPath;
