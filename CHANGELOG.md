@@ -98,7 +98,10 @@ uses [Semantic Versioning](https://semver.org/).
   over a limit set to avoid is searched again with the limit blocking, and
   the cheaper on time plus surcharge is kept. Each leg over a limit set to
   avoid carries a warning with the seconds over, worked out on the final
-  route, so simplification no longer drops it.
+  route, so simplification no longer drops it. The web page and the Freeboard
+  panel send a mode or strength only once the user has chosen it or the
+  routing settings have loaded, so the server's own setting applies until
+  then.
 
 - **Comfort on the Route tab.** The comfort setting (how much the route
   avoids rough water) is now a slider in the Route tab's new Limits and

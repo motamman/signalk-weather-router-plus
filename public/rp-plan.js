@@ -1368,8 +1368,8 @@ function _initLimitModes() {
   for (const [id, key] of modes) {
     const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
     const saved = prefs.get(key);
-    if (saved === 'block' || saved === 'avoid') el.value = saved;
-    el.addEventListener('change', () => { prefs.set(key, el.value); sync(); });
+    if (saved === 'block' || saved === 'avoid') { el.value = saved; el.dataset.known = '1'; }
+    el.addEventListener('change', () => { el.dataset.known = '1'; prefs.set(key, el.value); sync(); });
   }
   // Comfort, per route as the limits are: remembered, the routing setting until the user chooses.
   const comfort = /** @type {HTMLInputElement} */ (document.getElementById('comfortWeight'));
@@ -1384,9 +1384,9 @@ function _initLimitModes() {
   comfort.addEventListener('change', () => { comfort.dataset.known = '1'; showComfort(); prefs.set('routeVar:comfortWeight', comfort.value); });
   showComfort();
   const savedS = prefs.get('routeVar:limitAvoidStrength');
-  if (savedS && Number.isFinite(+savedS)) strength.value = savedS;
-  strength.addEventListener('input', sync);
-  strength.addEventListener('change', () => { prefs.set('routeVar:limitAvoidStrength', strength.value); });
+  if (savedS && Number.isFinite(+savedS)) { strength.value = savedS; strength.dataset.known = '1'; }
+  strength.addEventListener('input', () => { strength.dataset.known = '1'; sync(); });
+  strength.addEventListener('change', () => { strength.dataset.known = '1'; prefs.set('routeVar:limitAvoidStrength', strength.value); });
   sync();
   authFetch(API + '/settings', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : null))
@@ -1394,9 +1394,13 @@ function _initLimitModes() {
       const r = (s && s.values && s.values.routing) || {};
       for (const [id, key] of modes) {
         const v = r[id];
-        if (!prefs.get(key) && (v === 'block' || v === 'avoid')) /** @type {HTMLSelectElement} */ (document.getElementById(id)).value = v;
+        const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
+        if (!prefs.get(key) && (v === 'block' || v === 'avoid')) { el.value = v; el.dataset.known = '1'; }
       }
-      if (!prefs.get('routeVar:limitAvoidStrength') && Number.isFinite(r.limitAvoidStrength)) strength.value = String(r.limitAvoidStrength);
+      if (!prefs.get('routeVar:limitAvoidStrength') && Number.isFinite(r.limitAvoidStrength)) {
+        strength.value = String(r.limitAvoidStrength);
+        strength.dataset.known = '1';
+      }
       if (!prefs.get('routeVar:comfortWeight') && Number.isFinite(r.comfortWeight)) { comfort.value = String(r.comfortWeight); comfort.dataset.known = '1'; showComfort(); }
       sync();
     })
@@ -2317,17 +2321,21 @@ function buildRoutePayload(overrides) {
   const maxWindMs = _limitSI('maxWind'), maxSwhM = _limitSI('maxSwh');
   if (maxWindMs !== null) body.max_wind_ms = maxWindMs;
   if (maxSwhM !== null) body.max_swh_m = maxSwhM;
-  // Block / Avoid for each limit, and the avoid strength when one avoids.
+  // Block / Avoid for each limit, and the avoid strength when one avoids: each only when the user chose it or the
+  // routing settings gave it; the controls' built-in starts (Block, 1) are not sent, so a request made before the
+  // settings load, or when they fail, keeps the server's own (PR #91 review).
   for (const [id, field] of [['maxWindMode', 'max_wind_mode'], ['maxSwhMode', 'max_swh_mode']]) {
     const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
-    if (el && el.value) body[field] = el.value;
+    if (el && el.value && el.dataset.known) body[field] = el.value;
   }
   // Only a value the user chose or the routing setting gave: the slider's built-in start is not sent (PR #91 review).
   const comfortEl = /** @type {HTMLInputElement} */ (document.getElementById('comfortWeight'));
   const comfort = parseFloat(comfortEl.value);
   if (comfortEl.dataset.known && Number.isFinite(comfort) && comfort >= 0) body.comfort_weight = comfort;
-  if (body.max_wind_mode === 'avoid' || body.max_swh_mode === 'avoid') {
-    const v = parseFloat(/** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength')).value);
+  const strengthEl = /** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength'));
+  const avoiding = ['maxWindMode', 'maxSwhMode'].some(id => /** @type {HTMLSelectElement} */ (document.getElementById(id)).value === 'avoid');
+  if (avoiding && strengthEl.dataset.known) {
+    const v = parseFloat(strengthEl.value);
     if (Number.isFinite(v) && v >= 0) body.limit_avoid_strength = v;
   }
   if (overrides.departure !== undefined) body.departure = overrides.departure;
@@ -3767,7 +3775,6 @@ function _winStart() {
   delete route.publish;
   const body = { route, from: p.from.toISOString(), to: p.to.toISOString(), step_s: Number(/** @type {HTMLSelectElement} */ (document.getElementById('windowStep')).value) };
   document.getElementById('windowStatus').textContent = 'Starting…';
-  _winStale = false;
   // Off until the window's first poll shows Cancel: a second click would start a second window (PR #51 review).
   // Marked on the button, which _winRefresh reads, so a refresh meanwhile keeps it off: 'post' while the
   // request is out, then the window's id until its first poll (a poll of an older window does not count).
@@ -3790,6 +3797,9 @@ function _winPoll(id) {
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(w => {
       started();
+      // Another window replacing the one on screen: the out-of-date note belonged to the old one (PR #91 review: it
+      // was cleared on Start, while the old rows were still shown).
+      if (!_win || _win.id !== w.id) _winStale = false;
       _win = w;
       _winRender();
       // After a cancel the departure computing ends a moment later: followed until it has.

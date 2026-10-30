@@ -1226,9 +1226,11 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     // Only a value the user chose or the routing setting gave: the slider's built-in start is not sent (PR #91 review).
     var comfort = num('comfortWeight');
     if ($('comfortWeight').dataset.known && comfort !== null && comfort >= 0) body.comfort_weight = comfort;
-    body.max_wind_mode = $('maxWindMode').value;
-    body.max_swh_mode = $('maxSwhMode').value;
-    if (body.max_wind_mode === 'avoid' || body.max_swh_mode === 'avoid') {
+    // Each only when the user chose it or the routing settings gave it: the controls' built-in starts (Block, 1) are
+    // not sent, so a request made before the settings load, or when they fail, keeps the server's own (PR #91 review).
+    if ($('maxWindMode').dataset.known) body.max_wind_mode = $('maxWindMode').value;
+    if ($('maxSwhMode').dataset.known) body.max_swh_mode = $('maxSwhMode').value;
+    if (($('maxWindMode').value === 'avoid' || $('maxSwhMode').value === 'avoid') && $('limitAvoidStrength').dataset.known) {
       var strength = num('limitAvoidStrength');
       if (strength !== null && strength >= 0) body.limit_avoid_strength = strength;
     }
@@ -1253,7 +1255,9 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
   function showLimitModes() {
     ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
       var v = choice('routeVar:' + id, 'wrp-plotterext-' + id);
-      $(id).value = v === 'block' || v === 'avoid' ? v : limitModeDefaults[id];
+      var saved = v === 'block' || v === 'avoid';
+      $(id).value = saved ? v : limitModeDefaults[id];
+      if (saved || limitModeDefaults.modesKnown) $(id).dataset.known = '1';
     });
     var cw = choice('routeVar:comfortWeight', 'wrp-plotterext-comfortWeight');
     var savedCw = cw !== null && cw !== '' && isFinite(+cw);
@@ -1261,13 +1265,19 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     if (savedCw || limitModeDefaults.comfortKnown) $('comfortWeight').dataset.known = '1';
     showComfort();
     var s = choice('routeVar:limitAvoidStrength', 'wrp-plotterext-limitAvoidStrength');
-    $('limitAvoidStrength').value = s !== null && s !== '' && isFinite(+s) ? s : String(limitModeDefaults.limitAvoidStrength);
+    var savedS = s !== null && s !== '' && isFinite(+s);
+    $('limitAvoidStrength').value = savedS ? s : String(limitModeDefaults.limitAvoidStrength);
+    if (savedS || limitModeDefaults.modesKnown) $('limitAvoidStrength').dataset.known = '1';
     syncLimitModes();
   }
   ['maxWindMode', 'maxSwhMode'].forEach(function (id) {
-    $(id).addEventListener('change', function () { setChoice('routeVar:' + id, 'wrp-plotterext-' + id, this.value); syncLimitModes(); });
+    $(id).addEventListener('change', function () {
+      this.dataset.known = '1';
+      setChoice('routeVar:' + id, 'wrp-plotterext-' + id, this.value);
+      syncLimitModes();
+    });
   });
-  $('limitAvoidStrength').addEventListener('input', syncLimitModes);
+  $('limitAvoidStrength').addEventListener('input', function () { this.dataset.known = '1'; syncLimitModes(); });
   // Until the user chooses or the routing setting has loaded, the slider's position is not what a route gets: no
   // number is shown for it (PR #91 review), and none is sent (requestBody).
   function showComfort() {
@@ -1331,6 +1341,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
       if (r.maxWind !== null && isFinite(r.maxWind)) limitDefaultsMs.maxWind = r.maxWind;
       if (r.maxSwh !== null && isFinite(r.maxSwh)) limitDefaultsMs.maxSwh = r.maxSwh;
       ['maxWindMode', 'maxSwhMode'].forEach(function (id) { if (r[id] === 'block' || r[id] === 'avoid') limitModeDefaults[id] = r[id]; });
+      limitModeDefaults.modesKnown = true;
       if (isFinite(r.limitAvoidStrength)) limitModeDefaults.limitAvoidStrength = r.limitAvoidStrength;
       if (isFinite(r.comfortWeight)) {
         limitModeDefaults.comfortWeight = r.comfortWeight;
