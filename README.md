@@ -763,7 +763,9 @@ and the panel runs in a sandboxed iframe served from
   maximum wind speed and wave height (empty = no limit; the routing
   settings' values by default), each set to **Block** (no leg may exceed
   it) or **Avoid** (allowed, at a cost, with the **strength**; see
-  [Limits: block or avoid](#limits-block-or-avoid)). With a min sail speed
+  [Limits: block or avoid](#limits-block-or-avoid)). Beside them, **Comfort**: how much the route
+  avoids rough water ([Comfort](#comfort-rough-water)), the routing
+  setting's value until changed; the web app's Route tab has the same. With a min sail speed
   of 0 (never motor) a stretch the boat cannot sail or tack out of fails
   the route, saying "set Min sail speed above 0". The polar, mode, min
   sail speed and limits are the web app's Setup choices: the panel reads

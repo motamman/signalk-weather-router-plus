@@ -90,6 +90,12 @@ uses [Semantic Versioning](https://semver.org/).
   avoid carries a warning with the seconds over, worked out on the final
   route, so simplification no longer drops it.
 
+- **Comfort beside the limits.** The comfort setting (how much the route
+  avoids rough water) is now a slider on the Route tab, beside the wind and
+  wave limits, and in the Freeboard panel, chosen per route and remembered
+  per user; the routing setting is where it starts. It was only in
+  Settings, for the whole server.
+
 ### Changed
 
 - The Signal K App Store lists Polar Management (`signalk-polar-management`)

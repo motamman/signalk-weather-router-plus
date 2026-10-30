@@ -996,6 +996,8 @@
   <div class="ctl-hint">Block: legs where the significant wave height is above the limit are not allowed. Avoid: they are allowed, but time over it counts extra when choosing the route, and the route warns. Empty limit = no limit.</div>
   <label id="limitStrengthRow" hidden>Avoid strength: <input type="range" id="limitAvoidStrength" min="0" max="10" step="0.5" value="1" style="width:8em;vertical-align:middle;" aria-label="Avoid strength"> <span id="limitAvoidStrengthValue"></span></label>
   <div class="ctl-hint" id="limitStrengthHint" hidden>How hard the route tries to stay under a limit set to Avoid. Higher means it will sail further out of its way to avoid it. 0 means it never detours, it only warns.</div>
+  <label>Comfort: <input type="range" id="comfortWeight" min="0" max="3" step="0.1" value="1" style="width:8em;vertical-align:middle;" aria-label="Comfort"> <span id="comfortWeightValue"></span></label>
+  <div class="ctl-hint">How much the route avoids rough water, as the boat meets it (head seas count more than following seas). Higher means it gives up more time for a smoother passage. 0 means the fastest route. Needs wave data in the forecast.</div>
 
   </div>
   </details>

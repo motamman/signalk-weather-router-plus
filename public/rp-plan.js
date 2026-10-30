@@ -1368,6 +1368,14 @@ function _initLimitModes() {
     if (saved === 'block' || saved === 'avoid') el.value = saved;
     el.addEventListener('change', () => { prefs.set(key, el.value); sync(); });
   }
+  // Comfort, per route as the limits are: remembered, the routing setting until the user chooses.
+  const comfort = /** @type {HTMLInputElement} */ (document.getElementById('comfortWeight'));
+  const showComfort = () => { document.getElementById('comfortWeightValue').textContent = comfort.value; };
+  const savedC = prefs.get('rp:comfortWeight');
+  if (savedC && Number.isFinite(+savedC)) comfort.value = savedC;
+  comfort.addEventListener('input', showComfort);
+  comfort.addEventListener('change', () => { prefs.set('rp:comfortWeight', comfort.value); });
+  showComfort();
   const savedS = prefs.get('rp:limitAvoidStrength');
   if (savedS && Number.isFinite(+savedS)) strength.value = savedS;
   strength.addEventListener('input', sync);
@@ -1382,6 +1390,7 @@ function _initLimitModes() {
         if (!prefs.get(key) && (v === 'block' || v === 'avoid')) /** @type {HTMLSelectElement} */ (document.getElementById(id)).value = v;
       }
       if (!prefs.get('rp:limitAvoidStrength') && Number.isFinite(r.limitAvoidStrength)) strength.value = String(r.limitAvoidStrength);
+      if (!prefs.get('rp:comfortWeight') && Number.isFinite(r.comfortWeight)) { comfort.value = String(r.comfortWeight); showComfort(); }
       sync();
     })
     .catch(() => {});
@@ -2306,6 +2315,8 @@ function buildRoutePayload(overrides) {
     const el = /** @type {HTMLSelectElement} */ (document.getElementById(id));
     if (el && el.value) body[field] = el.value;
   }
+  const comfort = parseFloat(/** @type {HTMLInputElement} */ (document.getElementById('comfortWeight')).value);
+  if (Number.isFinite(comfort) && comfort >= 0) body.comfort_weight = comfort;
   if (body.max_wind_mode === 'avoid' || body.max_swh_mode === 'avoid') {
     const v = parseFloat(/** @type {HTMLInputElement} */ (document.getElementById('limitAvoidStrength')).value);
     if (Number.isFinite(v) && v >= 0) body.limit_avoid_strength = v;
