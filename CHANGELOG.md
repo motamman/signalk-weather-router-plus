@@ -16,6 +16,18 @@ uses [Semantic Versioning](https://semver.org/).
   the existing linear polar model and per-wind-speed no-go floors.
 - Keep the polar picker filter during automatic refresh; motor-only routes
   accept managed-polar tokens without resolving them as local files.
+- **A computation still running shows again after a reload.** A route
+  or a Best departure window runs on the server whether the page is open
+  or not, but after a reload (or the window closed and opened again) the
+  page looked idle. A route this browser started is now followed again,
+  with its progress and Cancel, or shown if it finished meanwhile; a
+  route another device started is left alone. A Best departure window
+  still running opens its section, where its table was already being
+  followed but out of sight.
+- **A saved route's corridor and stage fronts stay off the route opened
+  after it.** Opening a route still computing, or pressing Find Route,
+  before a saved route's corridor (blue) and stage fronts had loaded
+  drew them over the new search when they came.
 
 
 ### Added
