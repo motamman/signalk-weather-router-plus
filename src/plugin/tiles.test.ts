@@ -500,7 +500,10 @@ test('tile store: a new generation removes the old one; an answer from the old o
   assert.equal(await store.has(T), false);
   await store.write(T, zlib.gzipSync('1'), g1);
   assert.equal(await store.has(T), false, 'written under a superseded generation');
-  for (let i = 0; i < 50 && fs.existsSync(path.join(root, g1 as string)); i++) await new Promise(r => setTimeout(r, 10));
+  // A child process removes the old generation (removeStale → runChildTask rmtree). From setGenerations until the
+  // folder was gone took 0.2–0.3 s on an idle Raspberry Pi 5 and 0.4–0.9 s there while the whole suite ran
+  // (2026-10-31), so this waits up to 10 s.
+  for (let i = 0; i < 1000 && fs.existsSync(path.join(root, g1 as string)); i++) await new Promise(r => setTimeout(r, 10));
   assert.equal(fs.existsSync(path.join(root, g1 as string)), false);
   fs.rmSync(root, { recursive: true, force: true });
 });
