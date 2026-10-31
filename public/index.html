@@ -509,7 +509,19 @@
     border-radius: var(--r-sm); padding: 1px 8px; font: inherit; font-size: var(--f-xs); font-weight: 700;
   }
   #dataStatus .ds-toggle:hover { background: var(--go); color: #fff; }
-  #dataStatus .ds-summary { white-space: nowrap; }
+  #dataStatus .ds-summary { white-space: nowrap; cursor: pointer; }
+  /* The expanded list: each source's times and last check as text, then the check interval and Check now (rp-core.js). */
+  #dataStatus .fresh-detail { color: var(--text-muted); font-size: 10px; line-height: 1.35; }
+  #dataStatus .ds-check { margin-top: 4px; color: var(--text-muted); }
+  #dataStatus .ds-check-now {
+    border: 1px solid var(--go); background: var(--surface); color: var(--go); cursor: pointer;
+    border-radius: var(--r-sm); padding: 1px 8px; font: inherit; font-size: var(--f-xs); font-weight: 700;
+  }
+  #dataStatus .ds-check-now:hover { background: var(--go); color: #fff; }
+  #dataStatus .ds-check-note { color: var(--text-2); }
+  #dataStatus .ds-check-now:disabled { opacity: 0.6; cursor: default; background: var(--surface); color: var(--go); }
+  #dataStatus .fresh-legend { margin-top: 4px; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+  #dataStatus .fresh-legend .fresh { padding: 0 4px; cursor: default; }
   #dataStatus .ds-pipe { color: var(--text-muted); margin: 0 6px; }
   #dataStatus .not-here { color: var(--text-muted); font-style: italic; }
   #dataStatus .fresh-dot { display: inline-block; width: 9px; height: 9px; padding: 0; margin-left: 3px; vertical-align: 0; }

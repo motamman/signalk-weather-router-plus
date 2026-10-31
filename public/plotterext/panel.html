@@ -860,6 +860,14 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
   function checkRows(k) { return k.indexOf('rtofs:') === 0 ? ['currents'] : (CHECK_ROWS[k] || []); }
   function clockText(iso) { return iso ? fmtClock(new Date(iso), { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }) : ''; }
   function ageText(ms) { return ms < HOUR_MS ? 'under 1 h' : dayHours(Math.floor(ms / HOUR_MS)); }
+  // After the age, in brackets, when the next run is due, as the web page says it: " (next in 2 h)", once due
+  // " (expected now)", or red " (2 h late)"; nothing without a due time.
+  function nextText(f) {
+    var due = f.next_due_at ? Date.parse(f.next_due_at) : NaN;
+    if (!isFinite(due)) return '';
+    var ms = due - Date.now();
+    return ms > 0 ? ' (next in ' + ageText(ms) + ')' : f.state === 'red' ? ' (' + ageText(-ms) + ' late)' : ' (expected now)';
+  }
   function overlaps(a, b) { return a.some(function (r) { return b.indexOf(r) >= 0; }); }
   // The freshness rows of the plugin's layers on the map; none shown: the forecast's own (the line names its run).
   // Before the host's chart list is read: none yet ([]). When the panel cannot tell what is on the map
@@ -876,7 +884,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
   // A source's coloured pill with its run's age; the run and its times in the tooltip.
   function freshPill(f) {
     var text = f.state === 'red' && !f.run ? 'none'
-      : f.published_at ? ageText(Math.max(0, Date.now() - Date.parse(f.published_at))) + ' old' : 'loaded';
+      : f.published_at ? ageText(Math.max(0, Date.now() - Date.parse(f.published_at))) + ' old' + nextText(f) : 'loaded';
     var tip = [
       f.source + (f.run ? ', run ' + f.run : ''),
       f.published_at ? 'published ' + clockText(f.published_at) : '',

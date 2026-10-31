@@ -13,7 +13,7 @@
 // Inputs show values in the Signal K user's unit preferences;
 // conversion happens here, the server only ever sees SI.
 
-import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSING, unitTextHtml } from './rp-core.js';
+import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, checkEveryRead, checkEverySave, UI_UNITS, UNIT_MISSING, unitTextHtml } from './rp-core.js';
 (function () {
   const form = document.getElementById('srvSettingsForm');
   const saveBtn = /** @type {HTMLButtonElement} */ (document.getElementById('srvSettingsSave'));
@@ -301,6 +301,7 @@ import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSI
 
   async function load() {
     loading = true;
+    const showEvery = checkEveryRead();   // the data sources' check line names the interval
     try {
       // Plain fetch (not authFetch): a 401 here should be reported in the
       // tab, not trip the page-wide sign-in redirect.
@@ -311,6 +312,7 @@ import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSI
       if (!r.ok || !body) { form.innerHTML = ''; setStatus('<span class="err">Settings unavailable:</span> ' + esc((body && body.error) || ('HTTP ' + r.status))); return; }
       schema = body.schema;
       values = body.values;
+      showEvery(values && values.forecast ? values.forecast.refreshInterval : null);
       render();
       setStatus('');
     } catch (e) {
@@ -335,6 +337,7 @@ import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSI
     loading = true;
     refreshDirty();
     setStatus('Saving…');
+    const showEvery = checkEverySave();
     try {
       const r = await fetch(API + '/settings', {
         method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(partial),
@@ -353,6 +356,7 @@ import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, UI_UNITS, UNIT_MISSI
       if (!r.ok || !body) { setStatus('<span class="err">Save failed:</span> ' + esc((body && body.error) || ('HTTP ' + r.status))); return; }
       values = body.values;
       fillFromValues();
+      showEvery(values && values.forecast ? values.forecast.refreshInterval : null);
       const rl = body.reloaded || {};
       const notes = [];
       if (rl.forecast) notes.push('<span class="warn">The forecast is reloading</span> for the new horizon / field set. Overlays keep the previous forecast until it finishes; a download can take several minutes.');

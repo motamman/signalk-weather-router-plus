@@ -29,6 +29,21 @@ uses [Semantic Versioning](https://semver.org/).
   `signalk-active` API polar tokens. Managed tables are adapted from canonical
   SI resources into the existing `PolarDiagram`; interpolation and routing math
   are unchanged. Each sailing route uses a fixed provider snapshot.
+- **The data sources say how fresh they are on a touch screen too.**
+  When a run was published and the next is due were only in a pill's
+  tooltip, which a touch screen never shows, and Refresh forecast was
+  under Log → Forecast data. A tap anywhere on the collapsed header line
+  now opens the list. Under each source it says, as text, when the run
+  was published, when the next is due, and when it was last checked and
+  what that found; under the list, what the colours mean, how often the
+  plugin checks, and **Check now**, which says when a check is under way
+  and asks once per check (the error line offers it too when the first
+  forecast could not be loaded).
+  Each pill says, in brackets after the age, when the next run is due:
+  *10.2 hour old (next in 2.3 hour)*, *(expected now)* once it is due,
+  *(1.5 hour late)* when red; the Freeboard panel's pills too (in whole
+  hours). The pills redraw when the units arrive, so they no longer read
+  "— old" until the next status.
 
 ### Changed
 
