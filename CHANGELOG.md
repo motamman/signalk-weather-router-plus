@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1-beta.2] - 2026-11-01
+
 ### Fixed
 
 - **The search's world is as wide as the search can reach.** The land
@@ -2692,7 +2694,8 @@ builds before this release, with their measurements, is in
   loads the current scripts.
 - The configuration panel has been tested on Signal K server 2.33.0.
 
-[Unreleased]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.1-beta.1...HEAD
+[Unreleased]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.1-beta.2...HEAD
+[0.2.1-beta.2]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.1-beta.1...v0.2.1-beta.2
 [0.2.1-beta.1]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.0...v0.2.1-beta.1
 [0.2.0]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.0-beta.4...v0.2.0
 [0.2.0-beta.4]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.0-beta.3...v0.2.0-beta.4
