@@ -7,7 +7,7 @@
 import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { prefs } from './rp-prefs.js';
-import { _overlayTimeIso, centreOnVesselOnce, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats } from './rp-layers.js';
+import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats } from './rp-layers.js';
 
 // ─────────── Route state (markers, replan stream, route history) ───────────
 // The limit inputs and the quantity of each (used by _limitSI, below). Declared
@@ -445,6 +445,7 @@ function _fitRouteInView() {
   const shift = cx > W / 2 ? -W : cx < -W / 2 ? W : 0;
   if (shift) { ext[0] += shift; ext[2] += shift; }
   if (!ext || !ext.every(Number.isFinite)) return;
+  cancelCentreOnVessel();   // the route is what the map shows now, not the boat (rp-layers.js)
   map.getView().fit(ext, {
     padding: _mapFitPadding(),
     duration: 400,
@@ -1585,6 +1586,8 @@ function _restorePlan() {
       endFeature.setGeometry(new ol.geom.Point(ol.proj.fromLonLat(endCoord)));
       updateCoordDisplay('end', endCoord);
     }
+    // A plan from the last visit: the map opens where it was left, with the plan, not on the boat (PR #70 review).
+    if (startCoord || endCoord) cancelCentreOnVessel();
     const wps = Array.isArray(plan.waypoints) ? plan.waypoints.filter(ll) : [];
     if (wps.length === (Array.isArray(plan.waypoints) ? plan.waypoints.length : 0)) {
       waypointCoords = wps.map(c => [c[0], c[1]]);
@@ -4387,7 +4390,9 @@ function _meteoRouteChanged() {
       .then(nav => {
         const pos = _skVal(nav.position);
         const snap = {
-          lat: pos && Number.isFinite(pos.latitude) ? pos.latitude : null,
+          // A latitude past ±90° projects to NaN (EPSG:3857) and would put the
+          // view there (the first fix centres on it): no position (PR #70 review).
+          lat: pos && Number.isFinite(pos.latitude) && Math.abs(pos.latitude) <= 90 ? pos.latitude : null,
           lon: pos && Number.isFinite(pos.longitude) ? pos.longitude : null,
           sog_ms: _skNum(nav.speedOverGround),
           cog_deg: _skDeg(nav.courseOverGroundTrue),
@@ -4650,7 +4655,7 @@ function _meteoRouteChanged() {
         // The marker: with the Own vessel layer on, or in LIVE / SIMULATE.
         if ((vesselToggle && vesselToggle.checked) || liveMode) renderMarker(snap);
         else vesselMarkerSource.clear();
-        // First visit with no saved view: open on the boat, marker or not.
+        // The first fix of the load opens the map on the boat, marker or not.
         if (!simMode && snap.lat != null && snap.lon != null) centreOnVesselOnce(ol.proj.fromLonLat([snap.lon, snap.lat]));
         if (liveMode && snap.lat != null && snap.lon != null) centreOnBoat([snap.lon, snap.lat]);
         if (simMode) {
@@ -4696,7 +4701,7 @@ function _meteoRouteChanged() {
       f.set('rotation_rad', rot_deg * Math.PI / 180);
       vesselMarkerSource.addFeature(f);
     }
-    centreOnVesselOnce(coord);  // first visit with no saved view: open the map on the boat
+    centreOnVesselOnce(coord);  // the first fix of the load: open the map on the boat
   }
 
   // ── trigger logic ────────────────────────────────────────────────

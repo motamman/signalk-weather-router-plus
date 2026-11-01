@@ -1920,8 +1920,8 @@ export const map = new ol.Map({
   layers: [osmLayer, seamarkLayer, windHeatmapLayer, currentHeatmapLayer, roughnessLayer, waveHeatmapLayer, precipHeatmapLayer, temperatureLayer, sstLayer, tideLayer, pressureLayer, currentLayer, seasArrowsLayer, waveArrowsLayer, windLayer, frontLayer, skeletonLayer, pastRouteLayer, trackLayer, routeLayer, proposedRouteLayer, searchBoatLayer, vesselMarkerLayer, notesLayer, seasRouteLayer, ringLayer, markerLayer, condMarkerLayer, meteoMarkerLayer],
   view: new ol.View({
     // Last view this browser had (saved on every move), else Block
-    // Island Sound at zoom 11. On a first visit the first Signal K
-    // position fix (navigation.position) pans to the vessel.
+    // Island Sound at zoom 11, until the first Signal K position fix
+    // (navigation.position) pans to the vessel.
     center: ol.proj.fromLonLat(_SAVED_VIEW ? [_SAVED_VIEW.lon, _SAVED_VIEW.lat] : _DEFAULT_LONLAT),
     zoom: _SAVED_VIEW ? _SAVED_VIEW.zoom : 11
   })
@@ -1961,29 +1961,68 @@ function _smallScreen() {
   setAttribH();
 })();
 
-// Remember where the map was left, so the next load opens there. Not
-// on a first visit until the map has moved (the user, or the first
-// Signal K fix): OL fires moveend after the first render, which would
-// otherwise save the default view and stop the next visit from opening
-// on the boat. The page never asks the browser for its location: the
+// A load opens on the boat unless it restores a plan: routes are planned
+// from where the boat is, and the view saved last time can be anywhere
+// (on a first visit, Block Island Sound). The first Signal K fix centres
+// the map on it, keeping the saved zoom, unless the map has moved since
+// the load, a route was fitted into view, or the user has used it before
+// the fix came.
+// A plan restored from the last visit (a start or an end marker) keeps
+// the view instead, where that plan was left (cancelCentreOnVessel; PR #70
+// review). The page never asks the browser for its location: the
 // vessel's position comes from Signal K.
-let _autoCentreOnVessel = !_SAVED_VIEW;   // first visit: the first Signal K fix centres the map
+//
+// The view is saved on every move, so the zoom carries over and the
+// start view stands in while Signal K has no position. OL fires moveend
+// after the first render too; that one is not a move, and saving it would
+// keep the default view on a first visit (after a restored plan it only
+// writes the saved view back). A zoom is a move: the zoom buttons keep
+// the centre (PR #70 review).
+let _autoCentreOnVessel = true;   // until the first Signal K fix, input on the map, a move, a route fit, or a restored plan
 const _startCenter = map.getView().getCenter();
+const _startZoom = map.getView().getZoom();
 map.on('moveend', function() {
   const v = map.getView();
   const c = v.getCenter();
   if (_autoCentreOnVessel) {
-    if (c[0] === _startCenter[0] && c[1] === _startCenter[1]) return;
+    if (c[0] === _startCenter[0] && c[1] === _startCenter[1] && v.getZoom() === _startZoom) return;
     _autoCentreOnVessel = false;
   }
   const [lon, lat] = ol.proj.toLonLat(c);
   try { localStorage.setItem('rp:view', JSON.stringify({ lon, lat, zoom: v.getZoom() })); } catch (_) {}
 });
-// First visit with no saved view: the first Signal K fix opens the map on the boat (rp-plan.js).
+// Input on the map has not reached moveend yet, or never moves the view: a
+// pan or pinch under way, a wheel or trackpad zoom (OL holds a wheel notch
+// 80 ms before it zooms), a click that opened the map menu, a marker being
+// dragged. A fix that comes after it must not pull the map out from under
+// the user (PR #70 review). Not on the controls or the map menu and popups,
+// which OL keeps out of its map events too: a zoom button counts by its
+// moveend, ⌖ asks for the boat, and a menu opens only after a press on the
+// map, which counted.
+const _userOnMap = (/** @type {Event} */ e) => {
+  if (!map.getOverlayContainerStopEvent().contains(/** @type {Node} */ (e.target))) _autoCentreOnVessel = false;
+};
+map.getViewport().addEventListener('pointerdown', _userOnMap, { passive: true });
+map.getViewport().addEventListener('wheel', _userOnMap, { passive: true });
+// The map shows what the user works on, so the first fix leaves it there
+// (rp-plan.js): a restored plan keeps the view the page opened on, the
+// saved view where the plan was left, or without one the default view,
+// the only view a plan can have been placed on then (any move, the first
+// fix's centring too, saves the view); a route fitted into view keeps the
+// route, even when the fit ends where the load started and so moves
+// nothing moveend would see (PR #70 review).
+export function cancelCentreOnVessel() {
+  _autoCentreOnVessel = false;
+}
+// The first Signal K fix of the load opens the map on the boat (rp-plan.js).
+// Not while the view is animating: something else (a warning's jump from
+// the itinerary) is moving the map already.
 export function centreOnVesselOnce(coord) {
   if (!_autoCentreOnVessel) return;
   _autoCentreOnVessel = false;
-  map.getView().animate({ center: coord, zoom: 11, duration: 400 });
+  const v = map.getView();
+  if (v.getAnimating()) return;
+  v.animate({ center: coord, duration: 400 });
 }
 
 // Every overlay keyed by the view and the overlay time (each loader
