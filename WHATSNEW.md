@@ -29,13 +29,15 @@
 - **Every tack costs the tack penalty**, the last one before the
   destination included, so routes are no longer chosen for tacks they do
   not pay for.
-- **Polar Management.** With signalk-polar-management installed, its
-  active polar and performance factor are used automatically; the
-  built-in polars stay selectable per route.
+- **Polar Management.** With signalk-polar-management installed and a
+  valid polar active in it, that polar and its performance factor are used
+  automatically; otherwise the built-in default is. The built-in polars
+  stay selectable per route.
 - **The page keeps up with you.** The route's progress and Cancel show
   where you pressed Find Route; Best departure opens from a button beside
-  Departure; after a reload a route still computing is followed again, or
-  shown if it finished; the map opens on the boat, or on your plan when
+  Departure; after a reload a route this browser started is followed again
+  while it computes, or shown if it finished (one started on another
+  device is left alone); the map opens on the boat, or on your plan when
   the last visit left one; on an iPad the panel fits the screen.
 - **Freeboard: the "Weather-route it" button leaves the route you drew
   alone.** The
