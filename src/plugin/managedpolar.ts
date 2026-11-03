@@ -5,6 +5,7 @@
  */
 import { PolarDiagram } from '../vessel/polar';
 import type { SailPlanPolar } from '../vessel/sailplan';
+import type { WaveCorrection } from '../vessel/wavecorrection';
 
 export const ACTIVE_POLAR_TOKEN = 'signalk-active';
 
@@ -27,6 +28,8 @@ export interface ManagedPolar extends ManagedTable {
   performanceFactor: number;
   /** A polar set's sail plans, in its order; absent for a polarTable or a set without any. */
   sailPlans?: ManagedSailPlan[];
+  /** A polar set's wave correction (vessel/wavecorrection.ts), when it has one and Polar Management's switch is not off. */
+  waveCorrection?: WaveCorrection;
 }
 
 export interface PolarProviderApp {
@@ -54,9 +57,10 @@ export function activePolarId(value: unknown): string {
 /**
  * Canonical matrix is [TWS][TWA]; PolarDiagram stores [TWA][TWS]. SI speeds stay unchanged. A polarSet routes on its
  * `best` table and keeps its sail plans' tables; a null cell there (no sailing solution) is held as unavailable, never
- * given a speed.
+ * given a speed. Its wave correction is kept unless `applyWaveCorrection` (Polar Management's switch,
+ * polars.applyWaveCorrection) is false.
  */
-export function adaptManagedPolar(resource: unknown, id: string, performanceFactor: unknown): ManagedPolar {
+export function adaptManagedPolar(resource: unknown, id: string, performanceFactor: unknown, applyWaveCorrection?: unknown): ManagedPolar {
   const doc = object(resource);
   const units = object(doc.units);
   const set = doc.kind === 'polarSet' && doc.schemaVersion === '2.0.0';
@@ -80,7 +84,51 @@ export function adaptManagedPolar(resource: unknown, id: string, performanceFact
     if (typeof plan.id !== 'string' || !plan.id) throw new Error('Invalid polar set: every sail plan needs an id');
     return { name: typeof plan.name === 'string' && plan.name ? plan.name : plan.id, ...adaptTable(object(plan.table), true) };
   });
-  return { label, ...adaptTable(object(doc.best), true), performanceFactor: factor, ...(sailPlans.length ? { sailPlans } : {}) };
+  const waveCorrection = doc.waveCorrection === undefined || applyWaveCorrection === false ? null : adaptWaveCorrection(doc.waveCorrection);
+  return {
+    label,
+    ...adaptTable(object(doc.best), true),
+    performanceFactor: factor,
+    ...(sailPlans.length ? { sailPlans } : {}),
+    ...(waveCorrection ? { waveCorrection } : {}),
+  };
+}
+
+/** A polar set's `waveCorrection` (height layers of [period][angle] speed factors, SI) as the router holds it, angles in degrees. */
+function adaptWaveCorrection(value: unknown): WaveCorrection {
+  const heights = object(value).heights;
+  if (!Array.isArray(heights) || heights.length === 0) throw new Error('Invalid wave correction: expected height layers');
+  const ascending = (v: unknown, min: number, max: number, what: string): number[] => {
+    if (
+      !Array.isArray(v) ||
+      v.length === 0 ||
+      v.some((x, i) => typeof x !== 'number' || !Number.isFinite(x) || x < min || x > max || (i > 0 && x <= v[i - 1]))
+    )
+      throw new Error(`Invalid wave correction: expected strictly increasing ${what}`);
+    return v as number[];
+  };
+  const layers = heights.map(h => {
+    const layer = object(h);
+    const heightM = layer.significantWaveHeight;
+    if (typeof heightM !== 'number' || !Number.isFinite(heightM) || heightM < 0)
+      throw new Error('Invalid wave correction: expected a height ≥ 0 m');
+    const axes = object(layer.axes);
+    const periodsS = ascending(axes.wavePeriod, Number.MIN_VALUE, Infinity, 'positive wave periods');
+    const angles = ascending(axes.waveAngle, 0, Math.PI, 'wave angles in 0..pi');
+    const matrix = object(layer.values).speedFactorMatrix;
+    if (
+      !Array.isArray(matrix) ||
+      matrix.length !== periodsS.length ||
+      matrix.some(
+        row => !Array.isArray(row) || row.length !== angles.length || row.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+      )
+    )
+      throw new Error('Invalid wave correction: expected a complete nonnegative [period][angle] factor table per height');
+    return { heightM, periodsS: [...periodsS], anglesDeg: angles.map(a => (a * 180) / Math.PI), factors: (matrix as number[][]).flat() };
+  });
+  for (let i = 1; i < layers.length; i++)
+    if (!(layers[i].heightM > layers[i - 1].heightM)) throw new Error('Invalid wave correction: expected strictly increasing heights');
+  return { layers, heightsM: layers.map(l => l.heightM) };
 }
 
 /** One table (a polarTable document, or a table of a polarSet: `nulls` allows its null cells) as PolarDiagram holds it. */
@@ -166,6 +214,9 @@ export async function loadManagedPolar(app: PolarProviderApp): Promise<ManagedPo
   if (pathValue(active) == null) throw new Error('No active polar: select one in Polar Management');
   const id = activePolarId(active);
   const factor = pathValue(app.getSelfPath?.('polars.performanceFactor'));
+  // Polar Management's wave-correction switch: false turns the set's correction off; null (no usable correction) or
+  // absent (an older Polar Management) leaves the document to decide.
+  const applyWave = pathValue(app.getSelfPath?.('polars.applyWaveCorrection'));
   let timer: ReturnType<typeof setTimeout> | undefined;
   let resource: unknown;
   try {
@@ -181,7 +232,7 @@ export async function loadManagedPolar(app: PolarProviderApp): Promise<ManagedPo
   // Do not dispatch a stale selection if it changed while the resource was loading.
   if (activePolarId(app.getSelfPath?.('polars.activePolar')) !== id)
     throw new Error('Active polar changed while loading; retry the request');
-  return adaptManagedPolar(resource, id, factor);
+  return adaptManagedPolar(resource, id, factor, applyWave);
 }
 
 /** Automatic detection is optional: local fallback remains usable without a provider. */

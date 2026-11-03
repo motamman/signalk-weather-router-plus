@@ -1968,6 +1968,11 @@ function _warningKind(w) {
     const s = Number(w.detail);
     return 'over the ' + (w.violation === 'wind_over_limit' ? 'wind' : 'wave') + ' limit' + (s > 0 && fmtTime(s) ? ' for ' + fmtTime(s) : '');
   }
+  // The sea was outside the polar's wave-correction table: that time was sailed at the polar's speed, uncorrected.
+  if (w.violation === 'waves_outside_correction') {
+    const s = Number(w.detail);
+    return "seas outside the polar's wave correction: sailed uncorrected" + (s > 0 && fmtTime(s) ? ' for ' + fmtTime(s) : '');
+  }
   return escapeHtml(String(w.violation || 'warning').replace(/_/g, ' '));
 }
 // The search's own reason, as a line under the row's text (a long sentence, with quantities as unit tokens): shown,

@@ -184,6 +184,7 @@ export function buildContext(prop: PropagatorParams, args: ComputeRouteArgs): Se
     limitAvoidStrength: args.limitAvoidStrength,
     comfortWeight: args.comfortWeight,
     tackPenaltyS: args.tackPenaltyS,
+    waveCorrection: args.waveCorrection,
   };
   const hasLimit = args.maxWindMs !== undefined || args.maxSwhM !== undefined;
   // Named as a cause of a stuck move only when a limit blocks; a limit set to avoid stops nothing.

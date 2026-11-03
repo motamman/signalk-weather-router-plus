@@ -34,7 +34,7 @@ import { execFileSync } from 'node:child_process';
 import { HOUR_S } from '../geo/units';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { availableSteps, ATM_PARAMS, WAVE_PARAMS, MAIN_MAX_STEP } from '../data/ecmwf';
+import { availableSteps, ATM_PARAMS, OPTIONAL_WAVE_PARAMS, WAVE_PARAMS, MAIN_MAX_STEP } from '../data/ecmwf';
 import { streamingDecodeBytes } from '../data/loader';
 import { ACCUMULATED_PARAMS } from '../data/forecast';
 
@@ -127,9 +127,15 @@ export interface MemoryCheck {
 const mb = (b: number): string => `{dataSize:${Math.round(b)}}`;
 const hrs = (h: number): string => `{time:${Math.round(h * HOUR_S)}}`;
 
-/** Parameters per step for a field set. */
+/** Parameters per step for a field set, the optional wave fields included (a step holds them when they could be fetched). */
 export function fieldsPerStep(extraFields: boolean, energyFields = false): number {
-  return ATM_PARAMS.length + WAVE_PARAMS.length + (extraFields ? EXTRA_FIELD_COUNT : 0) + (energyFields ? ENERGY_FIELD_COUNT : 0);
+  return (
+    ATM_PARAMS.length +
+    WAVE_PARAMS.length +
+    OPTIONAL_WAVE_PARAMS.length +
+    (extraFields ? EXTRA_FIELD_COUNT : 0) +
+    (energyFields ? ENERGY_FIELD_COUNT : 0)
+  );
 }
 
 /** Disk left free after writing a decoded run (a policy, not a measurement). */

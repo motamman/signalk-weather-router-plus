@@ -17,7 +17,16 @@
 import type { BBox } from '../geo/geodesy';
 import { HOUR_S } from '../geo/units';
 import { parseGrib2Message, type DecodeScratch } from '../grib/grib2';
-import { ATM_PARAMS, WAVE_PARAMS, availableSteps, latestExpectedCycle, type Cycle, type EcmwfClient, type IndexRecord } from './ecmwf';
+import {
+  ATM_PARAMS,
+  OPTIONAL_WAVE_PARAMS,
+  WAVE_PARAMS,
+  availableSteps,
+  latestExpectedCycle,
+  type Cycle,
+  type EcmwfClient,
+  type IndexRecord,
+} from './ecmwf';
 import {
   buildStep,
   ForecastStore,
@@ -158,7 +167,8 @@ async function decodeSteps(
   // Previous step's raw accumulated fields, for the step-difference pass
   // (ACCUMULATED_PARAMS): five global fields, about 21 MB.
   const accumPrev = new Map<string, AccumPrev>();
-  const fieldsPerStep = atmParams.length + (includeWaves ? WAVE_PARAMS.length : 0);
+  // The optional wave fields too: the step holds them whenever they could be fetched.
+  const fieldsPerStep = atmParams.length + (includeWaves ? WAVE_PARAMS.length + OPTIONAL_WAVE_PARAMS.length : 0);
   const slab = slabFor(steps.length, fieldsPerStep);
   let done = 0;
   let downloaded = 0;
@@ -182,12 +192,21 @@ async function decodeSteps(
     }
     if (includeWaves) {
       let waveIndex: IndexRecord[] | undefined;
-      for (const p of WAVE_PARAMS) {
-        if (!client.hasCached(cycle, cycle.waveStream, step, p)) {
-          waveIndex = waveIndex ?? (await client.fetchIndex(cycle, cycle.waveStream, step));
-          downloaded++;
+      for (const p of [...WAVE_PARAMS, ...OPTIONAL_WAVE_PARAMS]) {
+        const optional = (OPTIONAL_WAVE_PARAMS as readonly string[]).includes(p);
+        let msg: Uint8Array | null;
+        try {
+          if (!client.hasCached(cycle, cycle.waveStream, step, p)) {
+            waveIndex = waveIndex ?? (await client.fetchIndex(cycle, cycle.waveStream, step));
+            downloaded++;
+          }
+          msg = await client.fetchField(cycle, cycle.waveStream, step, p, waveIndex);
+        } catch (err) {
+          // An optional field that cannot be fetched (no connection, the server failing): the step is complete without it.
+          if (!optional) throw err;
+          log(`step +${step}h: wave ${p} not fetched (${(err as Error).message}), skipped`);
+          continue;
         }
-        const msg = await client.fetchField(cycle, cycle.waveStream, step, p, waveIndex);
         if (!msg) {
           log(`step +${step}h: wave ${p} not in index, skipped`);
           continue;
@@ -204,6 +223,7 @@ async function decodeSteps(
     await new Promise(r => setImmediate(r));
   }
   log(`decoded ${done} steps for cycle ${cycle.yyyymmdd} ${cycle.hh}z (${downloaded} fields downloaded, rest from cache)`);
+  // The required fields only: what a run is judged complete and fitting by (the optional ones are in each step's own list).
   return { cycle, steps, params: [...atmParams, ...(includeWaves ? WAVE_PARAMS : [])], downloaded };
 }
 

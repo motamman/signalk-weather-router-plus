@@ -78,12 +78,24 @@ export interface RouteWarning {
    * could not move the boat there. `search_failed`: the search on an open stretch of a chart-mesh leg failed and the
    * stretch follows the mesh route instead (mesh/legrun.ts), which can be slower, with many short tacks; from and to
    * are the stretch's ends. `beat_motored`: a beat no tack fitted in, motored straight (experimental/propagator.ts).
+   * `waves_outside_correction`: time sailed where the sea was outside the polar's wave-correction table, so at the
+   * polar's speed uncorrected (smoother.ts waveCorrectionWarnings).
    */
-  violation: 'leg_crosses_land' | 'wind_over_limit' | 'waves_over_limit' | 'detour_motored' | 'search_failed' | 'beat_motored';
+  violation:
+    | 'leg_crosses_land'
+    | 'wind_over_limit'
+    | 'waves_over_limit'
+    | 'detour_motored'
+    | 'search_failed'
+    | 'beat_motored'
+    | 'waves_outside_correction';
   from: [number, number];
   to: [number, number];
   repaired: boolean;
-  /** detour_motored and beat_motored: the motoring time, seconds. search_failed: why the search failed. */
+  /**
+   * detour_motored and beat_motored: the motoring time, seconds; waves_outside_correction: the time sailed uncorrected,
+   * seconds. search_failed: why the search failed.
+   */
   detail?: string;
 }
 

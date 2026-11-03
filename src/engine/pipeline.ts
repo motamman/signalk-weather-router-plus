@@ -43,8 +43,9 @@ import { enrichLegRanges, enrichWaypoints, RouteCancelled, ViasNotCrossedError, 
 import type { ProgressFn } from './progress';
 import { recomputePerWaypointMetadata, routeArrival, type Route, type StageFront } from './route';
 import { markSailPlans } from './sailplans';
-import { limitWarnings, rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother } from './smoother';
+import { limitWarnings, rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother, waveCorrectionWarnings } from './smoother';
 import type { SailPlanPolar } from '../vessel/sailplan';
+import type { WaveCorrection } from '../vessel/wavecorrection';
 
 export type { LegWind } from './horizon';
 
@@ -79,6 +80,8 @@ export interface LegPipelineInputs {
     limitAvoidStrength?: number;
     comfortWeight?: number;
     tackPenaltyS?: number;
+    /** A polar set's wave correction (legsim.ts SimOptions); absent: none. */
+    waveCorrection?: WaveCorrection;
   };
   /** RDP tolerance, metres (0 = off); the shortcut smoother and its time tolerance (ratio). */
   simplifyM: number;
@@ -586,6 +589,7 @@ async function openWaterLeg(
     limitAvoidStrength: inp.sim.limitAvoidStrength,
     comfortWeight: inp.sim.comfortWeight,
     tackPenaltyS: inp.sim.tackPenaltyS,
+    waveCorrection: inp.sim.waveCorrection,
     arriving,
     forecastEndMs: legWind ? legWind.validRange[1].getTime() : undefined,
     simStepM: inp.sim.simStepM,
@@ -639,6 +643,7 @@ async function openWaterLeg(
           limitAvoidStrength: legArgs.limitAvoidStrength,
           comfortWeight: legArgs.comfortWeight,
           tackPenaltyS: legArgs.tackPenaltyS,
+          waveCorrection: legArgs.waveCorrection,
         },
         tolerance: inp.smootherTolerance,
         arriving,
@@ -667,6 +672,14 @@ async function openWaterLeg(
   if (nSails) progress(0, 0, `${tag}sail plans: ${nSails} route point(s) where the fastest sail plan changes`);
   // Legs over a limit set to avoid, on the route as it now stands.
   limitWarnings(r, {
+    vessel: inp.vessel,
+    polar: inp.polar,
+    wind: legWind ?? new NoWind(),
+    current,
+    sim: { ...inp.sim, simStepM: legArgs.simStepM },
+  });
+  // Legs sailed where the sea was outside the polar's wave-correction table.
+  waveCorrectionWarnings(r, {
     vessel: inp.vessel,
     polar: inp.polar,
     wind: legWind ?? new NoWind(),

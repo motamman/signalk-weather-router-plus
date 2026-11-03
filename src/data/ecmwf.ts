@@ -27,12 +27,19 @@ export const ECMWF_MIRRORS: Record<string, string> = {
   google: 'https://storage.googleapis.com/ecmwf-open-data',
 };
 
-/** Parameters the router needs, by stream. */
+/** Parameters the router needs, by stream: a cycle or a decoded run without one of these is incomplete. */
 export const ATM_PARAMS = ['10u', '10v', 'msl'] as const;
 export const WAVE_PARAMS = ['swh', 'mwp', 'mwd'] as const;
+/**
+ * Wave fields fetched and decoded when they can be, never required: the peak period (pp1d), kept beside the mean
+ * because a polar's wave-correction table may be made for either (not read yet). A cycle cached, or a run decoded,
+ * without them is complete, so an update never makes a boat that is offline throw away the forecast it has.
+ */
+export const OPTIONAL_WAVE_PARAMS = ['pp1d'] as const;
 export type EcmwfParam =
   | (typeof ATM_PARAMS)[number]
   | (typeof WAVE_PARAMS)[number]
+  | (typeof OPTIONAL_WAVE_PARAMS)[number]
   | '2t'
   | 'tprate'
   | 'skt'

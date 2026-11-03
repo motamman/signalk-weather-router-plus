@@ -21,7 +21,7 @@ import { ExperimentalPropagator } from '../experimental/propagator';
 import { forecastHorizonNote, type LegWind } from '../horizon';
 import { enrichLegRanges, enrichWaypoints } from '../propagator';
 import { recomputePerWaypointMetadata, routeArrival } from '../route';
-import { limitWarnings, rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother } from '../smoother';
+import { limitWarnings, rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother, waveCorrectionWarnings } from '../smoother';
 import type { LegArrival, LegSimResult, ModePolicy, SimOptions } from '../legsim';
 import type { LegPlan } from '../multileg';
 import { RouteCancelled, type PropagatorOptions } from '../propagator';
@@ -226,6 +226,7 @@ export function runMeshLeg(inp: MeshLegInputs): Route | MeshRefusal {
           limitAvoidStrength: inp.sim.limitAvoidStrength,
           comfortWeight: inp.sim.comfortWeight,
           tackPenaltyS: inp.sim.tackPenaltyS,
+          waveCorrection: inp.sim.waveCorrection,
           arriving,
           forecastEndMs: inp.wind ? inp.wind.validRange[1].getTime() : undefined,
           simStepM: inp.sim.simStepM,
@@ -374,6 +375,7 @@ export function runMeshLeg(inp: MeshLegInputs): Route | MeshRefusal {
   }
   // Legs over a limit set to avoid, on the leg as it now stands (bridge waits included).
   limitWarnings(route, { vessel: inp.vessel, polar: inp.polar, wind, current, sim: inp.sim });
+  waveCorrectionWarnings(route, { vessel: inp.vessel, polar: inp.polar, wind, current, sim: inp.sim });
   const limited = inp.sim.maxWindMs !== undefined || inp.sim.maxSwhM !== undefined;
   forecastHorizonNote(route, inp.wind, limited, tag, progress);
   void legStart;

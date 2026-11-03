@@ -298,3 +298,33 @@ export function limitWarnings(
   }
   route.warnings = warns.length ? warns : undefined;
 }
+
+/**
+ * The legs of the final route sailed partly where the sea was outside the polar's wave-correction table (legsim.ts
+ * SimOptions.waveCorrection), as warnings: that time was sailed at the polar's speed, uncorrected (the owner's choice,
+ * 2026-11-03: shown, the route not failed). Each leg timed again from its start waypoint's time, on the route as it
+ * stands, as limitWarnings does; earlier such warnings are replaced. Nothing without a wave correction.
+ */
+export function waveCorrectionWarnings(
+  route: Route,
+  env: { vessel: VesselParams; polar: PolarDiagram | null; wind: WindSource; current: CurrentSource; sim: SimOptions }
+): void {
+  if (!env.sim.waveCorrection) return;
+  const warns: NonNullable<Route['warnings']> = (route.warnings ?? []).filter(w => w.violation !== 'waves_outside_correction');
+  const wps = route.waypoints;
+  for (let i = 0; i + 1 < wps.length; i++) {
+    const a = wps[i];
+    const b = wps[i + 1];
+    const r = simulateLegTime(a.lon, a.lat, a.time, b.lon, b.lat, env.vessel, env.polar, env.wind, env.current, env.sim);
+    if (r.uncorrectedWaveSeconds > 0)
+      warns.push({
+        leg_index: i,
+        violation: 'waves_outside_correction',
+        from: [a.lon, a.lat],
+        to: [b.lon, b.lat],
+        repaired: false,
+        detail: String(Math.round(r.uncorrectedWaveSeconds)),
+      });
+  }
+  route.warnings = warns.length ? warns : undefined;
+}

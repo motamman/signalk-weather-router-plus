@@ -740,6 +740,14 @@ export async function route(
         : [];
     if (sailPlans.length)
       progress(0, 0, `polar: ${sailPlans.length} sail plan(s) (${sailPlans.map(p => p.name).join(', ')}); each stretch names the fastest`);
+    // The polar set's wave correction on the sailing speed (vessel/wavecorrection.ts), with the forecast's mean period.
+    const waveCorrection = managedPolar && request.mode !== 'motor' ? (managedPolar.waveCorrection ?? null) : null;
+    if (waveCorrection)
+      progress(
+        0,
+        0,
+        `polar: wave correction applied to the sailing speed (${waveCorrection.layers.length} height layer(s), {length:${waveCorrection.heightsM[0]}} to {length:${waveCorrection.heightsM[waveCorrection.heightsM.length - 1]}}; the forecast's mean wave period); seas outside its table are sailed uncorrected and marked on the leg`
+      );
     const departureMs = request.departure ? Date.parse(request.departure) : Date.now();
     // A motor route reads the forecast too (until 2026-10-30 it did not, so its wind and wave limits and its comfort
     // weight judged a calm sea and never acted): the speed under power is the same in any wind, the limits are not.
@@ -946,6 +954,7 @@ export async function route(
         limitAvoidStrength: request.limit_avoid_strength ?? cfg.routing.limitAvoidStrength,
         comfortWeight: request.comfort_weight ?? cfg.routing.comfortWeight,
         tackPenaltyS: request.tack_penalty ?? cfg.routing.tackPenaltyS,
+        ...(waveCorrection ? { waveCorrection } : {}),
       },
       simplifyM: request.simplify_m ?? cfg.routing.simplifyM,
       // Both routers (the owner's decision, 2026-10-08): the smoother times every shortcut with the real polar, so two laid-out tacks become one straight leg only where that course is sailable within the tolerance.
