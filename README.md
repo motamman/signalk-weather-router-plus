@@ -26,8 +26,12 @@ channels or bridges.
 ![A finished route from the western Mediterranean through the Strait of Gibraltar to Lisbon, with wind speed, isobars and the itinerary of legs](public/screenshots/01-route.jpg)
 
 
-**Status: beta** (0.2.1-beta.2). Please report
+**Status: beta** (0.2.1). Please report
 problems at https://github.com/motamman/signalk-weather-router-plus/issues.
+
+**Try it without installing:** the same routing engine runs as a website,
+[router.zeddisplay.com](https://router.zeddisplay.com). Sign in with a
+Google account.
 
 What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 [CHANGELOG.md](CHANGELOG.md).
