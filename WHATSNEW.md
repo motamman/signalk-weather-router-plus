@@ -40,8 +40,8 @@
   device is left alone); the map opens on the boat, or on your plan when
   the last visit left one; on an iPad the panel fits the screen.
 - **Freeboard: the "Weather-route it" button leaves the route you drew
-  alone.** The
-  result is a new route of its own, a draft until you save it.
+  alone.** The result is a new route of its own, a draft until you save
+  it.
 - **Fewer failed routes near the charts.** Chart tiles with no chart data
   are no longer treated as a wall at sea, a leg joins the charts where the
   way by water is shortest, and a destination up a narrow channel is
