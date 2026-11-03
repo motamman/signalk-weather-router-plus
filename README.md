@@ -29,6 +29,10 @@ channels or bridges.
 **Status: beta** (0.2.1). Please report
 problems at https://github.com/motamman/signalk-weather-router-plus/issues.
 
+**Try it without installing:** the same routing engine runs as a website,
+[router.zeddisplay.com](https://router.zeddisplay.com). Sign in with a
+Google account.
+
 What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 [CHANGELOG.md](CHANGELOG.md).
 

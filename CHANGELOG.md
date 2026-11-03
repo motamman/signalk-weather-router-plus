@@ -8,7 +8,7 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [0.2.1] - 2026-11-02
 
-The changes of 0.2.1-beta.1 and 0.2.1-beta.2, below, released. Since
+This release is the changes of 0.2.1-beta.1 and 0.2.1-beta.2, below. Since
 0.2.1-beta.2 only development dependencies (`@signalk/server-api`,
 typescript-eslint) and the shared CI workflow were updated.
 
