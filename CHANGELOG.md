@@ -6,6 +6,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-02
+
+The changes of 0.2.1-beta.1 and 0.2.1-beta.2, below, released. Since
+0.2.1-beta.2 only development dependencies (`@signalk/server-api`,
+typescript-eslint) and the shared CI workflow were updated.
+
 ## [0.2.1-beta.2] - 2026-11-01
 
 ### Fixed
@@ -2694,7 +2700,8 @@ builds before this release, with their measurements, is in
   loads the current scripts.
 - The configuration panel has been tested on Signal K server 2.33.0.
 
-[Unreleased]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.1-beta.2...HEAD
+[Unreleased]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.0...v0.2.1
 [0.2.1-beta.2]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.1-beta.1...v0.2.1-beta.2
 [0.2.1-beta.1]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.0...v0.2.1-beta.1
 [0.2.0]: https://github.com/motamman/signalk-weather-router-plus/compare/v0.2.0-beta.4...v0.2.0

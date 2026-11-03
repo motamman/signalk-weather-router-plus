@@ -1,5 +1,54 @@
 # What's new
 
+## 0.2.1
+
+- **Wind and wave limits: block or avoid.** Each limit has a mode. Block
+  (as before): water over the limit is off limits; the route goes round
+  it, or says plainly why it cannot. Avoid: the route may go through, but
+  time over the limit counts extra when routes are compared (double by
+  default; the Avoid strength sets how much), so it goes round where that
+  costs less and through where it does not. The times shown are always
+  the real times, and each leg that goes over carries a warning with the
+  time spent over. Set them per route in the Route tab's new Limits and
+  comfort section, or as defaults.
+- **Comfort per route.** The comfort slider (how much the route avoids
+  rough water, head seas counting most) is now on the Route tab beside the
+  limits, for sail and power boats alike, instead of only in Settings for
+  the whole server. Each of these controls shows the server's setting
+  until you choose, and "Use server setting" puts it back.
+- **Power boats get the limits too.** Motor routes now read the forecast,
+  so their wind and wave limits and the comfort weight act, on open water
+  and on the charts. Find Route works without a boat name or cruise speed;
+  the plugin's motor speed is used.
+- **Wider searches.** On a long leg the search could never look more than
+  about 80 km off the direct corridor, whatever the effort. It now reaches
+  as far as its heading sweep allows, so a detour round bad weather can
+  form; on a Placentia Bay to mid-Atlantic leg at Maximum effort the time
+  over the wave limit fell by more than a third. The coast near the route
+  stays as sharp as before.
+- **Every tack costs the tack penalty**, the last one before the
+  destination included, so routes are no longer chosen for tacks they do
+  not pay for.
+- **Polar Management.** With signalk-polar-management installed, its
+  active polar and performance factor are used automatically; the
+  built-in polars stay selectable per route.
+- **The page keeps up with you.** The route's progress and Cancel show
+  where you pressed Find Route; Best departure opens from a button beside
+  Departure; after a reload a route still computing is followed again, or
+  shown if it finished; the map opens on the boat, or on your plan when
+  the last visit left one; on an iPad the panel fits the screen.
+- **Freeboard: Weather-route it leaves the route you drew alone.** The
+  result is a new route of its own, a draft until you save it.
+- **Fewer failed routes near the charts.** Chart tiles with no chart data
+  are no longer treated as a wall at sea, a leg joins the charts where the
+  way by water is shortest, and a destination up a narrow channel is
+  reached along the water. The charts' rough cuts are rebuilt once, by the
+  first route that needs them.
+- **More said, more plainly.** A stretch the router could not search and
+  a beat it had to motor are warnings on the route; the data sources say
+  on a touch screen too when each run was published and the next is due,
+  with Check now; a newer Copernicus run still being written is reported.
+
 ## 0.2.0
 
 - **The map comes first on a phone.** The panel is a sheet at the bottom
