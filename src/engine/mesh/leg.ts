@@ -11,6 +11,7 @@
  */
 
 import type { PolarDiagram } from '../../vessel/polar';
+import type { SailPlanPolar } from '../../vessel/sailplan';
 import type { VesselParams } from '../../vessel/vessel';
 import type { CurrentSource, WindSource } from '../environment';
 import { simulateLegTime, tackChargeS, type LegArrival, type LegSimResult, type SimOptions } from '../legsim';
@@ -38,6 +39,8 @@ export interface MeshLegArgs {
   rules: MeshRules;
   vessel: VesselParams;
   polar: PolarDiagram | null;
+  /** A polar set's sail plans, scaled and floored as `polar` is (engine/sailplans.ts); absent: none. */
+  sailPlans?: readonly SailPlanPolar[] | null;
   sim: SimOptions;
   router?: RouterKind;
   propagator: Omit<PropagatorOptions, 'stages'>;

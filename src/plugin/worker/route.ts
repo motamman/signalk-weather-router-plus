@@ -6,7 +6,8 @@
  * instead of module-level variables.
  */
 
-import { ACTIVE_POLAR_TOKEN, managedDiagram, type ManagedPolar } from '../managedpolar';
+import { ACTIVE_POLAR_TOKEN, managedDiagram, managedSailPlans, type ManagedPolar } from '../managedpolar';
+import type { SailPlanPolar } from '../../vessel/sailplan';
 import { HOUR_S, NM_M } from '../../geo/units';
 import { validateRouteRequest } from '../request_schema';
 import { runLegPipeline, type LegPipelineInputs, type LegWind } from '../../engine/pipeline';
@@ -302,7 +303,8 @@ function meshLegRunner(
           multi: a.multi,
           rules: a.rules,
           vessel: a.vessel,
-          polar: a.polar ? { twa: Array.from(a.polar.twa), tws: Array.from(a.polar.tws), speeds: Array.from(a.polar.speeds) } : null,
+          polar: a.polar ? a.polar.toArrays() : null,
+          ...(a.sailPlans?.length ? { sailPlans: a.sailPlans.map(p => ({ name: p.name, polar: p.polar.toArrays() })) } : {}),
           sim: a.sim,
           router: a.router,
           propagator: a.propagator,
@@ -727,6 +729,17 @@ export async function route(
         );
       }
     }
+    // A polar set's sail plans (polar-format 2), scaled and floored as the polar is: the route is sailed on its best
+    // table and names the fastest plan on each stretch (engine/sailplans.ts).
+    const sailPlans: SailPlanPolar[] =
+      managedPolar && request.mode !== 'motor'
+        ? managedSailPlans(managedPolar).map(p => ({
+            name: p.name,
+            polar: p.polar.scaled(vessel.polarPerformance).withNoGoFloor(cfg.routing.noGoMinAngleDeg),
+          }))
+        : [];
+    if (sailPlans.length)
+      progress(0, 0, `polar: ${sailPlans.length} sail plan(s) (${sailPlans.map(p => p.name).join(', ')}); each stretch names the fastest`);
     const departureMs = request.departure ? Date.parse(request.departure) : Date.now();
     // A motor route reads the forecast too (until 2026-10-30 it did not, so its wind and wave limits and its comfort
     // weight judged a calm sea and never acted): the speed under power is the same in any wind, the limits are not.
@@ -921,6 +934,7 @@ export async function route(
       },
       vessel,
       polar: routePolar,
+      sailPlans: sailPlans.length ? sailPlans : null,
       sim: {
         modePolicy: request.mode ?? 'sail_max',
         sailThreshMs: request.sail_thresh_ms ?? cfg.routing.sailThreshMs,

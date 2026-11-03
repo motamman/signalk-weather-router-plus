@@ -180,10 +180,27 @@ export function stepAlongHeading(
 }
 
 /**
+ * One sub-step of a candidate as the scorer walked it: where and when it started, the wind there (m/s, FROM degrees
+ * true), whether it sailed, and its seconds. For a caller that needs what happened along a leg, not only its totals
+ * (engine/sailplans.ts).
+ */
+export type StepTrace = (
+  candidate: number,
+  lon: number,
+  lat: number,
+  timeMs: number,
+  windMs: number,
+  windDirDeg: number,
+  sailed: boolean,
+  seconds: number
+) => void;
+
+/**
  * Simulate traversal of the straight line a→c starting at aTime: the
  * batched scorer with one candidate, so a final leg, a beat and a
  * smoother shortcut are timed under exactly the rules the stage
  * candidates were (structural cleanup, decision D: the loops unified).
+ * `onStep`: each sub-step as it was walked.
  */
 export function simulateLegTime(
   aLon: number,
@@ -195,7 +212,8 @@ export function simulateLegTime(
   polar: PolarDiagram | null,
   wind: WindSource,
   current: CurrentSource,
-  opts: SimOptions
+  opts: SimOptions,
+  onStep?: StepTrace
 ): LegSimResult {
   const totalDistM = haversineDistanceM(aLon, aLat, cLon, cLat);
   if (totalDistM <= 0) {
@@ -222,7 +240,8 @@ export function simulateLegTime(
     polar,
     wind,
     current,
-    opts
+    opts,
+    onStep
   );
   if (!Number.isFinite(sc.seconds[0]) || sc.seconds[0] <= 0) {
     const reason: LegSimResult['reason'] = sc.limited[0] ? 'limited' : sc.noGo[0] ? 'no_go' : sc.foul[0] ? 'current' : 'no_speed';
@@ -359,7 +378,7 @@ export interface CandidateScores {
  * estimate) for every candidate: on a long sailing leg that read the
  * forecast hours away from when the boat is there (structural cleanup,
  * decision D, 2026-10-01: measured on brain as a 16 min arrival
- * difference on a 9.5 h final leg).
+ * difference on a 9.5 h final leg). `onStep`: each sub-step as it was walked.
  */
 export function scoreCandidatesFromParent(
   parentLon: number,
@@ -371,7 +390,8 @@ export function scoreCandidatesFromParent(
   polar: PolarDiagram | null,
   wind: WindSource,
   current: CurrentSource,
-  opts: SimOptions
+  opts: SimOptions,
+  onStep?: StepTrace
 ): CandidateScores {
   const n = bearings.length;
   const seconds = new Float64Array(n);
@@ -506,6 +526,7 @@ export function scoreCandidatesFromParent(
         motoring[i] += stepS;
         if (inNoGo) motoringNoGo[i] += stepS;
       }
+      if (onStep) onStep(i, curLon[i], curLat[i], liveT[q], ws, wd, sailUsed, stepS);
       const [nl, nla] = projectAlongBearing(curLon[i], curLat[i], bearings[i], stepPerCand[i]);
       curLon[i] = nl;
       curLat[i] = nla;

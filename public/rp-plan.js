@@ -216,6 +216,7 @@ function _drawRouteLegs(pts) {
       segColor = TACK_COLOR[tackSide(currCog, currWind) || 'starboard'];
     }
     prev.set('next_mode', currMode);
+    prev.set('next_sail_plan', curr.get('sail_plan'));
     prev.set('next_cog', currCog);
     prev.set('next_wind', currWind);
     prev.set('next_sog_ms', curr.get('sog_ms'));
@@ -2057,6 +2058,7 @@ function _legDescription(p, isArrival) {
     add('Wind', speed + (windDir != null ? ' from ' + degToCardinal(windDir) + ' (' + fmtAngleDeg(windDir) + ')' : '') + (pos ? ' · ' + pos : ''));
   }
   if (!isArrival && p.next_twa_deg != null) add('TWA', fmtAngleDeg(p.next_twa_deg));
+  if (!isArrival) add('Sails', p.next_sail_plan);
   const curMs = isArrival ? p.current_ms : p.next_current_ms, curDir = isArrival ? p.current_dir_deg : p.next_current_dir_deg;
   if (curMs != null && curMs > 0.05 && fmtSpeed(curMs)) {
     const ff = !isArrival ? _plainFairFoul(cogDeg, curDir) : null;
@@ -2286,6 +2288,8 @@ function _legCardHtml(f, i, cw) {
     _kv('Wind', wind),
     _kv('TWA', twaStr),
     _kv('Tack', tack ? (tack === 'port' ? 'Port' : 'Starboard') : null),
+    // The polar set's sail plan the leg is sailed on (the server names it; a name from the polar, so escaped).
+    _kv('Sails', !isArrival && p.next_sail_plan ? escapeHtml(p.next_sail_plan) : null),
     _kv('Current', curStr),
     _kv('Waves', wavesStr),
     _kv('Seas', seasStr),

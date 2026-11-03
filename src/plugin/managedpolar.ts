@@ -1,15 +1,32 @@
-/** Adapter for the Signal K polars Resource Provider contract. No provider files or HTTP needed. */
+/**
+ * Adapter for the Signal K polars Resource Provider contract. No provider files or HTTP needed. A canonical
+ * polarTable 1.0.0, or a polar-format 2 polarSet 2.0.0: routed on its `best` table, with its sail plans' tables kept
+ * to name the fastest plan on each stretch (vessel/sailplan.ts).
+ */
 import { PolarDiagram } from '../vessel/polar';
+import type { SailPlanPolar } from '../vessel/sailplan';
 
 export const ACTIVE_POLAR_TOKEN = 'signalk-active';
 
-/** Structured-cloneable, unscaled routing table captured before dispatch to the worker. */
-export interface ManagedPolar {
-  label: string;
+/** A routing table as PolarDiagram holds it ([TWA][TWS], degrees and m/s); `unavailable`: 1 at a cell with no sailing solution, absent when there is none. */
+export interface ManagedTable {
   twa: number[];
   tws: number[];
   speeds: number[];
+  unavailable?: number[];
+}
+
+/** One sail plan of a polar set: its name (its id when it has none) and its table. */
+export interface ManagedSailPlan extends ManagedTable {
+  name: string;
+}
+
+/** Structured-cloneable, unscaled routing table captured before dispatch to the worker. */
+export interface ManagedPolar extends ManagedTable {
+  label: string;
   performanceFactor: number;
+  /** A polar set's sail plans, in its order; absent for a polarTable or a set without any. */
+  sailPlans?: ManagedSailPlan[];
 }
 
 export interface PolarProviderApp {
@@ -34,14 +51,41 @@ export function activePolarId(value: unknown): string {
   return match[1];
 }
 
-/** Canonical matrix is [TWS][TWA]; PolarDiagram stores [TWA][TWS]. SI speeds stay unchanged. */
+/**
+ * Canonical matrix is [TWS][TWA]; PolarDiagram stores [TWA][TWS]. SI speeds stay unchanged. A polarSet routes on its
+ * `best` table and keeps its sail plans' tables; a null cell there (no sailing solution) is held as unavailable, never
+ * given a speed.
+ */
 export function adaptManagedPolar(resource: unknown, id: string, performanceFactor: unknown): ManagedPolar {
   const doc = object(resource);
   const units = object(doc.units);
-  if (doc.kind !== 'polarTable' || doc.schemaVersion !== '1.0.0' || units.twa !== 'rad' || units.tws !== 'm/s' || units.boatSpeed !== 'm/s')
-    throw new Error('Unsupported polar: expected canonical polarTable 1.0.0 with rad/m/s units');
+  const set = doc.kind === 'polarSet' && doc.schemaVersion === '2.0.0';
+  if (
+    (!set && (doc.kind !== 'polarTable' || doc.schemaVersion !== '1.0.0')) ||
+    units.twa !== 'rad' ||
+    units.tws !== 'm/s' ||
+    units.boatSpeed !== 'm/s'
+  )
+    throw new Error('Unsupported polar: expected canonical polarTable 1.0.0 or polarSet 2.0.0 with rad/m/s units');
   if (object(doc.symmetry).portStarboardSymmetric !== true) throw new Error('Routing requires a port/starboard symmetric polar');
-  const axes = object(doc.axes);
+  const factor = performanceFactor === undefined || performanceFactor === null ? 1 : performanceFactor;
+  if (typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0 || factor > 1)
+    throw new Error('Invalid polars.performanceFactor: expected a ratio from 0 to 1');
+  const label = typeof doc.name === 'string' && doc.name ? doc.name : id;
+  if (!set) return { label, ...adaptTable(doc, false), performanceFactor: factor };
+  const plans = doc.sailplans ?? [];
+  if (!Array.isArray(plans)) throw new Error('Invalid polar set: expected sailplans to be an array');
+  const sailPlans = plans.map((value): ManagedSailPlan => {
+    const plan = object(value);
+    if (typeof plan.id !== 'string' || !plan.id) throw new Error('Invalid polar set: every sail plan needs an id');
+    return { name: typeof plan.name === 'string' && plan.name ? plan.name : plan.id, ...adaptTable(object(plan.table), true) };
+  });
+  return { label, ...adaptTable(object(doc.best), true), performanceFactor: factor, ...(sailPlans.length ? { sailPlans } : {}) };
+}
+
+/** One table (a polarTable document, or a table of a polarSet: `nulls` allows its null cells) as PolarDiagram holds it. */
+function adaptTable(table: Record<string, unknown>, nulls: boolean): ManagedTable {
+  const axes = object(table.axes);
   const axis = (value: unknown, min: number, max: number, count: number): number[] => {
     if (
       !Array.isArray(value) ||
@@ -54,19 +98,25 @@ export function adaptManagedPolar(resource: unknown, id: string, performanceFact
   const angles = axis(axes.twa, 0, Math.PI, 2);
   const twa = angles.map(a => (a * 180) / Math.PI);
   const tws = axis(axes.tws, 0, Infinity, 1);
-  const matrix = object(doc.values).boatSpeedMatrix;
+  const matrix = object(table.values).boatSpeedMatrix;
   if (
     !Array.isArray(matrix) ||
     matrix.length !== tws.length ||
     matrix.some(
-      row => !Array.isArray(row) || row.length !== twa.length || row.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+      row =>
+        !Array.isArray(row) ||
+        row.length !== twa.length ||
+        row.some(v => !(nulls && v === null) && (typeof v !== 'number' || !Number.isFinite(v) || v < 0))
     )
   )
-    throw new Error('Invalid polar matrix: expected a complete nonnegative [TWS][TWA] speed table');
-  const factor = performanceFactor === undefined || performanceFactor === null ? 1 : performanceFactor;
-  if (typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0 || factor > 1)
-    throw new Error('Invalid polars.performanceFactor: expected a ratio from 0 to 1');
-  const targets = derivedTargets(doc.derived, tws);
+    throw new Error(
+      `Invalid polar matrix: expected a complete nonnegative [TWS][TWA] speed table${nulls ? ' (null where no sailing solution)' : ''}`
+    );
+  const cell = (k: number, i: number): number | null => (matrix[k] as (number | null)[])[i];
+  /** The table, with `unavailable` only when a cell has no sailing solution. */
+  const out = (twaDeg: number[], speeds: number[], unavailable: number[]): ManagedTable =>
+    unavailable.some(v => v === 1) ? { twa: twaDeg, tws: [...tws], speeds, unavailable } : { twa: twaDeg, tws: [...tws], speeds };
+  const targets = derivedTargets(table.derived, tws);
   if (targets.size) {
     const union = [
       ...new Set([
@@ -75,31 +125,38 @@ export function adaptManagedPolar(resource: unknown, id: string, performanceFact
       ]),
     ].sort((a, b) => a - b);
     const diagrams = tws.map((wind, k) => {
-      const points = new Map(angles.map((a, i) => [a, (matrix[k] as number[])[i]]));
+      const points = new Map(angles.map((a, i) => [a, cell(k, i)]));
       const row = targets.get(k);
       for (const target of [row?.beat, row?.run]) if (target) points.set(target.twa, target.tbs);
       const ordered = [...points].sort((a, b) => a[0] - b[0]);
       return new PolarDiagram(
         ordered.map(([a]) => (a * 180) / Math.PI),
         [wind],
-        ordered.map(([a, speed]) => (row?.beat && a < row.beat.twa ? 0 : speed))
+        ordered.map(([a, speed]) => (speed === null || (row?.beat && a < row.beat.twa) ? 0 : speed)),
+        ordered.map(([, speed]) => (speed === null ? 1 : 0))
       );
     });
     const mergedTwa = union.map(a => (a * 180) / Math.PI);
-    return {
-      label: typeof doc.name === 'string' && doc.name ? doc.name : id,
-      twa: mergedTwa,
-      tws: [...tws],
-      speeds: mergedTwa.flatMap(a => diagrams.map((diagram, k) => diagram.boatSpeed(a, tws[k]))),
-      performanceFactor: factor,
-    };
+    return out(
+      mergedTwa,
+      mergedTwa.flatMap(a => diagrams.map((diagram, k) => diagram.boatSpeed(a, tws[k]))),
+      mergedTwa.flatMap(a => diagrams.map((diagram, k) => (diagram.unavailableAt(a, tws[k]) ? 1 : 0)))
+    );
   }
-  const speeds = twa.flatMap((_, i) => tws.map((_, k) => (matrix[k] as number[])[i]));
-  return { label: typeof doc.name === 'string' && doc.name ? doc.name : id, twa, tws: [...tws], speeds, performanceFactor: factor };
+  return out(
+    twa,
+    twa.flatMap((_, i) => tws.map((_, k) => cell(k, i) ?? 0)),
+    twa.flatMap((_, i) => tws.map((_, k) => (cell(k, i) === null ? 1 : 0)))
+  );
 }
 
-export function managedDiagram(polar: ManagedPolar): PolarDiagram {
-  return new PolarDiagram(polar.twa, polar.tws, polar.speeds);
+export function managedDiagram(polar: ManagedTable): PolarDiagram {
+  return new PolarDiagram(polar.twa, polar.tws, polar.speeds, polar.unavailable);
+}
+
+/** A polar set's sail plans as diagrams, unscaled (none for a polarTable). */
+export function managedSailPlans(polar: ManagedPolar): SailPlanPolar[] {
+  return (polar.sailPlans ?? []).map(p => ({ name: p.name, polar: managedDiagram(p) }));
 }
 
 /** Resolve on demand so edits to the active table (even under the same id) take effect on the next request. */

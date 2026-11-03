@@ -10,13 +10,23 @@
  * edges (scipy RegularGridInterpolator, method="linear",
  * fill_value=None semantics), clamped at zero, with a per-wind-speed
  * no-go floor: below the tightest TWA that carries any speed at that
- * wind speed the boat is in irons and speed is 0.
+ * wind speed the boat is in irons and speed is 0. A cell with no sailing
+ * solution (a null cell of a polar-format 2 polar set) gives 0 wherever it
+ * carries weight in the interpolation: no speed is interpolated across it.
  */
 
 import * as fs from 'node:fs';
 import { foldTwa } from '../geo/angles';
 import * as path from 'node:path';
 import { KTS_TO_MS } from '../geo/geodesy';
+
+/** A polar as plain arrays, to send to another thread or process: `unavailable` only when a cell has no sailing solution. */
+export interface PolarArrays {
+  twa: number[];
+  tws: number[];
+  speeds: number[];
+  unavailable?: number[];
+}
 
 export class PolarDiagram {
   /** Ascending TWA in degrees. */
@@ -25,19 +35,25 @@ export class PolarDiagram {
   readonly tws: Float64Array;
   /** speeds[i * nTws + k] in m/s for twa[i], tws[k]. */
   readonly speeds: Float64Array;
+  /** 1 at speeds[i * nTws + k] where the cell has no sailing solution (its speed is held as 0); null when every cell has one. */
+  readonly unavailable: Uint8Array | null;
   private readonly floorByTws: Float64Array;
 
-  constructor(twaDeg: ArrayLike<number>, twsMs: ArrayLike<number>, speedsMs: ArrayLike<number>) {
+  constructor(twaDeg: ArrayLike<number>, twsMs: ArrayLike<number>, speedsMs: ArrayLike<number>, unavailable?: ArrayLike<number> | null) {
     const nT = twaDeg.length;
     const nW = twsMs.length;
     if (nT < 2 || nW < 1) throw new Error('polar needs at least two TWA rows and one TWS column');
     if (speedsMs.length !== nT * nW) throw new Error('polar speeds table has the wrong size');
+    if (unavailable && unavailable.length !== nT * nW) throw new Error('polar unavailable-cell table has the wrong size');
     for (let i = 1; i < nT; i++) {
       if (!(twaDeg[i] > twaDeg[i - 1])) throw new Error('polar TWA rows must be strictly ascending');
     }
     this.twa = Float64Array.from(twaDeg);
     this.tws = Float64Array.from(twsMs);
     this.speeds = Float64Array.from(speedsMs);
+    const mask = unavailable ? Uint8Array.from(unavailable, v => (v ? 1 : 0)) : null;
+    this.unavailable = mask && mask.some(v => v === 1) ? mask : null;
+    if (this.unavailable) for (let j = 0; j < this.speeds.length; j++) if (this.unavailable[j]) this.speeds[j] = 0;
 
     // Per-column no-go floor: first TWA with any speed in that column.
     const rowHasSpeed = new Array<boolean>(nT).fill(false);
@@ -91,23 +107,45 @@ export class PolarDiagram {
     const twa = foldTwa(twaDeg);
     const tws = Math.max(0, twsMs);
     if (twa < this.noGoFloor(tws)) return 0;
+    if (this.unavailable && this.unavailableAt(twa, tws)) return 0;
     return Math.max(0, this.interp(twa, tws));
   }
 
-  /** Bilinear interpolation with linear extrapolation on both axes. */
-  private interp(twa: number, tws: number): number {
-    const nT = this.twa.length;
+  /**
+   * Whether the speed at this true wind angle (degrees, mirrored into [0, 180]) and true wind speed (m/s) would be
+   * read from a cell with no sailing solution: one of the cells around the point that carries weight in the
+   * interpolation. Always false for a table without such cells.
+   */
+  unavailableAt(twaDeg: number, twsMs: number): boolean {
+    const u = this.unavailable;
+    if (!u) return false;
+    const twa = foldTwa(twaDeg);
+    const tws = Math.max(0, twsMs);
     const nW = this.tws.length;
-    // TWA axis (ascending).
+    const i = this.twaRow(twa);
+    const ta = (twa - this.twa[i]) / (this.twa[i + 1] - this.twa[i]);
+    const k = nW === 1 ? 0 : this.twsColumn(tws);
+    const tw = nW === 1 ? 0 : (tws - this.tws[k]) / (this.tws[k + 1] - this.tws[k]);
+    // A cell carries weight unless the point lies exactly on the other side's row or column.
+    const lo = ta !== 1;
+    const hi = ta !== 0;
+    const left = tw !== 1;
+    const right = nW > 1 && tw !== 0;
+    const at = (r: number, c: number): boolean => u[r * nW + c] === 1;
+    return (lo && left && at(i, k)) || (lo && right && at(i, k + 1)) || (hi && left && at(i + 1, k)) || (hi && right && at(i + 1, k + 1));
+  }
+
+  /** The TWA row below `twa` (ascending axis; the first or last pair outside it, for extrapolation). */
+  private twaRow(twa: number): number {
+    const nT = this.twa.length;
     let i = 0;
     while (i + 1 < nT - 1 && this.twa[i + 1] <= twa) i++;
-    const ta = (twa - this.twa[i]) / (this.twa[i + 1] - this.twa[i]);
-    // TWS axis (either direction).
-    if (nW === 1) {
-      const a = this.speeds[i * nW];
-      const b = this.speeds[(i + 1) * nW];
-      return a + ta * (b - a);
-    }
+    return i;
+  }
+
+  /** The TWS column below `tws` (the axis either direction; at least two columns). */
+  private twsColumn(tws: number): number {
+    const nW = this.tws.length;
     const asc = this.tws[0] <= this.tws[nW - 1];
     let k = 0;
     if (asc) {
@@ -115,6 +153,22 @@ export class PolarDiagram {
     } else {
       while (k + 1 < nW - 1 && this.tws[k + 1] >= tws) k++;
     }
+    return k;
+  }
+
+  /** Bilinear interpolation with linear extrapolation on both axes. */
+  private interp(twa: number, tws: number): number {
+    const nW = this.tws.length;
+    // TWA axis (ascending).
+    const i = this.twaRow(twa);
+    const ta = (twa - this.twa[i]) / (this.twa[i + 1] - this.twa[i]);
+    // TWS axis (either direction).
+    if (nW === 1) {
+      const a = this.speeds[i * nW];
+      const b = this.speeds[(i + 1) * nW];
+      return a + ta * (b - a);
+    }
+    const k = this.twsColumn(tws);
     const tw = (tws - this.tws[k]) / (this.tws[k + 1] - this.tws[k]);
     const s00 = this.speeds[i * nW + k];
     const s01 = this.speeds[i * nW + k + 1];
@@ -135,7 +189,8 @@ export class PolarDiagram {
     return new PolarDiagram(
       this.twa,
       this.tws,
-      this.speeds.map(s => s * factor)
+      this.speeds.map(s => s * factor),
+      this.unavailable
     );
   }
 
@@ -160,7 +215,21 @@ export class PolarDiagram {
         }
       }
     }
-    return changed ? new PolarDiagram(this.twa, this.tws, speeds) : this;
+    return changed ? new PolarDiagram(this.twa, this.tws, speeds, this.unavailable) : this;
+  }
+
+  /** This polar as plain arrays (PolarDiagram.fromArrays builds it again). */
+  toArrays(): PolarArrays {
+    return {
+      twa: Array.from(this.twa),
+      tws: Array.from(this.tws),
+      speeds: Array.from(this.speeds),
+      ...(this.unavailable ? { unavailable: Array.from(this.unavailable) } : {}),
+    };
+  }
+
+  static fromArrays(p: PolarArrays): PolarDiagram {
+    return new PolarDiagram(p.twa, p.tws, p.speeds, p.unavailable);
   }
 
   static load(filePath: string): PolarDiagram {

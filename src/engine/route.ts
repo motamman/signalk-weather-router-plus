@@ -50,6 +50,11 @@ export interface Waypoint {
   /** Highest significant wave height along the leg departing here, m. */
   swhMaxM?: number;
   leg?: string;
+  /**
+   * The sail plan the leg arriving here is sailed on: the fastest of a polar set's plans along it (engine/sailplans.ts),
+   * a route point placed where that changes. Absent on a motored leg and for a polar without sail plans.
+   */
+  sailPlan?: string;
   role?: 'via';
   /** A tack or gybe point the router placed when it split a beat into its two legs (experimental router). */
   tack?: true;

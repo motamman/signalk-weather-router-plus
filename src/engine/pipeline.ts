@@ -42,7 +42,9 @@ import { DEFAULT_ROUTER, makeRouter, type RouterKind } from './router';
 import { enrichLegRanges, enrichWaypoints, RouteCancelled, ViasNotCrossedError, type PropagatorOptions } from './propagator';
 import type { ProgressFn } from './progress';
 import { recomputePerWaypointMetadata, routeArrival, type Route, type StageFront } from './route';
+import { markSailPlans } from './sailplans';
 import { limitWarnings, rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother } from './smoother';
+import type { SailPlanPolar } from '../vessel/sailplan';
 
 export type { LegWind } from './horizon';
 
@@ -64,6 +66,8 @@ export interface LegPipelineInputs {
   router?: RouterKind;
   vessel: VesselParams;
   polar: PolarDiagram | null;
+  /** A polar set's sail plans, scaled and floored as `polar` is: the fastest is named on each stretch (sailplans.ts); absent: none. */
+  sailPlans?: readonly SailPlanPolar[] | null;
   sim: {
     modePolicy: ModePolicy;
     sailThreshMs: number;
@@ -203,6 +207,7 @@ async function meshLeg(
       rules,
       vessel: inp.vessel,
       polar: inp.polar,
+      sailPlans: inp.sailPlans,
       sim: inp.sim,
       router: inp.router,
       propagator: inp.propagator,
@@ -650,6 +655,16 @@ async function openWaterLeg(
       `${tag}simplified: ${nRdp} waypoint(s) within {length:${inp.simplifyM}} of a straight line, ${nSm} replaced by straight shortcuts; ${r.waypoints.length} left`
     );
   }
+  // The sail plan of each stretch, with a route point where the fastest plan changes (sailplans.ts).
+  const nSails = markSailPlans(r, {
+    vessel: inp.vessel,
+    polar: inp.polar,
+    sailPlans: inp.sailPlans,
+    wind: legWind ?? new NoWind(),
+    current,
+    sim: { ...inp.sim, simStepM: legArgs.simStepM },
+  });
+  if (nSails) progress(0, 0, `${tag}sail plans: ${nSails} route point(s) where the fastest sail plan changes`);
   // Legs over a limit set to avoid, on the route as it now stands.
   limitWarnings(r, {
     vessel: inp.vessel,

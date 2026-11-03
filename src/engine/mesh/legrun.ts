@@ -30,7 +30,9 @@ import { DEFAULT_ROUTER, makeRouter, type RouterKind } from '../router';
 import type { Route, StageFront } from '../route';
 import type { LandTest } from '../../geo/landmask';
 import type { PolarDiagram } from '../../vessel/polar';
+import type { SailPlanPolar } from '../../vessel/sailplan';
 import type { VesselParams } from '../../vessel/vessel';
+import { markSailPlans } from '../sailplans';
 import {
   classifySegments,
   meshCorridor,
@@ -66,6 +68,8 @@ export interface MeshLegInputs {
   rules: MeshRules;
   vessel: VesselParams;
   polar: PolarDiagram | null;
+  /** A polar set's sail plans, scaled and floored as `polar` is (engine/sailplans.ts); absent: none. */
+  sailPlans?: readonly SailPlanPolar[] | null;
   sim: SimOptions;
   router?: RouterKind;
   propagator: Omit<PropagatorOptions, 'stages'>;
@@ -299,6 +303,10 @@ export function runMeshLeg(inp: MeshLegInputs): Route | MeshRefusal {
   }
   const route = parts.length === 1 ? parts[0] : stitchMeshSegments(parts, wind);
   route.meshLeg = true;
+  // The sail plan of each stretch, with a route point where the fastest plan changes (sailplans.ts): before the depths
+  // and the opening bridges below, so the points added get theirs.
+  const nSails = markSailPlans(route, { vessel: inp.vessel, polar: inp.polar, sailPlans: inp.sailPlans, wind, current, sim: inp.sim });
+  if (nSails) progress(0, 0, `${tag}sail plans: ${nSails} route point(s) where the fastest sail plan changes`);
   // The waypoints where the leg reached each circle carry the role 'via' (as the coastline search marks them), where
   // the stretch that reached it has a waypoint there (a motored stretch, a stretch's end); a sailed stretch given the
   // circle as a via marks its own.
