@@ -2965,7 +2965,8 @@ The adapter converts angles to degrees and transposes into `PolarDiagram`.
 Its existing interpolation, extrapolation, angle mirroring and no-go logic
 are unchanged. Zero cells are preserved. Complete, nonnegative, symmetric
 tables are required; in a `polarTable`, missing/null cells and asymmetric
-tables fail explicitly rather than inventing speeds. Derived beat/run targets are folded into each wind-speed row as described above.
+tables fail explicitly rather than inventing speeds. Derived beat/run
+targets are folded into each wind-speed row as described above.
 
 A polar-format 2 `polarSet` 2.0.0 is routed on its `best` table, through
 the same adapter (targets included). A null cell there means no sailing
@@ -3401,7 +3402,7 @@ per-route skeleton, `--allow-canals` opens the known canals.
   them, or the route fails with a message naming the place when there is
   no way round. Corridors are searched on 0.02° cells: water enclosed at
   that resolution with no open water within 10 km cannot be reached.
-- The search's box (the corridor's, widened by the heading sweep's reach
+- The search's box (the corridor's box, widened by the heading sweep's reach
   over the leg) may be at most 120° × 90°, and one leg's
   grid search at most 12 M cells (about 69° × 69°); longer routes need
   intermediate waypoints.
