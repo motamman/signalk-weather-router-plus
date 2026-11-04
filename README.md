@@ -52,9 +52,9 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 
 - **Forecast:** ECMWF IFS 0.25° open data, `oper`/`wave` streams for every
   cycle: 00z/12z to 360 h (every 3 h to 144 h, then every 6 h), 06z/18z to
-  144 h. Fields: the base fields `10u`, `10v`, `msl`,
-  `swh`, `mwp`, `mwd`, the optional peak wave period `pp1d`, and the
-  extra fields when they are on (below). Only those fields are fetched (byte-range
+  144 h. Fields: the base fields `10u`, `10v`, `msl`, `swh`, `mwp`,
+  `mwd`, the optional peak wave period `pp1d`, and the extra fields when
+  they are on (below). Only those fields are fetched (byte-range
   requests against the published `.index` files, roughly 4.7 MB per
   step instead of 140 MB) and cached on disk under the plugin's data
   directory (`ecmwf/`). The whole globe is decoded at full Float32
