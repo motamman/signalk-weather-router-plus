@@ -52,8 +52,9 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 
 - **Forecast:** ECMWF IFS 0.25° open data, `oper`/`wave` streams for every
   cycle: 00z/12z to 360 h (every 3 h to 144 h, then every 6 h), 06z/18z to
-  144 h. Fields: `10u`, `10v`, `msl`,
-  `swh`, `mwp`, `mwd`. Only those fields are fetched (byte-range
+  144 h. Fields: the base fields `10u`, `10v`, `msl`,
+  `swh`, `mwp`, `mwd`, the optional peak wave period `pp1d`, and the
+  extra fields when they are on (below). Only those fields are fetched (byte-range
   requests against the published `.index` files, roughly 4.7 MB per
   step instead of 140 MB) and cached on disk under the plugin's data
   directory (`ecmwf/`). The whole globe is decoded at full Float32
@@ -62,8 +63,8 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   4.15 MB per field per step. A 72 h horizon (25 steps) is 623 MB with
   the six base fields and 1.35 GB with the extra fields (`2t`, `tprate`,
   `skt`, `2d`, `ptype`, `tcc`, `10fg`). The peak wave period (`pp1d`) is
-  fetched too when it can be, about 104 MB more at 72 h (25 × 4.15 MB);
-  it is optional: a forecast without it is complete, and nothing reads it
+  fetched when it can be, about 104 MB more at 72 h (25 × 4.15 MB); it
+  is optional: a forecast without it is complete, and nothing reads it
   yet (it is there for wave-correction tables made for peak period).
 
   **When a run is due.** ECMWF publishes each cycle at once, 454 minutes
@@ -3402,10 +3403,10 @@ per-route skeleton, `--allow-canals` opens the known canals.
   them, or the route fails with a message naming the place when there is
   no way round. Corridors are searched on 0.02° cells: water enclosed at
   that resolution with no open water within 10 km cannot be reached.
-- The search's box (the corridor's box, widened by the heading sweep's reach
-  over the leg) may be at most 120° × 90°, and one leg's
-  grid search at most 12 M cells (about 69° × 69°); longer routes need
-  intermediate waypoints.
+- The corridor's box, plus 1°, may be at most 120° × 90°. The heading
+  sweep's reach then widens the search box over the leg, within the same
+  limit. One leg's grid search may use at most 12 M cells (about 69° × 69°);
+  longer routes need intermediate waypoints.
 - Automatic vias fix the passage the corridor chose (e.g. Messina rather
   than round Sicily). If a sailing route would rather take another
   passage, set a waypoint in it.
