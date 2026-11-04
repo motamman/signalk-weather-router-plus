@@ -311,12 +311,15 @@ export function waveCorrectionWarnings(
   env: { vessel: VesselParams; polar: PolarDiagram | null; wind: WindSource; current: CurrentSource; sim: SimOptions }
 ): void {
   if (!env.sim.waveCorrection || !env.wind.hasWaves) return;
+  // Counted, not stopped, as limitWarnings: a limit set to block would stop the leg at its first step over and drop
+  // the time sailed uncorrected before it; the mode policy is the route's.
+  const count: SimOptions = { ...env.sim, maxWindMode: 'avoid', maxSwhMode: 'avoid' };
   const warns: NonNullable<Route['warnings']> = (route.warnings ?? []).filter(w => w.violation !== 'waves_outside_correction');
   const wps = route.waypoints;
   for (let i = 0; i + 1 < wps.length; i++) {
     const a = wps[i];
     const b = wps[i + 1];
-    const r = simulateLegTime(a.lon, a.lat, a.time, b.lon, b.lat, env.vessel, env.polar, env.wind, env.current, env.sim);
+    const r = simulateLegTime(a.lon, a.lat, a.time, b.lon, b.lat, env.vessel, env.polar, env.wind, env.current, count);
     if (r.uncorrectedWaveSeconds > 0)
       warns.push({
         leg_index: i,

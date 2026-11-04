@@ -514,11 +514,12 @@ export function scoreCandidatesFromParent(
       }
 
       // The wave correction's factor for the sea this candidate meets here; outside its table, none (counted below).
+      // A sample missing its height, period or direction has no sea to look up: sailed uncorrected, not counted as
+      // outside the table.
       let sailFactor = 1;
       let uncorrected = false;
-      if (wc) {
-        const f =
-          full && Number.isFinite(full.mwd[q]) ? waveFactor(wc, full.swh[q], full.mwp[q], seaAngle(bearings[i], full.mwd[q]).angle) : null;
+      if (wc && full && Number.isFinite(full.swh[q]) && Number.isFinite(full.mwp[q]) && Number.isFinite(full.mwd[q])) {
+        const f = waveFactor(wc, full.swh[q], full.mwp[q], seaAngle(bearings[i], full.mwd[q]).angle);
         if (f === null) uncorrected = true;
         else sailFactor = f;
       }
