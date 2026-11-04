@@ -175,6 +175,9 @@ async function decodeSteps(
   for (const step of steps) {
     if (opts.shouldCancel?.()) throw new Error('forecast load cancelled');
     const named: { param: string; message: ReturnType<typeof parseGrib2Message> }[] = [];
+    // The optional wave fields' raw messages: built into the step on their own after it, so nothing wrong with one of
+    // them (a message that does not parse or decode, another valid time) can stop the step (OPTIONAL_WAVE_PARAMS).
+    const optionalMsgs: { param: string; msg: Uint8Array }[] = [];
     // The index is only needed for fields not already on disk.
     let atmIndex: IndexRecord[] | undefined;
     for (const p of atmParams) {
@@ -211,10 +214,20 @@ async function decodeSteps(
           log(`step +${step}h: wave ${p} not in index, skipped`);
           continue;
         }
-        named.push({ param: p, message: parseGrib2Message(msg) });
+        if (optional) optionalMsgs.push({ param: p, msg });
+        else named.push({ param: p, message: parseGrib2Message(msg) });
       }
     }
     const built = buildStep(named, bbox, opts.waveFillCells ?? 3, scratch, slab, fillScratch);
+    for (const { param, msg } of optionalMsgs) {
+      try {
+        const extra = buildStep([{ param, message: parseGrib2Message(msg) }], bbox, opts.waveFillCells ?? 3, scratch, slab, fillScratch);
+        if (extra.validMs !== built.validMs) throw new Error('its valid time differs from the step');
+        for (const [k, f] of extra.fields) built.fields.set(k, f);
+      } catch (err) {
+        log(`step +${step}h: wave ${param} not decoded (${(err as Error).message}), skipped`);
+      }
+    }
     applyAccumulated(built, accumPrev);
     onStep(built);
     done++;

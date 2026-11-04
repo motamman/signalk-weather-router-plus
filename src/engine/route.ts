@@ -52,7 +52,8 @@ export interface Waypoint {
   leg?: string;
   /**
    * The sail plan the leg arriving here is sailed on: the fastest of a polar set's plans along it (engine/sailplans.ts),
-   * a route point placed where that changes. Absent on a motored leg and for a polar without sail plans.
+   * a route point placed where that changes. On a leg partly motored, the plan of its sailed part. Absent on a leg with
+   * no sailing and for a polar without sail plans.
    */
   sailPlan?: string;
   role?: 'via';

@@ -30,7 +30,15 @@ import { RouteCancelled } from '../../engine/propagator';
 import { RouteError } from '../../engine/errors';
 import { nearestExactWater, waterAround } from '../../engine/corridor';
 import { DEFAULT_ARRIVAL_RADIUS_M, DEFAULT_PRECISION, legLabel, type LegPlan, routeMultiLeg, type Stop } from '../../engine/multileg';
-import { type LegDepth, recomputePerWaypointMetadata, type Route, type StageFront, type StopSnap, type Waypoint } from '../../engine/route';
+import {
+  type LegDepth,
+  recomputePerWaypointMetadata,
+  type Route,
+  type RouteWarning,
+  type StageFront,
+  type StopSnap,
+  type Waypoint,
+} from '../../engine/route';
 import { recomputeTotals } from '../../engine/smoother';
 import type { CheckRules, DepthViolation, RouteDepthCheck } from '../../engine/mesh/check';
 import { routeToGeoJSON, routeToSignalKRoute, skeletonToGeoJSON } from '../routeformat';
@@ -1266,6 +1274,13 @@ async function finalDepthCheck(
   route.depthCheck = { legs: check.legs };
 }
 
+/** The warnings about what the boat meets along a segment, worked out per leg (smoother.ts): a detour brings its own. */
+const PER_SEGMENT_WARNINGS: ReadonlySet<RouteWarning['violation']> = new Set([
+  'wind_over_limit',
+  'waves_over_limit',
+  'waves_outside_correction',
+]);
+
 /** Repair limits: passes over the route, and detours in all. */
 const REPAIR_MAX_PASSES = 2;
 const REPAIR_MAX_DETOURS = 5;
@@ -1335,7 +1350,14 @@ export async function repairViolations(
       const after = wps.slice(k + 2).map(w => ({ ...w, time: new Date(w.time.getTime() + shiftMs) }));
       route.waypoints = [...wps.slice(0, k + 1), ...mid, last, ...after];
       // Warnings index the route's segments (multileg.ts stitchLegs): those after the detour move with its waypoints.
-      for (const w of route.warnings ?? []) if (w.leg_index > k) w.leg_index += mid.length;
+      // What the boat meets on a segment (over a wind or wave limit, a sea outside the wave correction) is the detour's
+      // now, as with the opening bridges below: the replaced segment's go and the detour's own come in at its place (its
+      // segment j is the route's k + j).
+      const kept = (route.warnings ?? []).filter(w => !(w.leg_index === k && PER_SEGMENT_WARNINGS.has(w.violation)));
+      for (const w of kept) if (w.leg_index > k) w.leg_index += mid.length;
+      for (const w of d.warnings ?? []) if (PER_SEGMENT_WARNINGS.has(w.violation)) kept.push({ ...w, leg_index: w.leg_index + k });
+      if (kept.length) route.warnings = kept;
+      else delete route.warnings;
       // Opening bridges index the waypoint their crossing leg arrives at, the same way: the one on the replaced
       // segment goes (the detour says what it passes under), those after it move, and the detour's own come in at
       // its place (its waypoint j is the route's k + j).
