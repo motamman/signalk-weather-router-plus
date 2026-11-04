@@ -52,8 +52,9 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 
 - **Forecast:** ECMWF IFS 0.25° open data, `oper`/`wave` streams for every
   cycle: 00z/12z to 360 h (every 3 h to 144 h, then every 6 h), 06z/18z to
-  144 h. Fields: `10u`, `10v`, `msl`,
-  `swh`, `mwp`, `mwd`. Only those fields are fetched (byte-range
+  144 h. Fields: the base fields `10u`, `10v`, `msl`, `swh`, `mwp`,
+  `mwd`, the optional peak wave period `pp1d`, and the extra fields when
+  they are on (below). Only those fields are fetched (byte-range
   requests against the published `.index` files, roughly 4.7 MB per
   step instead of 140 MB) and cached on disk under the plugin's data
   directory (`ecmwf/`). The whole globe is decoded at full Float32
@@ -61,7 +62,10 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   Weather API and routing work anywhere: 1440 × 721 cells × 4 B =
   4.15 MB per field per step. A 72 h horizon (25 steps) is 623 MB with
   the six base fields and 1.35 GB with the extra fields (`2t`, `tprate`,
-  `skt`, `2d`, `ptype`, `tcc`, `10fg`).
+  `skt`, `2d`, `ptype`, `tcc`, `10fg`). The peak wave period (`pp1d`) is
+  fetched when it can be, about 104 MB more at 72 h (25 × 4.15 MB); it
+  is optional: a forecast without it is complete, and nothing reads it
+  yet (it is there for wave-correction tables made for peak period).
 
   **When a run is due.** ECMWF publishes each cycle at once, 454 minutes
   after its run time for 00z/12z and 387 minutes for 06z/18z (measured
@@ -159,7 +163,8 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   kept, and each is saved on disk so a box is drawn once. Conditions
   `is_land` uses the exact polygons of the point's tile. For routing,
   land is loaded from the tiles for the box around the route's corridor (see [Global
-  water grid](#global-water-grid)) plus 1° and rasterised at
+  water grid](#global-water-grid)), widened by the heading sweep's reach
+  over the leg (never under 1°), and rasterised at
   the finest resolution that fits the configured cell budget (0.5 m
   arc-seconds to 0.01°). The raster is conservative: cells crossed by a
   coastline edge count as land (an exact supercover of every edge, so a
@@ -2244,7 +2249,7 @@ LineString `properties`:
 | `stop_count` | number | count | start + waypoints + destination; present with `snaps` |
 | `start_original`, `start_anchor`, `start_snap_distance_m` | `[lon, lat]`, `[lon, lat]`, number | degrees, m | present when the start was moved: the drawn point, where the route starts, and the distance between them |
 | `end_original`, `end_anchor`, `end_snap_distance_m` | as above | | present when the destination was moved |
-| `warnings` | array | | present when any; items `{leg_index, violation, from, to, repaired, detail?}`, `violation` `"leg_crosses_land"`, `"wind_over_limit"`, `"waves_over_limit"` (`detail` the seconds the leg spends over the limit, worked out on the final route, block or avoid), `"detour_motored"` (a depth-check detour that motored on a sailing route; `detail` its motoring time, seconds), `"search_failed"` (the search on an open stretch of a chart-mesh leg failed and the stretch follows the mesh route instead; `from`/`to` the stretch's ends, `detail` the search's reason) or `"beat_motored"` (the refined router found no room to tack and motored the leg straight; `detail` its motoring time, seconds), `from`/`to` `[lon, lat]` |
+| `warnings` | array | | present when any; items `{leg_index, violation, from, to, repaired, detail?}`, `violation` `"leg_crosses_land"`, `"wind_over_limit"`, `"waves_over_limit"` (`detail` the seconds the leg spends over the limit, worked out on the final route, block or avoid), `"detour_motored"` (a depth-check detour that motored on a sailing route; `detail` its motoring time, seconds), `"search_failed"` (the search on an open stretch of a chart-mesh leg failed and the stretch follows the mesh route instead; `from`/`to` the stretch's ends, `detail` the search's reason), `"beat_motored"` (the refined router found no room to tack and motored the leg straight; `detail` its motoring time, seconds) or `"waves_outside_correction"` (the polar set's wave-correction table had no factor for the sea on part of the leg, which was sailed uncorrected; `detail` those seconds), `from`/`to` `[lon, lat]` |
 | `land_crossings` | number | count | present when a warning is `leg_crosses_land` |
 | `has_land_crossing` | boolean | | `true` when `land_crossings` is present |
 | `max_swh_m` | number | m | highest significant wave height at a route point; present when wave data was sampled |
@@ -2277,6 +2282,7 @@ Point `properties` (one feature per route point, in order):
 | `leg` | string | | engine that produced the waypoint; always `"ocean"` in this plugin |
 | `role` | string | | `"via"` on the junction point of each request waypoint |
 | `tack` | boolean | | `true` on a tack or gybe point the experimental router placed |
+| `sail_plan` | string | | with a polar set that has sail plans: the plan the leg into the point is sailed on (on a leg partly motored, the plan of its sailed part); a point is added where it changes; absent on a leg with no sailing |
 | `leg_distance_m` | number | m | distance to the next point; absent on the last point |
 | `leg_time_s` | number | s | time to the next point; absent on the last point |
 | `leg_wind_min_ms`, `leg_wind_max_ms` | number | m/s | lowest and highest wind speed sampled along the leg to the next point (about hourly samples, both ends included); absent on the last point and when no wind data |
@@ -2959,8 +2965,26 @@ for `axes.tws` and `values.boatSpeedMatrix`, and matrix rows indexed by TWS.
 The adapter converts angles to degrees and transposes into `PolarDiagram`.
 Its existing interpolation, extrapolation, angle mirroring and no-go logic
 are unchanged. Zero cells are preserved. Complete, nonnegative, symmetric
-tables are required; missing/null cells and asymmetric tables fail explicitly
-rather than inventing speeds. Derived beat/run targets are folded into each wind-speed row as described above.
+tables are required; in a `polarTable`, missing/null cells and asymmetric
+tables fail explicitly rather than inventing speeds. Derived beat/run
+targets are folded into each wind-speed row as described above.
+
+A polar-format 2 `polarSet` 2.0.0 is routed on its `best` table, through
+the same adapter (targets included). A null cell there means no sailing
+solution: it has no speed, and wherever it carries weight in the
+interpolation the speed is 0, so nothing is interpolated across it. Its
+sail plans are kept: on each sailed stretch the route names the fastest
+plan, compared from the plans' own tables at that wind speed and angle,
+and puts a route point where it changes, on the line already sailed
+(courses and times unchanged); each point's `sail_plan` is the plan of
+the stretch into it, shown as **Sails** on the leg cards. The speed stays
+`best`'s. A set's `waveCorrection` table multiplies the sailing speed by
+its factor for the sea the boat meets (significant height, ECMWF's mean
+period `mwp`, the waves' angle off the heading; interpolated in angle,
+then period, then height). A sea outside the table is sailed uncorrected
+and the leg gets a `waves_outside_correction` warning. The correction is
+off when `polars.applyWaveCorrection` is false, and motoring speed is not
+corrected.
 
 The active table and `polars.performanceFactor` (ratio 0..1, absent/null = 1)
 are read afresh before each sailing route, including same-id table edits,
@@ -3371,22 +3395,27 @@ per-route skeleton, `--allow-canals` opens the known canals.
 
 ## Limits
 
-- Open water only. A start or end inside a narrow harbour can fail with
-  "stage 1 has no live waypoints"; start from the harbour approach.
+- Outside a chart mesh, open water only. A start or end inside a narrow
+  harbour can fail with "stage 1 has no live waypoints"; start from the
+  harbour approach.
 - Passages narrower than about 150 m (three 55 m cells of the finest
   local raster) are not navigable for the router; the corridor goes round
   them, or the route fails with a message naming the place when there is
   no way round. Corridors are searched on 0.02° cells: water enclosed at
   that resolution with no open water within 10 km cannot be reached.
-- The corridor's box (plus 1°) may be at most 120° × 90°, and one leg's
-  grid search at most 12 M cells (about 69° × 69°); longer routes need
-  intermediate waypoints.
+- The corridor's box, plus 1°, may be at most 120° × 90°. The heading
+  sweep's reach then widens the search box over the leg, within the same
+  limit. One leg's grid search may use at most 12 M cells (about 69° × 69°);
+  longer routes need intermediate waypoints.
 - Automatic vias fix the passage the corridor chose (e.g. Messina rather
   than round Sicily). If a sailing route would rather take another
   passage, set a waypoint in it.
 - Canals are closed unless allowed, and with GSHHG none of the listed
   canals is open water anyway.
-- No depth data.
+- Depths only where a chart mesh covers the water (the default
+  catalogue: US waters, by Coast Guard district); elsewhere depths,
+  draught and clearances play no part in the route (see
+  [Data](#data)).
 - SMOC areas are loaded whole-chunk: a box outside the resident area
   costs its chunks' download (see the measured sizes above), cached for
   the rest of the day's run.

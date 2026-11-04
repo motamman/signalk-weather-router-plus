@@ -6,6 +6,48 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Polar sets from Polar Management (polar-format 2).** A `polarSet`
+  2.0.0 active in Polar Management is routed on its `best` table; a v1
+  `polarTable` routes as before. A null cell (no sailing solution) has no
+  speed, and no speed is interpolated across it: wherever it carries
+  weight in the interpolation the boat makes no way, as in the no-go
+  angle.
+- **The sail plan of each stretch.** With a polar set that has sail
+  plans, the route names the fastest plan on each sailed stretch,
+  compared from the plans' own tables at that wind speed and angle, and
+  puts a route point where it changes, on the line already sailed, so the
+  courses and times are unchanged. Each point carries `sail_plan` for the
+  stretch into it, in the result GeoJSON and in the Signal K route; the
+  leg cards (web app and Freeboard panel) and the point descriptions show
+  it as **Sails**. The speed stays the `best` table's: the plans only name
+  the sails.
+- **Wave correction.** A polar set's `waveCorrection` table multiplies the
+  sailing speed by its factor for the forecast sea the boat meets: the
+  significant height, ECMWF's mean period (`mwp`) and the waves' angle
+  off the heading, interpolated in angle, then period, then height.
+  A sea outside the table is never taken as factor 1 or extrapolated: it
+  is sailed uncorrected and the leg carries a `waves_outside_correction`
+  warning with the seconds. Off when Polar Management's
+  `polars.applyWaveCorrection` is false; motoring speed is not corrected.
+  The wave limit and the comfort weight still only weigh the route
+  choice, so no sea counts twice.
+- **The peak wave period is downloaded.** ECMWF's `pp1d` is fetched and
+  decoded beside the other wave fields when it can be, one more global
+  field per step (4.15 MB). A forecast without it still counts as
+  complete, so an update never makes a boat that is offline throw away
+  the forecast it has, and a `pp1d` message that cannot be fetched or
+  decoded is skipped, never failing the step. Nothing reads it yet.
+
+### Fixed
+
+- **A depth-check detour keeps its own warnings.** When the final depth
+  check splices a detour into the route, the replaced segment's
+  wind-limit, wave-limit and wave-correction warnings go and the
+  detour's own come in at its place. Before, the replaced segment's
+  warnings stayed and the detour's were lost.
+
 ## [0.2.1] - 2026-11-02
 
 This release is the changes of 0.2.1-beta.1 and 0.2.1-beta.2, below. Since
