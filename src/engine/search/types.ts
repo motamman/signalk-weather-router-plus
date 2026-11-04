@@ -121,6 +121,8 @@ export interface ComputeRouteArgs {
   limitAvoidStrength?: number;
   /** Comfort weight (0 or absent: off): the search prefers calmer water, as the boat meets it, at some cost in time (engine/seas.ts). */
   comfortWeight?: number;
+  /** A polar set's wave correction on the sailing speed (engine/legsim.ts SimOptions); absent: none. */
+  waveCorrection?: SimOptions['waveCorrection'];
   /** The forecast's last valid step (ms); conditions after it are held at that step. Named in a boxed-in search's error. */
   forecastEndMs?: number;
   /** Called after every stage with its front and the best path so far (display only). */

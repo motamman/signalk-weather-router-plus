@@ -21,7 +21,7 @@ import { ExperimentalPropagator } from '../experimental/propagator';
 import { forecastHorizonNote, type LegWind } from '../horizon';
 import { enrichLegRanges, enrichWaypoints } from '../propagator';
 import { recomputePerWaypointMetadata, routeArrival } from '../route';
-import { limitWarnings, rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother } from '../smoother';
+import { limitWarnings, rdpSimplify, recomputeTotals, revalidateLand, shortcutSmoother, waveCorrectionWarnings } from '../smoother';
 import type { LegArrival, LegSimResult, ModePolicy, SimOptions } from '../legsim';
 import type { LegPlan } from '../multileg';
 import { RouteCancelled, type PropagatorOptions } from '../propagator';
@@ -30,7 +30,9 @@ import { DEFAULT_ROUTER, makeRouter, type RouterKind } from '../router';
 import type { Route, StageFront } from '../route';
 import type { LandTest } from '../../geo/landmask';
 import type { PolarDiagram } from '../../vessel/polar';
+import type { SailPlanPolar } from '../../vessel/sailplan';
 import type { VesselParams } from '../../vessel/vessel';
+import { markSailPlans } from '../sailplans';
 import {
   classifySegments,
   meshCorridor,
@@ -66,6 +68,8 @@ export interface MeshLegInputs {
   rules: MeshRules;
   vessel: VesselParams;
   polar: PolarDiagram | null;
+  /** A polar set's sail plans, scaled and floored as `polar` is (engine/sailplans.ts); absent: none. */
+  sailPlans?: readonly SailPlanPolar[] | null;
   sim: SimOptions;
   router?: RouterKind;
   propagator: Omit<PropagatorOptions, 'stages'>;
@@ -222,6 +226,7 @@ export function runMeshLeg(inp: MeshLegInputs): Route | MeshRefusal {
           limitAvoidStrength: inp.sim.limitAvoidStrength,
           comfortWeight: inp.sim.comfortWeight,
           tackPenaltyS: inp.sim.tackPenaltyS,
+          waveCorrection: inp.sim.waveCorrection,
           arriving,
           forecastEndMs: inp.wind ? inp.wind.validRange[1].getTime() : undefined,
           simStepM: inp.sim.simStepM,
@@ -299,6 +304,10 @@ export function runMeshLeg(inp: MeshLegInputs): Route | MeshRefusal {
   }
   const route = parts.length === 1 ? parts[0] : stitchMeshSegments(parts, wind);
   route.meshLeg = true;
+  // The sail plan of each stretch, with a route point where the fastest plan changes (sailplans.ts): before the depths
+  // and the opening bridges below, so the points added get theirs.
+  const nSails = markSailPlans(route, { vessel: inp.vessel, polar: inp.polar, sailPlans: inp.sailPlans, wind, current, sim: inp.sim });
+  if (nSails) progress(0, 0, `${tag}sail plans: ${nSails} route point(s) where the fastest sail plan changes`);
   // The waypoints where the leg reached each circle carry the role 'via' (as the coastline search marks them), where
   // the stretch that reached it has a waypoint there (a motored stretch, a stretch's end); a sailed stretch given the
   // circle as a via marks its own.
@@ -366,6 +375,7 @@ export function runMeshLeg(inp: MeshLegInputs): Route | MeshRefusal {
   }
   // Legs over a limit set to avoid, on the leg as it now stands (bridge waits included).
   limitWarnings(route, { vessel: inp.vessel, polar: inp.polar, wind, current, sim: inp.sim });
+  waveCorrectionWarnings(route, { vessel: inp.vessel, polar: inp.polar, wind, current, sim: inp.sim });
   const limited = inp.sim.maxWindMs !== undefined || inp.sim.maxSwhM !== undefined;
   forecastHorizonNote(route, inp.wind, limited, tag, progress);
   void legStart;

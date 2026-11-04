@@ -1480,6 +1480,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     out.legWindMin = p.leg_wind_min_ms; out.legWindMax = p.leg_wind_max_ms;
     out.legSwhMin = p.leg_swh_min_m; out.legSwhMax = p.leg_swh_max_m;
     out.tack = out.mode === 'sailing' ? tackSide(out.cogDeg, out.windDir) : null;
+    out.sailPlan = n.sail_plan || null;
     out.curMs = n.current_ms; out.curDir = n.current_dir_deg;
     out.swh = n.swh_m; out.mwp = n.mwp_s; out.mwd = n.mwd_deg;
     out.seasSector = n.seas_sector; out.seasSide = n.seas_side; out.encounter = n.encounter_index;
@@ -1536,6 +1537,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     }
     if (!l.last && fin(l.twa)) rows.push(['TWA', fmtAngle(l.twa)]);
     if (l.tack) rows.push(['Tack', l.tack === 'port' ? 'Port' : 'Starboard']);
+    if (l.sailPlan) rows.push(['Sails', l.sailPlan]);
     if (fin(l.curMs) && l.curMs > 0.05 && (v = fmtSpeed(l.curMs))) {
       var ff = l.last ? null : fairFoul(l.cogDeg, l.curDir);
       rows.push(['Current', v + (fin(l.curDir) ? ' to ' + cardinal(l.curDir) + ' (' + fmtAngle(l.curDir) + ')' : '') + (ff ? ' · ' + ff : ''), ff]);
@@ -1603,7 +1605,7 @@ button.link { border: 0; background: none; color: var(--primary); padding: 2px 0
     return '<div class="leg-top"><span class="leg-no">' + (i + 1) + '</span>'
       + '<span class="leg-when">' + esc(fmtTime(l.time)) + '</span>'
       + '<span class="leg-name">' + esc(name || '') + '</span>'
-      + '<span class="leg-mode">' + esc(l.last ? 'arrival' : (l.mode || '—')) + (l.tack ? ' · ' + esc(l.tack) : '') + '</span></div>'
+      + '<span class="leg-mode">' + esc(l.last ? 'arrival' : (l.mode || '—')) + (l.tack ? ' · ' + esc(l.tack) : '') + (!l.last && l.sailPlan ? ' · ' + esc(l.sailPlan) : '') + '</span></div>'
       + (l.last ? '' : '<div class="leg-stats">'
         + stat(fin(l.distM) ? fmtDistance(l.distM) : null, 'distance')
         + stat(fin(l.timeS) ? fmtDuration(l.timeS) : null, 'time')

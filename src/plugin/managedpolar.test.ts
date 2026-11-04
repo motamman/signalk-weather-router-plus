@@ -8,6 +8,7 @@ import {
   adaptManagedPolar,
   loadManagedPolar,
   managedDiagram,
+  managedSailPlans,
   selectManagedPolar,
   type PolarProviderApp,
 } from './managedpolar';
@@ -247,4 +248,96 @@ test('malformed derived targets are rejected rather than silently dropping saili
     ],
   ])
     assert.throws(() => adaptManagedPolar({ ...table(), derived: { rows } }, 'invalid', 1), /Invalid derived/);
+});
+
+/** A polar-format 2 polar set: `best` as table(), and two sail plans. */
+const set = () => ({
+  kind: 'polarSet',
+  schemaVersion: '2.0.0',
+  name: 'Set',
+  units: { twa: 'rad', tws: 'm/s', boatSpeed: 'm/s' },
+  symmetry: { portStarboardSymmetric: true },
+  best: { axes: table().axes, values: table().values },
+  sailplans: [
+    {
+      id: 'genoa',
+      name: 'Main + genoa',
+      table: {
+        axes: table().axes,
+        values: {
+          boatSpeedMatrix: [
+            [0, 2, 4, 2],
+            [0, 4, 6, 3],
+          ],
+        },
+      },
+    },
+    {
+      id: 'spi',
+      table: {
+        axes: table().axes,
+        values: {
+          boatSpeedMatrix: [
+            [0, 0, 3, 3],
+            [0, 0, 5, 5],
+          ],
+        },
+      },
+    },
+  ],
+});
+
+test('a polar set routes on its best table and keeps its sail plans, named (or by id)', () => {
+  const doc = set();
+  const adapted = adaptManagedPolar(doc, 'boat', 0.8);
+  // best is the same table as the v1 document: the same routing table.
+  const { sailPlans, ...routing } = adapted;
+  assert.deepEqual(routing, { ...adaptManagedPolar(table(), 'boat', 0.8), label: 'Set' });
+  assert.deepEqual(
+    sailPlans?.map(p => p.name),
+    ['Main + genoa', 'spi']
+  );
+  const plans = managedSailPlans(adapted);
+  assert.equal(plans[1].polar.boatSpeed(180, 10), 5);
+  assert.equal(plans[0].polar.boatSpeed(180, 10), 3);
+  assert.equal(adaptManagedPolar({ ...doc, sailplans: [] }, 'boat', 1).sailPlans, undefined);
+  for (const bad of [
+    { ...doc, schemaVersion: '2.1.0' },
+    { ...doc, kind: 'polarTable' },
+    { ...doc, sailplans: {} },
+    { ...doc, sailplans: [{ name: 'no id', table: doc.best }] },
+  ])
+    assert.throws(() => adaptManagedPolar(bad, 'boat', 1));
+});
+
+test('a null cell of a polar set has no speed and none is interpolated across it', () => {
+  const doc = set();
+  doc.best.values = {
+    boatSpeedMatrix: [
+      [0, 2, null, 3],
+      [0, 4, 6, 5],
+    ],
+  } as unknown as typeof doc.best.values;
+  const adapted = adaptManagedPolar(doc, 'boat', 1);
+  assert.deepEqual(adapted.unavailable, [0, 0, 0, 0, 1, 0, 0, 0]);
+  const polar = managedDiagram(adapted);
+  // On the cells next to it, exactly: their own speed.
+  assert.equal(polar.boatSpeed(45, 5), 2);
+  assert.equal(polar.boatSpeed(180, 5), 3);
+  assert.equal(polar.boatSpeed(90, 10), 6);
+  // Anywhere the null cell carries weight: none.
+  for (const [a, w] of [
+    [90, 5],
+    [67.5, 5],
+    [120, 5],
+    [90, 7.5],
+    [60, 6],
+  ])
+    assert.equal(polar.boatSpeed(a, w), 0, `${a}° ${w} m/s`);
+  assert.ok(polar.unavailableAt(67.5, 5) && !polar.unavailableAt(45, 5));
+  // Kept through scaling, the no-go floor, and the arrays sent to the mesh process.
+  assert.equal(polar.scaled(0.5).boatSpeed(67.5, 5), 0);
+  assert.equal(polar.withNoGoFloor(30).boatSpeed(67.5, 5), 0);
+  assert.equal(PolarDiagram.fromArrays(polar.toArrays()).boatSpeed(67.5, 5), 0);
+  // A polarTable (version 1) has no null cells: still refused there (the test above).
 });

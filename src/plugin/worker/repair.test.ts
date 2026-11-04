@@ -134,6 +134,48 @@ test('repair: warnings after a detour move with its waypoints; those before it s
   );
 });
 
+test("repair: the replaced segment's limit and wave-correction warnings go, the detour's own come in at its place", async () => {
+  const r = route([wp(0, 0), wp(1, 60), wp(2, 120), wp(3, 180)]);
+  const warn = (leg_index: number, violation: 'wind_over_limit' | 'waves_outside_correction' | 'leg_crosses_land', lon: number) => ({
+    leg_index,
+    violation,
+    from: [lon, 41] as [number, number],
+    to: [lon + 1, 41] as [number, number],
+    repaired: false,
+  });
+  r.warnings = [
+    warn(0, 'wind_over_limit', 0),
+    warn(1, 'waves_outside_correction', 1),
+    warn(1, 'leg_crosses_land', 1),
+    warn(2, 'wind_over_limit', 2),
+  ];
+  await repairViolations(
+    r,
+    check([violation(1, 1.5)]),
+    {
+      sailing: true,
+      detour: async (a, b) => {
+        const d = route([wp(a.lon, 60), wp(1.4, 80), wp(1.6, 100), wp(b.lon, 120)]);
+        // On the detour, outside the wave correction on its second segment (1.4 → 1.6).
+        d.warnings = [warn(1, 'waves_outside_correction', 1.4)];
+        return d;
+      },
+    },
+    async () => check([]),
+    quiet,
+    () => false
+  );
+  assert.deepEqual(
+    (r.warnings ?? []).map(w => [w.violation, w.leg_index, r.waypoints[w.leg_index].lon]),
+    [
+      ['wind_over_limit', 0, 0],
+      ['leg_crosses_land', 1, 1],
+      ['wind_over_limit', 4, 2],
+      ['waves_outside_correction', 2, 1.4],
+    ]
+  );
+});
+
 test('repair: opening bridges after a detour move with its waypoints, the replaced segment drops its own, the detour adds its own', async () => {
   const r = route([wp(0, 0), wp(1, 60), wp(2, 120), wp(3, 180), wp(4, 240)]);
   // legIndex: the waypoint the crossing leg arrives at (multileg.ts stitchLegs).

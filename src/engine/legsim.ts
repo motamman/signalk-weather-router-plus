@@ -17,6 +17,7 @@ import { haversineBearing, haversineDistanceM, projectAlongBearing, DEG } from '
 import { twaFromHeading } from '../geo/angles';
 import { roughnessIndex } from '../plugin/conditions';
 import { comfortRate, encounterFactor, seaAngle } from './seas';
+import { waveFactor, type WaveCorrection } from '../vessel/wavecorrection';
 import type { CurrentSource, WindSource } from './environment';
 import type { PolarDiagram } from '../vessel/polar';
 import type { VesselParams } from '../vessel/vessel';
@@ -43,6 +44,8 @@ export interface LegSimResult {
   overSwhSeconds: number;
   /** Seconds over either limit set to avoid (a second over both counts once: what the surcharge is charged on). */
   overLimitSeconds: number;
+  /** Seconds sailed where the sea was outside the polar's wave-correction table, so sailed uncorrected (0 without one). */
+  uncorrectedWaveSeconds: number;
 }
 
 /**
@@ -71,6 +74,12 @@ export interface SimOptions {
   comfortWeight?: number;
   /** Seconds lost per tack or gybe (absent: DEFAULT_TACK_PENALTY_S). */
   tackPenaltyS?: number;
+  /**
+   * A polar set's wave correction (vessel/wavecorrection.ts): the sailing speed times its factor for the sea the boat
+   * meets (mean period, the waves' angle off the heading); a sea outside its table is sailed uncorrected and counted.
+   * Absent, or a forecast without waves: no correction.
+   */
+  waveCorrection?: WaveCorrection;
 }
 
 /** What exceeding a wind or wave limit does: block (impassable) or avoid (allowed, at a price in the search). */
@@ -164,13 +173,15 @@ export function stepAlongHeading(
   cv: number,
   polar: PolarDiagram | null,
   motorMs: number,
-  opts: SimOptions
+  opts: SimOptions,
+  /** The wave correction's factor on the sailing speed here (1: none). */
+  sailFactor = 1
 ): { progress: number; sailUsed: boolean; inNoGo: boolean; waterSpeed: number } {
   let sailSpeed = 0;
   let inNoGo = false;
   if (polar) {
     const twa = twaFromHeading(bearingDeg, wd);
-    sailSpeed = polar.boatSpeed(twa, ws);
+    sailSpeed = polar.boatSpeed(twa, ws) * sailFactor;
     inNoGo = sailSpeed <= 0 && twa < polar.noGoFloor(ws);
   }
   const [waterSpeed, sailUsed] = selectSpeed(sailSpeed, motorMs, opts.modePolicy, opts.sailThreshMs);
@@ -180,10 +191,27 @@ export function stepAlongHeading(
 }
 
 /**
+ * One sub-step of a candidate as the scorer walked it: where and when it started, the wind there (m/s, FROM degrees
+ * true), whether it sailed, and its seconds. For a caller that needs what happened along a leg, not only its totals
+ * (engine/sailplans.ts).
+ */
+export type StepTrace = (
+  candidate: number,
+  lon: number,
+  lat: number,
+  timeMs: number,
+  windMs: number,
+  windDirDeg: number,
+  sailed: boolean,
+  seconds: number
+) => void;
+
+/**
  * Simulate traversal of the straight line a→c starting at aTime: the
  * batched scorer with one candidate, so a final leg, a beat and a
  * smoother shortcut are timed under exactly the rules the stage
  * candidates were (structural cleanup, decision D: the loops unified).
+ * `onStep`: each sub-step as it was walked.
  */
 export function simulateLegTime(
   aLon: number,
@@ -195,7 +223,8 @@ export function simulateLegTime(
   polar: PolarDiagram | null,
   wind: WindSource,
   current: CurrentSource,
-  opts: SimOptions
+  opts: SimOptions,
+  onStep?: StepTrace
 ): LegSimResult {
   const totalDistM = haversineDistanceM(aLon, aLat, cLon, cLat);
   if (totalDistM <= 0) {
@@ -209,6 +238,7 @@ export function simulateLegTime(
       overWindSeconds: 0,
       overSwhSeconds: 0,
       overLimitSeconds: 0,
+      uncorrectedWaveSeconds: 0,
     };
   }
   const bearingDeg = haversineBearing(aLon, aLat, cLon, cLat);
@@ -222,7 +252,8 @@ export function simulateLegTime(
     polar,
     wind,
     current,
-    opts
+    opts,
+    onStep
   );
   if (!Number.isFinite(sc.seconds[0]) || sc.seconds[0] <= 0) {
     const reason: LegSimResult['reason'] = sc.limited[0] ? 'limited' : sc.noGo[0] ? 'no_go' : sc.foul[0] ? 'current' : 'no_speed';
@@ -237,6 +268,7 @@ export function simulateLegTime(
       overWindSeconds: 0,
       overSwhSeconds: 0,
       overLimitSeconds: 0,
+      uncorrectedWaveSeconds: 0,
     };
   }
   return {
@@ -249,6 +281,7 @@ export function simulateLegTime(
     overWindSeconds: sc.overWind[0],
     overSwhSeconds: sc.overSwh[0],
     overLimitSeconds: sc.overAny[0],
+    uncorrectedWaveSeconds: sc.uncorrectedWave[0],
   };
 }
 
@@ -345,6 +378,8 @@ export interface CandidateScores {
   overSwh: Float64Array;
   /** Seconds over either (a second over both counts once). */
   overAny: Float64Array;
+  /** Seconds sailed outside the wave-correction table (SimOptions.waveCorrection). */
+  uncorrectedWave: Float64Array;
 }
 
 /**
@@ -359,7 +394,7 @@ export interface CandidateScores {
  * estimate) for every candidate: on a long sailing leg that read the
  * forecast hours away from when the boat is there (structural cleanup,
  * decision D, 2026-10-01: measured on brain as a 16 min arrival
- * difference on a 9.5 h final leg).
+ * difference on a 9.5 h final leg). `onStep`: each sub-step as it was walked.
  */
 export function scoreCandidatesFromParent(
   parentLon: number,
@@ -371,7 +406,8 @@ export function scoreCandidatesFromParent(
   polar: PolarDiagram | null,
   wind: WindSource,
   current: CurrentSource,
-  opts: SimOptions
+  opts: SimOptions,
+  onStep?: StepTrace
 ): CandidateScores {
   const n = bearings.length;
   const seconds = new Float64Array(n);
@@ -387,12 +423,29 @@ export function scoreCandidatesFromParent(
   const overWind = new Float64Array(n);
   const overSwh = new Float64Array(n);
   const overAny = new Float64Array(n);
+  const uncorrectedWave = new Float64Array(n);
   if (n === 0)
-    return { seconds, sailing, motoring, motoringNoGo, dominant, limited, noGo, foul, badCurrent, penalty, overWind, overSwh, overAny };
+    return {
+      seconds,
+      sailing,
+      motoring,
+      motoringNoGo,
+      dominant,
+      limited,
+      noGo,
+      foul,
+      badCurrent,
+      penalty,
+      overWind,
+      overSwh,
+      overAny,
+      uncorrectedWave,
+    };
   const comfortW = opts.comfortWeight && opts.comfortWeight > 0 && wind.hasWaves ? opts.comfortWeight : 0;
   const avoidWind = opts.maxWindMode === 'avoid';
   const avoidSwh = opts.maxSwhMode === 'avoid';
   const surcharge = opts.limitAvoidStrength ?? DEFAULT_LIMIT_AVOID_STRENGTH;
+  const wc = opts.waveCorrection && wind.hasWaves ? opts.waveCorrection : null;
 
   const motor = vessel.motorSpeedMs;
   let maxDist = 0;
@@ -434,8 +487,9 @@ export function scoreCandidatesFromParent(
     const timesL = liveT.subarray(0, nLive);
     const w = windAtTimes(wind, lonsL, latsL, timesL);
     const c = currentAtTimes(current, lonsL, latsL, timesL);
-    // Full waves when the comfort cost needs them (height for the limit too); else height alone for the limit.
-    const full = comfortW > 0 ? wavesFullAtTimes(wind, lonsL, latsL, timesL) : null;
+    // Full waves when the comfort cost or the wave correction needs them (height for the limit too); else height alone
+    // for the limit.
+    const full = comfortW > 0 || wc ? wavesFullAtTimes(wind, lonsL, latsL, timesL) : null;
     const swh = full ? full.swh : opts.maxSwhM !== undefined && wind.hasWaves ? wavesAtTimes(wind, lonsL, latsL, timesL) : null;
 
     for (let q = 0; q < nLive; q++) {
@@ -459,6 +513,16 @@ export function scoreCandidatesFromParent(
         cv = 0;
       }
 
+      // The wave correction's factor for the sea this candidate meets here; outside its table, none (counted below).
+      // A sample missing its height, period or direction has no sea to look up: sailed uncorrected, not counted as
+      // outside the table.
+      let sailFactor = 1;
+      let uncorrected = false;
+      if (wc && full && Number.isFinite(full.swh[q]) && Number.isFinite(full.mwp[q]) && Number.isFinite(full.mwd[q])) {
+        const f = waveFactor(wc, full.swh[q], full.mwp[q], seaAngle(bearings[i], full.mwd[q]).angle);
+        if (f === null) uncorrected = true;
+        else sailFactor = f;
+      }
       const { progress, sailUsed, inNoGo, waterSpeed } = stepAlongHeading(
         bearings[i],
         headingU[i],
@@ -469,7 +533,8 @@ export function scoreCandidatesFromParent(
         cv,
         polar,
         motor,
-        opts
+        opts,
+        sailFactor
       );
       if (progress <= 0) {
         stuck[i] = 1;
@@ -486,7 +551,8 @@ export function scoreCandidatesFromParent(
         overAny[i] += stepS;
         penalty[i] += stepS * surcharge;
       }
-      if (full && Number.isFinite(full.swh[q])) {
+      if (uncorrected && sailUsed) uncorrectedWave[i] += stepS;
+      if (comfortW > 0 && full && Number.isFinite(full.swh[q])) {
         // The sea as this candidate meets it: the index of the water (wind and
         // swell against the current) weighted by the angle of the waves to the heading.
         const idx = roughnessIndex(
@@ -506,6 +572,7 @@ export function scoreCandidatesFromParent(
         motoring[i] += stepS;
         if (inNoGo) motoringNoGo[i] += stepS;
       }
+      if (onStep) onStep(i, curLon[i], curLat[i], liveT[q], ws, wd, sailUsed, stepS);
       const [nl, nla] = projectAlongBearing(curLon[i], curLat[i], bearings[i], stepPerCand[i]);
       curLon[i] = nl;
       curLat[i] = nla;
@@ -521,5 +588,20 @@ export function scoreCandidatesFromParent(
       dominant[i] = sailing[i] >= motoring[i] ? 1 : 0;
     }
   }
-  return { seconds, sailing, motoring, motoringNoGo, dominant, limited, noGo, foul, badCurrent, penalty, overWind, overSwh, overAny };
+  return {
+    seconds,
+    sailing,
+    motoring,
+    motoringNoGo,
+    dominant,
+    limited,
+    noGo,
+    foul,
+    badCurrent,
+    penalty,
+    overWind,
+    overSwh,
+    overAny,
+    uncorrectedWave,
+  };
 }

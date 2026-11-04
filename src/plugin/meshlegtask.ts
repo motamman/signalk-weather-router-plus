@@ -29,12 +29,12 @@ import type { PropagatorOptions } from '../engine/propagator';
 import type { Route, StageFront } from '../engine/route';
 import type { RouterKind } from '../engine/router';
 import { type BBox, bboxFromLonLat } from '../geo/geodesy';
-import { PolarDiagram } from '../vessel/polar';
+import { PolarDiagram, type PolarArrays } from '../vessel/polar';
 import type { VesselParams } from '../vessel/vessel';
 import { readBoundary } from './meshcoarse';
 import { regionalRunsFor } from './worker/regionalwind';
 
-/** Everything the child needs, serialisable (dates as ms, the polar as its three arrays). */
+/** Everything the child needs, serialisable (dates as ms, the polar as its arrays). */
 export interface MeshLegTask {
   task: 'mesh-leg';
   /** The mesh folder. */
@@ -47,7 +47,9 @@ export interface MeshLegTask {
   multi: boolean;
   rules: MeshRules;
   vessel: VesselParams;
-  polar: { twa: number[]; tws: number[]; speeds: number[] } | null;
+  polar: PolarArrays | null;
+  /** A polar set's sail plans, scaled and floored as `polar` is; absent: none. */
+  sailPlans?: { name: string; polar: PolarArrays }[] | null;
   sim: SimOptions;
   router?: RouterKind;
   propagator: Omit<PropagatorOptions, 'stages'>;
@@ -114,7 +116,8 @@ export async function runMeshLegTask(t: MeshLegTask, emit: (e: MeshLegEvent) => 
   const departure = new Date(t.legDepartureMs);
   const wind = await loadWind(t, progress);
   const current = await loadCurrents(t, search.box, progress);
-  const polar = t.polar ? new PolarDiagram(t.polar.twa, t.polar.tws, t.polar.speeds) : null;
+  const polar = t.polar ? PolarDiagram.fromArrays(t.polar) : null;
+  const sailPlans = t.sailPlans?.map(p => ({ name: p.name, polar: PolarDiagram.fromArrays(p.polar) })) ?? null;
   const args: MeshLegArgs = {
     plan: t.plan,
     legIndex: t.legIndex,
@@ -125,6 +128,7 @@ export async function runMeshLegTask(t: MeshLegTask, emit: (e: MeshLegEvent) => 
     rules: t.rules,
     vessel: t.vessel,
     polar,
+    sailPlans,
     sim: t.sim,
     router: t.router,
     propagator: t.propagator,

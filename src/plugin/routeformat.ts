@@ -147,6 +147,8 @@ export function waypointProperties(wp: Waypoint): Record<string, unknown> {
   if (finite(wp.swhMinM)) d.leg_swh_min_m = round(wp.swhMinM, 2);
   if (finite(wp.swhMaxM)) d.leg_swh_max_m = round(wp.swhMaxM, 2);
   if (wp.leg !== undefined) d.leg = wp.leg;
+  // The sail plan of the leg arriving here (as `mode`).
+  if (wp.sailPlan !== undefined) d.sail_plan = wp.sailPlan;
   if (wp.role !== undefined) d.role = wp.role;
   if (wp.tack) d.tack = true;
   return d;

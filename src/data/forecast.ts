@@ -1,6 +1,6 @@
 /**
  * Forecast store: gridded wind (10u/10v), pressure (msl), waves
- * (swh/mwp/mwd) and the optional extra fields, with bilinear spatial and
+ * (swh/mwp/mwd/pp1d) and the optional extra fields, with bilinear spatial and
  * linear temporal interpolation.
  *
  * The decoded global forecast is not kept in memory: it lives on disk
@@ -31,6 +31,7 @@ import type { BBox } from '../geo/geodesy';
 import { bboxWidth } from '../geo/geodesy';
 import { bilinearCorners, gridXY, lerp2 } from './sampling';
 import type { WaveConditions, WindSource } from '../engine/environment';
+import { OPTIONAL_WAVE_PARAMS, WAVE_PARAMS } from './ecmwf';
 
 export interface FieldGrid {
   /** Latitude of row 0 (southernmost), degrees. */
@@ -868,7 +869,7 @@ export function buildStep(
     // codes the step-0 gust (a maximum over 0–0 h) as 0 m/s everywhere.
     // Later steps carry the real maximum over the past interval.
     if (param === '10fg' && message.product.intervalHours === 0) continue;
-    const isWave = param === 'swh' || param === 'mwp' || param === 'mwd';
+    const isWave = (WAVE_PARAMS as readonly string[]).includes(param) || (OPTIONAL_WAVE_PARAMS as readonly string[]).includes(param);
     let f: FieldGrid;
     if (bbox) {
       f = cropField(message.grid, message.decode(scratch), bbox);

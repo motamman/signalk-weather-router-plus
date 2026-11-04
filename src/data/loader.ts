@@ -17,7 +17,16 @@
 import type { BBox } from '../geo/geodesy';
 import { HOUR_S } from '../geo/units';
 import { parseGrib2Message, type DecodeScratch } from '../grib/grib2';
-import { ATM_PARAMS, WAVE_PARAMS, availableSteps, latestExpectedCycle, type Cycle, type EcmwfClient, type IndexRecord } from './ecmwf';
+import {
+  ATM_PARAMS,
+  OPTIONAL_WAVE_PARAMS,
+  WAVE_PARAMS,
+  availableSteps,
+  latestExpectedCycle,
+  type Cycle,
+  type EcmwfClient,
+  type IndexRecord,
+} from './ecmwf';
 import {
   buildStep,
   ForecastStore,
@@ -158,13 +167,17 @@ async function decodeSteps(
   // Previous step's raw accumulated fields, for the step-difference pass
   // (ACCUMULATED_PARAMS): five global fields, about 21 MB.
   const accumPrev = new Map<string, AccumPrev>();
-  const fieldsPerStep = atmParams.length + (includeWaves ? WAVE_PARAMS.length : 0);
+  // The optional wave fields too: the step holds them whenever they could be fetched.
+  const fieldsPerStep = atmParams.length + (includeWaves ? WAVE_PARAMS.length + OPTIONAL_WAVE_PARAMS.length : 0);
   const slab = slabFor(steps.length, fieldsPerStep);
   let done = 0;
   let downloaded = 0;
   for (const step of steps) {
     if (opts.shouldCancel?.()) throw new Error('forecast load cancelled');
     const named: { param: string; message: ReturnType<typeof parseGrib2Message> }[] = [];
+    // The optional wave fields' raw messages: built into the step on their own after it, so nothing wrong with one of
+    // them (a message that does not parse or decode, another valid time) can stop the step (OPTIONAL_WAVE_PARAMS).
+    const optionalMsgs: { param: string; msg: Uint8Array }[] = [];
     // The index is only needed for fields not already on disk.
     let atmIndex: IndexRecord[] | undefined;
     for (const p of atmParams) {
@@ -182,20 +195,39 @@ async function decodeSteps(
     }
     if (includeWaves) {
       let waveIndex: IndexRecord[] | undefined;
-      for (const p of WAVE_PARAMS) {
-        if (!client.hasCached(cycle, cycle.waveStream, step, p)) {
-          waveIndex = waveIndex ?? (await client.fetchIndex(cycle, cycle.waveStream, step));
-          downloaded++;
+      for (const p of [...WAVE_PARAMS, ...OPTIONAL_WAVE_PARAMS]) {
+        const optional = (OPTIONAL_WAVE_PARAMS as readonly string[]).includes(p);
+        let msg: Uint8Array | null;
+        try {
+          if (!client.hasCached(cycle, cycle.waveStream, step, p)) {
+            waveIndex = waveIndex ?? (await client.fetchIndex(cycle, cycle.waveStream, step));
+            downloaded++;
+          }
+          msg = await client.fetchField(cycle, cycle.waveStream, step, p, waveIndex);
+        } catch (err) {
+          // An optional field that cannot be fetched (no connection, the server failing): the step is complete without it.
+          if (!optional) throw err;
+          log(`step +${step}h: wave ${p} not fetched (${(err as Error).message}), skipped`);
+          continue;
         }
-        const msg = await client.fetchField(cycle, cycle.waveStream, step, p, waveIndex);
         if (!msg) {
           log(`step +${step}h: wave ${p} not in index, skipped`);
           continue;
         }
-        named.push({ param: p, message: parseGrib2Message(msg) });
+        if (optional) optionalMsgs.push({ param: p, msg });
+        else named.push({ param: p, message: parseGrib2Message(msg) });
       }
     }
     const built = buildStep(named, bbox, opts.waveFillCells ?? 3, scratch, slab, fillScratch);
+    for (const { param, msg } of optionalMsgs) {
+      try {
+        const extra = buildStep([{ param, message: parseGrib2Message(msg) }], bbox, opts.waveFillCells ?? 3, scratch, slab, fillScratch);
+        if (extra.validMs !== built.validMs) throw new Error('its valid time differs from the step');
+        for (const [k, f] of extra.fields) built.fields.set(k, f);
+      } catch (err) {
+        log(`step +${step}h: wave ${param} not decoded (${(err as Error).message}), skipped`);
+      }
+    }
     applyAccumulated(built, accumPrev);
     onStep(built);
     done++;
@@ -204,6 +236,7 @@ async function decodeSteps(
     await new Promise(r => setImmediate(r));
   }
   log(`decoded ${done} steps for cycle ${cycle.yyyymmdd} ${cycle.hh}z (${downloaded} fields downloaded, rest from cache)`);
+  // The required fields only: what a run is judged complete and fitting by (the optional ones are in each step's own list).
   return { cycle, steps, params: [...atmParams, ...(includeWaves ? WAVE_PARAMS : [])], downloaded };
 }
 

@@ -6,7 +6,8 @@
  * instead of module-level variables.
  */
 
-import { ACTIVE_POLAR_TOKEN, managedDiagram, type ManagedPolar } from '../managedpolar';
+import { ACTIVE_POLAR_TOKEN, managedDiagram, managedSailPlans, type ManagedPolar } from '../managedpolar';
+import type { SailPlanPolar } from '../../vessel/sailplan';
 import { HOUR_S, NM_M } from '../../geo/units';
 import { validateRouteRequest } from '../request_schema';
 import { runLegPipeline, type LegPipelineInputs, type LegWind } from '../../engine/pipeline';
@@ -29,7 +30,15 @@ import { RouteCancelled } from '../../engine/propagator';
 import { RouteError } from '../../engine/errors';
 import { nearestExactWater, waterAround } from '../../engine/corridor';
 import { DEFAULT_ARRIVAL_RADIUS_M, DEFAULT_PRECISION, legLabel, type LegPlan, routeMultiLeg, type Stop } from '../../engine/multileg';
-import { type LegDepth, recomputePerWaypointMetadata, type Route, type StageFront, type StopSnap, type Waypoint } from '../../engine/route';
+import {
+  type LegDepth,
+  recomputePerWaypointMetadata,
+  type Route,
+  type RouteWarning,
+  type StageFront,
+  type StopSnap,
+  type Waypoint,
+} from '../../engine/route';
 import { recomputeTotals } from '../../engine/smoother';
 import type { CheckRules, DepthViolation, RouteDepthCheck } from '../../engine/mesh/check';
 import { routeToGeoJSON, routeToSignalKRoute, skeletonToGeoJSON } from '../routeformat';
@@ -302,7 +311,8 @@ function meshLegRunner(
           multi: a.multi,
           rules: a.rules,
           vessel: a.vessel,
-          polar: a.polar ? { twa: Array.from(a.polar.twa), tws: Array.from(a.polar.tws), speeds: Array.from(a.polar.speeds) } : null,
+          polar: a.polar ? a.polar.toArrays() : null,
+          ...(a.sailPlans?.length ? { sailPlans: a.sailPlans.map(p => ({ name: p.name, polar: p.polar.toArrays() })) } : {}),
           sim: a.sim,
           router: a.router,
           propagator: a.propagator,
@@ -727,6 +737,25 @@ export async function route(
         );
       }
     }
+    // A polar set's sail plans (polar-format 2), scaled and floored as the polar is: the route is sailed on its best
+    // table and names the fastest plan on each stretch (engine/sailplans.ts).
+    const sailPlans: SailPlanPolar[] =
+      managedPolar && request.mode !== 'motor'
+        ? managedSailPlans(managedPolar).map(p => ({
+            name: p.name,
+            polar: p.polar.scaled(vessel.polarPerformance).withNoGoFloor(cfg.routing.noGoMinAngleDeg),
+          }))
+        : [];
+    if (sailPlans.length)
+      progress(0, 0, `polar: ${sailPlans.length} sail plan(s) (${sailPlans.map(p => p.name).join(', ')}); each stretch names the fastest`);
+    // The polar set's wave correction on the sailing speed (vessel/wavecorrection.ts), with the forecast's mean period.
+    const waveCorrection = managedPolar && request.mode !== 'motor' ? (managedPolar.waveCorrection ?? null) : null;
+    if (waveCorrection)
+      progress(
+        0,
+        0,
+        `polar: wave correction applied to the sailing speed (${waveCorrection.layers.length} height layer(s), {length:${waveCorrection.heightsM[0]}} to {length:${waveCorrection.heightsM[waveCorrection.heightsM.length - 1]}}; the forecast's mean wave period); seas outside its table are sailed uncorrected and marked on the leg`
+      );
     const departureMs = request.departure ? Date.parse(request.departure) : Date.now();
     // A motor route reads the forecast too (until 2026-10-30 it did not, so its wind and wave limits and its comfort
     // weight judged a calm sea and never acted): the speed under power is the same in any wind, the limits are not.
@@ -921,6 +950,7 @@ export async function route(
       },
       vessel,
       polar: routePolar,
+      sailPlans: sailPlans.length ? sailPlans : null,
       sim: {
         modePolicy: request.mode ?? 'sail_max',
         sailThreshMs: request.sail_thresh_ms ?? cfg.routing.sailThreshMs,
@@ -932,6 +962,7 @@ export async function route(
         limitAvoidStrength: request.limit_avoid_strength ?? cfg.routing.limitAvoidStrength,
         comfortWeight: request.comfort_weight ?? cfg.routing.comfortWeight,
         tackPenaltyS: request.tack_penalty ?? cfg.routing.tackPenaltyS,
+        ...(waveCorrection ? { waveCorrection } : {}),
       },
       simplifyM: request.simplify_m ?? cfg.routing.simplifyM,
       // Both routers (the owner's decision, 2026-10-08): the smoother times every shortcut with the real polar, so two laid-out tacks become one straight leg only where that course is sailable within the tolerance.
@@ -1243,6 +1274,13 @@ async function finalDepthCheck(
   route.depthCheck = { legs: check.legs };
 }
 
+/** The warnings about what the boat meets along a segment, worked out per leg (smoother.ts): a detour brings its own. */
+const PER_SEGMENT_WARNINGS: ReadonlySet<RouteWarning['violation']> = new Set([
+  'wind_over_limit',
+  'waves_over_limit',
+  'waves_outside_correction',
+]);
+
 /** Repair limits: passes over the route, and detours in all. */
 const REPAIR_MAX_PASSES = 2;
 const REPAIR_MAX_DETOURS = 5;
@@ -1312,7 +1350,14 @@ export async function repairViolations(
       const after = wps.slice(k + 2).map(w => ({ ...w, time: new Date(w.time.getTime() + shiftMs) }));
       route.waypoints = [...wps.slice(0, k + 1), ...mid, last, ...after];
       // Warnings index the route's segments (multileg.ts stitchLegs): those after the detour move with its waypoints.
-      for (const w of route.warnings ?? []) if (w.leg_index > k) w.leg_index += mid.length;
+      // What the boat meets on a segment (over a wind or wave limit, a sea outside the wave correction) is the detour's
+      // now, as with the opening bridges below: the replaced segment's go and the detour's own come in at its place (its
+      // segment j is the route's k + j).
+      const kept = (route.warnings ?? []).filter(w => !(w.leg_index === k && PER_SEGMENT_WARNINGS.has(w.violation)));
+      for (const w of kept) if (w.leg_index > k) w.leg_index += mid.length;
+      for (const w of d.warnings ?? []) if (PER_SEGMENT_WARNINGS.has(w.violation)) kept.push({ ...w, leg_index: w.leg_index + k });
+      if (kept.length) route.warnings = kept;
+      else delete route.warnings;
       // Opening bridges index the waypoint their crossing leg arrives at, the same way: the one on the replaced
       // segment goes (the detour says what it passes under), those after it move, and the detour's own come in at
       // its place (its waypoint j is the route's k + j).

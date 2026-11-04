@@ -189,6 +189,7 @@ export class ExperimentalPropagator {
         limitAvoidStrength: args.limitAvoidStrength,
         comfortWeight: args.comfortWeight,
         tackPenaltyS: args.tackPenaltyS,
+        waveCorrection: args.waveCorrection,
       },
       arriving: args.arriving ?? null,
       who,
