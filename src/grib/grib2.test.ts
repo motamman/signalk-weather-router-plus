@@ -209,3 +209,48 @@ test('template 4.8: a range that ends before it starts is refused', () => {
   b[s4 - 1 + 39] = 1; // end hour 01:00, start +2 h
   assert.throws(() => [...iterateGrib2(b)], /ends \(\+1 h\) before it starts \(\+2 h\)/);
 });
+
+// Template 4.1 (one member of an ensemble): template 4.0 and three octets more, the type of ensemble forecast, the
+// member's number and the ensemble's size. ECMWF's ensemble files (enfo, waef) code every member this way. The fixture's
+// first message (4.0) is rebuilt as 4.1 with those three octets, as ECMWF writes them for member 7 of 50.
+function asEnsembleMember(type: number, member: number, size: number): Uint8Array {
+  const all = new Uint8Array(fs.readFileSync(fixture));
+  const first = new DataView(all.buffer, all.byteOffset).getUint32(12); // octets 13–16 of the 64-bit length (under 4 GB)
+  const b = all.subarray(0, first);
+  const { s4 } = sectionsOf(b);
+  const s4len = new DataView(b.buffer, b.byteOffset).getUint32(s4);
+  assert.equal(s4len, 34, 'the fixture is template 4.0');
+  const out = new Uint8Array(b.length + 3);
+  out.set(b.subarray(0, s4 + 34), 0);
+  out.set([type, member, size], s4 + 34);
+  out.set(b.subarray(s4 + 34), s4 + 37);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(12, out.length); // total length
+  dv.setUint32(s4, 37); // section 4 length
+  dv.setUint16(s4 + 7, 1); // template 4.1
+  return out;
+}
+
+test('template 4.1: an ensemble member reads as its 4.0 field, with the member', () => {
+  const [plain] = [...iterateGrib2(new Uint8Array(fs.readFileSync(fixture)))];
+  const [m] = [...iterateGrib2(asEnsembleMember(4, 7, 50))];
+  assert.equal(m.product.productDefinitionTemplate, 1);
+  assert.deepEqual(m.product.ensemble, { type: 4, member: 7, size: 50 });
+  assert.equal(plain.product.ensemble, undefined);
+  for (const k of [
+    'parameterCategory',
+    'parameterNumber',
+    'typeOfFirstFixedSurface',
+    'firstFixedSurfaceValue',
+    'forecastHours',
+    'intervalHours',
+  ] as const)
+    assert.equal(m.product[k], plain.product[k], k);
+  assert.deepEqual(m.grid, plain.grid);
+  assert.deepEqual(m.decode(), plain.decode());
+  // A 4.1 section cut short of the member's octets is refused.
+  const short = asEnsembleMember(4, 7, 50);
+  const { s4 } = sectionsOf(short);
+  new DataView(short.buffer).setUint32(s4, 36);
+  assert.throws(() => [...iterateGrib2(short)]);
+});
