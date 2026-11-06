@@ -20,7 +20,7 @@ import { Type, type Static } from 'typebox';
 import type { JobEvent, JobManager } from './jobs';
 import { RouteRequestSchema, validateRouteRequest, ENSEMBLE_MEMBERS_RANGE } from './request_schema';
 import { departureMetrics, DepartureMetricsSchema } from './windows';
-import { ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
+import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
 import { cycleName } from '../data/decoded';
 
 export const ENSEMBLE_SET_LIMITS = {
@@ -58,7 +58,11 @@ export const MemberStatusSchema = Type.Enum(['pending', 'queued', 'running', 'do
 export type MemberStatus = Static<typeof MemberStatusSchema>;
 
 export const SetMemberSchema = Type.Object({
-  member: Type.Number({ description: '0 = the control' }),
+  member: Type.Integer({
+    minimum: 0,
+    maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+    description: '0 = the control',
+  }),
   job_id: Type.Union([Type.String(), Type.Null()]),
   status: MemberStatusSchema,
   error: Type.Optional(Type.String()),

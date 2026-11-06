@@ -11,7 +11,7 @@ import { DRAWBRIDGE_CHOICES } from '../engine/mesh/route';
 import { ROUTER_KINDS } from '../engine/router';
 import { SEARCH_PRESETS } from '../engine/search/presets';
 import { RouteRequestSchema } from './request_schema';
-import { ENSEMBLE_MODELS } from '../data/ecmwf';
+import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS } from '../data/ecmwf';
 
 const nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T, description?: string) =>
   Type.Union([t, Type.Null()], description ? { description } : {});
@@ -102,7 +102,11 @@ export const RouteSummarySchema = Type.Object({
         model: Type.Enum(ENSEMBLE_MODELS, { type: 'string' }),
         name: Type.String(),
         cycle: Type.String({ description: "The ensemble's cycle (ISO 8601)" }),
-        member: Type.Number({ description: '0 = the control' }),
+        member: Type.Integer({
+          minimum: 0,
+          maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+          description: '0 = the control',
+        }),
       },
       { description: 'The ensemble member whose forecast the route ran on (request.forecast_member); absent: the main forecast.' }
     )
