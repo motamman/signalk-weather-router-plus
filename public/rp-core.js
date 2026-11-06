@@ -486,24 +486,34 @@ export async function authFetch(url, opts, channel) {
 
 // Error text out of a plugin JSON error body ({error} or {message}).
 /**
+ * The JSON body of a failed answer, or null when it is not JSON. A read cut short by an abort (the request's channel
+ * superseded, the auth gate tripped) is not a failed answer: its AbortError goes to the caller, as fetch's own does
+ * when the abort comes before the headers, so the caller tells a superseded request from a failure the same way.
+ */
+async function _errorBody(r) {
+  try {
+    return await r.clone().json();
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    return null;
+  }
+}
+/**
  * The Error for a failed API answer. A 503 that carries `loading` (the
  * server is still getting its first forecast) is marked `waiting`: it is
  * not a failure, and it tells the page to check the status now, since a
  * map tile can get this answer before the page's first status check.
  */
 export async function _apiError(r) {
-  let d = null;
-  try { d = await r.clone().json(); } catch (_) { /* not JSON */ }
+  const d = await _errorBody(r);
   /** @type {Error & { waiting?: boolean }} */
   const err = new Error(d && (d.error || d.message) ? unitText(String(d.error || d.message)) : 'HTTP ' + r.status);
   if (r.status === 503 && d && 'loading' in d) { err.waiting = true; _serverWaiting(); }
   return err;
 }
 export async function _apiErrorText(r) {
-  try {
-    const d = await r.clone().json();
-    return (d && (d.error || d.message)) ? unitText(String(d.error || d.message)) : ('HTTP ' + r.status);
-  } catch (_) { return 'HTTP ' + r.status; }
+  const d = await _errorBody(r);
+  return (d && (d.error || d.message)) ? unitText(String(d.error || d.message)) : ('HTTP ' + r.status);
 }
 
 // Replan EventSource handle so the gate can close it on trip.

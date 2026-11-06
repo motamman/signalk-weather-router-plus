@@ -549,6 +549,44 @@ test('a window file that cannot be read at start-up is reported and left as it i
   }
 });
 
+test('a restart: a departure whose job file holds its route inside without its events is refused at the job store, and the window loads with that departure failed', () => {
+  const h = harness();
+  const w = h.windows.create({ route: ROUTE, from: new Date(T0).toISOString(), to: new Date(T0).toISOString(), step_s: 6 * 3600 });
+  h.finish();
+  h.windows.close();
+  const jobId = w.departures[0].job_id!;
+  // The window as saved while its departure computed; the departure's job file with its route inside and no events
+  // (no save writes such a file), and its results file gone.
+  const wf = path.join(h.dir, 'windows', `${w.id}.json`);
+  const saved = JSON.parse(fs.readFileSync(wf, 'utf8')) as DepartureWindow;
+  saved.status = 'running';
+  saved.departures[0].status = 'running';
+  delete saved.departures[0].metrics;
+  fs.writeFileSync(wf, JSON.stringify(saved));
+  const jf = path.join(h.dir, 'jobs', `${jobId}.json`);
+  fs.writeFileSync(jf, JSON.stringify({ ...(JSON.parse(fs.readFileSync(jf, 'utf8')) as Record<string, unknown>), geojson: {} }));
+  fs.unlinkSync(path.join(h.dir, 'jobs', 'results', `${jobId}.json`));
+  const logged: string[] = [];
+  const jobs = new JobManager(h.dir, 50, '/plugins/wrp', m => logged.push(m));
+  const windows = new WindowManager(jobs, h.dir, {
+    cancelRunning: () => undefined,
+    forecastValidToMs: () => null,
+    log: m => logged.push(m),
+  });
+  assert.deepEqual(logged, [`route job file ${jobId}.json does not hold a route job; left as it is, not restored`]);
+  assert.equal(jobs.get(jobId), undefined);
+  const back = windows.get(w.id)!;
+  assert.equal(back.status, 'failed');
+  assert.deepEqual(
+    back.departures.map(d => d.status),
+    ['failed']
+  );
+  assert.equal(back.departures[0].error, 'plugin restarted while the departure was being computed');
+  assert.ok(fs.existsSync(jf), 'the job file is left as it is');
+  windows.close();
+  fs.rmSync(h.dir, { recursive: true, force: true });
+});
+
 test('a restart: the jobs of a window whose file is refused are kept; only a window with no file at all loses its jobs', () => {
   const h = harness();
   const mk = (): DepartureWindow => {

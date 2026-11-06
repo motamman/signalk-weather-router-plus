@@ -141,7 +141,9 @@ uses [Semantic Versioning](https://semver.org/).
   place, which aborts every request still in flight for the one before:
   its route, its skeleton and its fronts. A departure window's route
   answered after the route was cleared or another opened could be drawn
-  over it.
+  over it. A failed answer cut short by the change is dropped the same
+  way: its body read, aborted, used to be reported as the failure "HTTP
+  <status>" and could mark the route opened since as not loaded.
 - **A route job whose file cannot be saved says so, and the queue goes
   on.** A full or read-only disk made the job's save throw when it
   finished, before the next job was started, so the queue stopped. The
@@ -167,7 +169,11 @@ uses [Semantic Versioning](https://semver.org/).
   file whose job has no file at all is removed at start-up, one whose
   job file is there but refused stays. A record file is its record's:
   one holding a job, window or set of another id (a copy) is refused,
-  since restoring it would write over that id's files. Jobs, departure windows and ensemble sets
+  since restoring it would write over that id's files. So is a job file
+  with a status no job has (it would count in the trim and push a sound
+  job out), and one holding some of its results without its events (no
+  save writes such a file; restored, a departure window's departure
+  linked to it could stop the start-up). Jobs, departure windows and ensemble sets
   save their files one way (`src/plugin/jsonfiles.ts`): a save that
   fails also says when its partial copy could not be removed.
 

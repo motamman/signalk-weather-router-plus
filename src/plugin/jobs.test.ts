@@ -354,6 +354,50 @@ test('a job file without when it was created, or holding another job (a copy), i
   }
 });
 
+test('a job file with a status no job has, or holding some of its results without its events, is refused where it is loaded; the job that is sound is the one kept', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
+  const store = path.join(dir, 'jobs');
+  try {
+    fs.mkdirSync(path.join(store, 'results'), { recursive: true });
+    const base = { request: ROUTE, createdAt: '2026-11-06T12:00:00.000Z', nextEventId: 2 };
+    // A status no job has, finished after the sound job: restored, it would be the one job kept with keepJobs 1.
+    fs.writeFileSync(
+      path.join(store, 'bogus.json'),
+      JSON.stringify({ ...base, id: 'bogus', status: 'bogus', finishedAt: '2026-11-06T14:00:00.000Z', summary: SUMMARY })
+    );
+    // A window's done job with its route inside and no events: no save writes such a file.
+    fs.writeFileSync(
+      path.join(store, 'partial.json'),
+      JSON.stringify({
+        ...base,
+        id: 'partial',
+        status: 'done',
+        finishedAt: '2026-11-06T12:05:00.000Z',
+        summary: SUMMARY,
+        windowId: 'win-1',
+        geojson: {},
+      })
+    );
+    fs.writeFileSync(
+      path.join(store, 'good.json'),
+      JSON.stringify({ ...base, id: 'good', status: 'done', finishedAt: '2026-11-06T12:05:00.000Z', summary: SUMMARY })
+    );
+    fs.writeFileSync(path.join(store, 'results', 'good.json'), JSON.stringify({ events: [], progress: [], geojson: GEOJSON }));
+    const logged: string[] = [];
+    const jobs = new JobManager(dir, 1, '/p', m => logged.push(m));
+    assert.equal(jobs.get('bogus'), undefined);
+    assert.equal(jobs.get('partial'), undefined);
+    assert.deepEqual(jobs.get('good')?.geojson, GEOJSON, 'the one job kept');
+    assert.deepEqual(logged.sort(), [
+      'route job file bogus.json does not hold a route job; left as it is, not restored',
+      'route job file partial.json does not hold a route job; left as it is, not restored',
+    ]);
+    assert.ok(fs.existsSync(path.join(store, 'bogus.json')) && fs.existsSync(path.join(store, 'partial.json')), 'left as they are');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a results file whose job has no file at all is removed at start-up; one whose job file is refused stays with it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
   const store = path.join(dir, 'jobs');

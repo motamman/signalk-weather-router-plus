@@ -11,7 +11,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { JobProgress, JobStatus, RouteRequest, RouteSummary } from './protocol';
-import type { JobLinks, JobPublic } from './response_schema';
+import { JOB_STATUSES, type JobLinks, type JobPublic } from './response_schema';
 import { loadJsonFiles, removeJson, saveJson } from '../util/jsonfiles';
 
 /** What a job's event says: the end of a job typed (a listener reads its message or summary), the others as sent. */
@@ -139,16 +139,18 @@ export class JobManager extends EventEmitter {
    */
   private loadPersisted(): void {
     /**
-     * A job as saved: an id, a status, its request and when it was created (the lists and the trim order by it); a
-     * done one its summary, and, when its results are still inside (the layout before they had a file of their own),
-     * those as holdsResults wants them. Any other file is not restored.
+     * A job as saved: an id, one of a job's statuses (JOB_STATUSES), its request and when it was created (the lists and
+     * the trim order by it); a done one its summary; and its results either all inside (the layout before they had a
+     * file of their own: its events with them, as holdsResults wants them) or none (stateOf leaves none). A file with
+     * some of them and no events is not one this code wrote. Any other file is not restored.
      */
     const isJob = (v: unknown): v is Job => {
       const j = v as Job | null;
-      if (!j || typeof j !== 'object' || typeof j.id !== 'string' || typeof j.status !== 'string' || !j.request) return false;
+      if (!j || typeof j !== 'object' || typeof j.id !== 'string' || !(JOB_STATUSES as readonly string[]).includes(j.status) || !j.request)
+        return false;
       if (typeof j.createdAt !== 'string') return false;
       if (j.status === 'done' && (!j.summary || typeof j.summary !== 'object')) return false;
-      return j.events === undefined || holdsResults(j, j.status === 'done');
+      return j.events === undefined ? RESULT_KEYS.every(k => !(k in j)) : holdsResults(j, j.status === 'done');
     };
     const noun = { one: 'route job', a: 'a route job', many: 'route jobs' };
     const loaded = loadJsonFiles(this.dir, noun, isJob, this.log);

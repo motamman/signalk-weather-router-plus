@@ -16,7 +16,9 @@ import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS } from '../data/ecmwf';
 const nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T, description?: string) =>
   Type.Union([t, Type.Null()], description ? { description } : {});
 
-export const JobStatusSchema = Type.Enum(['queued', 'running', 'done', 'failed', 'cancelled'] as const, { type: 'string' });
+/** A route job's statuses: what the API answers, and what a saved job file is accepted with (jobs.ts). */
+export const JOB_STATUSES = ['queued', 'running', 'done', 'failed', 'cancelled'] as const;
+export const JobStatusSchema = Type.Enum(JOB_STATUSES, { type: 'string' });
 export type JobStatus = Static<typeof JobStatusSchema>;
 
 export const JobProgressSchema = Type.Object({
