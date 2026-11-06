@@ -206,6 +206,12 @@ test('an old job file keeps its results while their own file cannot be saved, an
     assert.equal(logged.length, 1);
     assert.deepEqual(jobs.full('old-1')?.geojson, GEOJSON, 'in memory');
     assert.deepEqual((JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>).geojson, GEOJSON, 'still in its file');
+    // A second start, the way still blocked: the old file still holds them.
+    const second: string[] = [];
+    const still = new JobManager(dir, 50, '/p', m => second.push(m));
+    assert.match(still.get('old-1')?.saveError ?? '', /^its route results could not be saved: /);
+    assert.equal(second.length, 1);
+    assert.deepEqual((JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>).geojson, GEOJSON, 'still in its file');
     // A later start, the way clear: moved.
     fs.rmSync(blocked, { recursive: true });
     const again = new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`));

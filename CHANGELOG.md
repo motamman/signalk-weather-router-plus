@@ -122,9 +122,11 @@ uses [Semantic Versioning](https://semver.org/).
   rewrites: before, every save of a window's job read its route back
   from its file and wrote it again, so a read that failed lost the
   route. Until that file is saved, the job's own file holds the results
-  too, so nothing on disk is ever without them. Job files saved before
-  keep loading; their results are moved to their own file at start-up. After a restart a job's event log is
-  the one it finished with. Jobs, departure windows and ensemble sets
+  too: an old job file whose move fails keeps them, and a job whose
+  results and own file both fail to save has them only in memory, so a
+  restart before a save succeeds loses that job. Job files saved before
+  keep loading; their results are moved to their own file at start-up.
+  After a restart a job's event log is the one it finished with. Jobs, departure windows and ensemble sets
   save their files one way (`src/plugin/jsonfiles.ts`): a save that
   fails also says when its partial copy could not be removed.
 
