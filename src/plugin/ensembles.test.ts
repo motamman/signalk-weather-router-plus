@@ -7,7 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { JobManager, type Job } from './jobs';
 import type { RouteRequest, RouteSummary } from './protocol';
-import { EnsembleSetManager, validateEnsembleSetRequest } from './ensembles';
+import { EnsembleSetManager, validateEnsembleSetRequest, type EnsembleSet } from './ensembles';
 
 const H = 3600_000;
 const T0 = Date.UTC(2026, 10, 5, 12);
@@ -25,6 +25,12 @@ function summary(hours: number): RouteSummary {
     departure: new Date(T0).toISOString(),
     arrival: new Date(T0 + hours * H).toISOString(),
   };
+}
+
+/** The set a request started (create refused nothing). */
+function made(r: ReturnType<EnsembleSetManager['create']>): EnsembleSet {
+  assert.ok('set' in r, 'refused' in r ? r.refused : '');
+  return r.set;
 }
 
 function harness(onDisk: number[] | null = [0, 1, 2, 3, 4, 5, 6]) {
@@ -66,7 +72,7 @@ test('validateEnsembleSetRequest: the route, a known ensemble, 5 to 51 members, 
 
 test('a set routes each member on its own forecast, one job at a time, control first, pinned to the cycle', () => {
   const h = harness();
-  const s = h.sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 });
+  const s = made(h.sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 }));
   assert.deepEqual(
     s.members.map(m => m.member),
     [0, 1, 2, 3, 4]
@@ -93,13 +99,17 @@ test('a set routes each member on its own forecast, one job at a time, control f
 });
 
 test('create refuses an ensemble not on disk, or more members than it has', () => {
-  assert.throws(() => harness(null).sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 }), /not on disk/);
-  assert.throws(() => harness([1, 2, 3, 4, 5]).sets.create({ route: ROUTE, model: 'ifs-ens', members: 6 }), /5 members on disk, 6 asked/);
+  assert.deepEqual(harness(null).sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 }), {
+    refused: 'ECMWF IFS ENS is not on disk (plugin config: Ensemble downloads)',
+  });
+  assert.deepEqual(harness([1, 2, 3, 4, 5]).sets.create({ route: ROUTE, model: 'ifs-ens', members: 6 }), {
+    refused: 'ECMWF IFS ENS has 5 members on disk, 6 asked',
+  });
 });
 
 test('cancel: members not started are cancelled, the running one is asked to stop', () => {
   const h = harness();
-  const s = h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 });
+  const s = made(h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 }));
   h.finish(90);
   const running = h.jobs.runningId!;
   assert.ok(h.sets.cancel(s.id));
@@ -115,13 +125,13 @@ test('cancel: members not started are cancelled, the running one is asked to sto
 test('the main forecast route named in the request is reported with its metrics once done', () => {
   const h = harness();
   const main = h.jobs.submit(ROUTE);
-  const s = h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5, main_job_id: main.id });
+  const s = made(h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5, main_job_id: main.id }));
   assert.deepEqual(h.sets.toPublic(s).main, { job_id: main.id, status: 'running' });
   h.finish(95); // the main route, ahead of the members in the queue
   const m = h.sets.toPublic(h.sets.get(s.id)!).main!;
   assert.equal(m.status, 'done');
   assert.equal(m.metrics!.total_time_s, 95 * 3600);
-  assert.equal(h.sets.toPublic(h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 })).main, null);
+  assert.equal(h.sets.toPublic(made(h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 }))).main, null);
   assert.match(validateEnsembleSetRequest({ route: ROUTE, model: 'ifs-ens', members: 5, main_job_id: '' })!, /main_job_id/);
 });
 
@@ -142,7 +152,7 @@ test('a set whose file cannot be saved carries it: its member still reaches the 
     const store = path.join(dir, 'ensemble-sets');
     fs.rmSync(store, { recursive: true });
     fs.writeFileSync(store, 'not a folder');
-    const s = sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 });
+    const s = made(sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 }));
     assert.equal(started.length, 1, 'the first member reached the worker');
     assert.match(sets.get(s.id)?.save_error ?? '', /^its file could not be saved: /);
     assert.ok(logged.some(m => m.startsWith(`ensemble set ${s.id}: its file could not be saved`)));
@@ -214,7 +224,7 @@ test('a set file that cannot be read at start-up is reported and left as it is; 
     assert.ok(fs.existsSync(path.join(store, 'broken.json')), 'left as it is');
     // A finished set whose file is a folder now (on every OS, not one that is missing): deleted from the list, the
     // folder stays, and that is said.
-    const s = sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 });
+    const s = made(sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 }));
     sets.cancel(s.id);
     // The member computing stops when its route worker answers (here at once).
     const stopping = jobs.runningId;

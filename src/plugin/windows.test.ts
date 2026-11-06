@@ -7,8 +7,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { JobManager, type Job } from './jobs';
 import type { RouteRequest, RouteSummary } from './protocol';
+import { departureMetrics } from './jobseries';
 import {
-  departureMetrics,
   validateWindowRequest,
   windowNotification,
   WINDOW_LIMITS,

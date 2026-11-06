@@ -2078,7 +2078,7 @@ the SSE endpoint replays.
 | POST | `/api/windows/{id}/cancel` | readwrite | cancel the departures not computed yet |
 | DELETE | `/api/windows/{id}` | readwrite | delete a finished window and its route jobs |
 | POST | `/api/ensemble-sets` | readwrite | ensemble set `{route, model, members}`: the route on each member on disk, one route job each |
-| GET | `/api/ensemble-sets` | readonly | list ensemble sets; `limit` as for windows (20, a whole number from 1, at most 12) |
+| GET | `/api/ensemble-sets` | readonly | list ensemble sets; `limit` as for windows (all by default, at most 12; a whole number from 1) |
 | GET | `/api/ensemble-sets/{id}` | readonly | a set's members, their status, route job and metrics; `save_error` as for windows |
 | POST | `/api/ensemble-sets/{id}/cancel` | readwrite | cancel the members not computed yet |
 | DELETE | `/api/ensemble-sets/{id}` | readwrite | delete a finished set and its route jobs |
@@ -2225,7 +2225,7 @@ found"}`.
 | `error` | string | `failed` / `cancelled` only |
 | `resource_id` | string | Resources API id once published (equal to the job id) |
 | `publish_error` | string | the last publishing error, when publishing failed |
-| `save_error` | string | only while the job's last save failed (a full or read-only disk): why. The job is answered from memory. When its first save failed, it would not survive a restart; when a later one failed (a publish), a restart brings back the job as last saved, without that change. Its route results are saved once, in a file of their own that no later save rewrites (`jobs/results/<id>.json`); until they are, they stay in memory and in the job's own file (a departure window's or ensemble set's job too); when the job's own file cannot be saved either, they are in memory only, and a restart before a save succeeds loses them. The failure is in the Signal K log, and the next save clears this |
+| `save_error` | string | only while the job's last save failed (a full or read-only disk): why. The job is answered from memory. Its route results are saved once, in a file of their own that no later save rewrites (`jobs/results/<id>.json`); until that file is saved, the job's own file holds them too, and they stay in memory. A restart brings back each job as its last successful save left it: its own file, with its results inside for as long as their own file was never saved; a job none of whose saves succeeded is lost. The failure is in the Signal K log, and the next save clears this |
 | `links` | object | as in the `202` of `POST /api/routes` |
 
 Progress entry:
@@ -2561,8 +2561,8 @@ Access: readonly. `200`:
 | `metrics.warnings` | count | the route's warnings |
 
 `GET /api/windows?limit=` lists the windows newest first in the same
-form: `limit` 20 by default, a whole number from 1 (else `400`), at most
-12 listed (the 10 kept and 2 computing). A window file that cannot be
+form: all of them by default, at most 12 (the 10 kept and 2 computing);
+`limit`, a whole number from 1 (else `400`), lists fewer. A window file that cannot be
 read at start-up, or that does not hold a window, is left as it is,
 not restored, and named in the Signal K log; so is one whose delete
 fails (it comes back after a restart). `POST /api/windows/{id}/cancel` → `202 {id, status}`: the

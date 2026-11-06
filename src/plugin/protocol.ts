@@ -275,8 +275,8 @@ export interface EnsembleStatus {
   cycle: string | null;
   /** Members on disk for that cycle (0 = the control). */
   members: number[];
-  /** Bytes of this ensemble on disk (decoded runs and GRIB cache). */
-  bytes: number;
+  /** Bytes of this ensemble on disk (decoded runs and GRIB cache); null when its folders could not be read (the log says why). */
+  bytes: number | null;
   /** A pass under way: the cycle, steps downloaded and members decoded of the total. */
   loading: { cycle: string; done: number; total: number | null } | null;
   /** Why the last pass could not get the cycle (held, offline, disk, a server error), or null. */

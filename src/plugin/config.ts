@@ -236,6 +236,23 @@ export const OVERLAY_CACHE_DEFAULTS = {
 
 export const MIRRORS = Object.keys(ECMWF_MIRRORS) as EcmwfMirror[];
 
+/** The mirror when the config names none: the schema, resolveConfig and the configuration panel (via the status) read it. */
+export const DEFAULT_MIRROR: EcmwfMirror = 'ecmwf';
+
+/** What the ensemble downloads cost and do, for the plugin config's schema and the configuration panel (via the status). */
+export const ENSEMBLE_DOWNLOAD_NOTE =
+  "Also download ECMWF ensembles, each cycle after the forecast (wind and waves, to the forecast's horizon), so Find Route " +
+  "can compute the route on each member's forecast as well: where each member's route goes and when it arrives. At 72 h, " +
+  'per member and cycle, on the test box (Pi 5): about 70 MB downloaded (5 IFS ENS members took 350,757,112 B, 2026-11-05); ' +
+  'on disk 519 MB for an IFS ENS member and 270 MB for an AIFS ENS member (du, 2026-11-06).';
+
+/** The ensemble downloads when the config says nothing: off; on, IFS ENS with 5 members. The schema and resolveEnsemble read these. */
+export const ENSEMBLE_DEFAULTS: { enabled: boolean; models: EnsembleModelId[]; members: number } = {
+  enabled: false,
+  models: ['ifs-ens'],
+  members: 5,
+};
+
 export const CONFIG_SCHEMA = {
   type: 'object',
   description:
@@ -330,30 +347,26 @@ export const CONFIG_SCHEMA = {
       type: 'object',
       title: 'Forecast download',
       properties: {
-        mirror: { type: 'string', title: 'ECMWF open-data mirror', enum: [...MIRRORS], default: 'ecmwf' },
+        mirror: { type: 'string', title: 'ECMWF open-data mirror', enum: [...MIRRORS], default: DEFAULT_MIRROR },
         ensemble: {
           type: 'object',
           title: 'Ensemble downloads',
-          description:
-            "Also download ECMWF ensembles, each cycle after the forecast (wind and waves, to the forecast's horizon), so Find Route " +
-            "can compute the route on each member's forecast as well: where each member's route goes and when it arrives. At 72 h, " +
-            'per member and cycle, on the test box (Pi 5): about 70 MB downloaded (5 IFS ENS members took 350,757,112 B, 2026-11-05); ' +
-            'on disk 519 MB for an IFS ENS member and 270 MB for an AIFS ENS member (du, 2026-11-06).',
+          description: ENSEMBLE_DOWNLOAD_NOTE,
           properties: {
-            enabled: { type: 'boolean', title: 'Download ensembles', default: false },
+            enabled: { type: 'boolean', title: 'Download ensembles', default: ENSEMBLE_DEFAULTS.enabled },
             models: {
               type: 'array',
               title: 'Ensembles',
               items: { type: 'string', enum: [...ENSEMBLE_MODELS], enumNames: ENSEMBLE_MODELS.map(m => ENSEMBLES[m].name) },
               uniqueItems: true,
               minItems: 1,
-              default: ['ifs-ens'],
+              default: ENSEMBLE_DEFAULTS.models,
             },
             members: {
               type: 'integer',
               title: 'Members per ensemble',
               enum: [...ENSEMBLE_MEMBER_CHOICES],
-              default: 5,
+              default: ENSEMBLE_DEFAULTS.members,
             },
           },
         },
@@ -433,11 +446,11 @@ function cacheNumber(v: unknown, def: number, min: number, max: number, name: st
 
 /** The ensemble downloads from the plugin config: off unless enabled; enabled needs at least one known ensemble. */
 export function resolveEnsemble(e: NonNullable<PluginConfig['forecast']>['ensemble']): ResolvedConfig['forecast']['ensemble'] {
-  const members = e?.members ?? 5;
+  const members = e?.members ?? ENSEMBLE_DEFAULTS.members;
   if (!(ENSEMBLE_MEMBER_CHOICES as readonly number[]).includes(members))
     throw new Error(`config forecast.ensemble.members: ${String(members)} is not one of ${ENSEMBLE_MEMBER_CHOICES.join(', ')}`);
-  if (!e?.enabled) return { models: [], members };
-  const models = e.models ?? ['ifs-ens'];
+  if (!(e?.enabled ?? ENSEMBLE_DEFAULTS.enabled)) return { models: [], members };
+  const models = e?.models ?? ENSEMBLE_DEFAULTS.models;
   for (const m of models)
     if (!(ENSEMBLE_MODELS as readonly string[]).includes(m))
       throw new Error(`config forecast.ensemble.models: ${String(m)} is not one of ${ENSEMBLE_MODELS.join(', ')}`);
@@ -459,7 +472,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
     .split(/[,\n]/)
     .map(s => s.trim())
     .filter(Boolean);
-  const mirror = c.forecast?.mirror ?? 'ecmwf';
+  const mirror = c.forecast?.mirror ?? DEFAULT_MIRROR;
   if (!isEcmwfMirror(mirror)) throw new Error(`config forecast.mirror: ${String(mirror)} is not one of ${MIRRORS.join(', ')}`);
   if (c.polarSource !== undefined && c.polarSource !== 'auto' && c.polarSource !== 'files' && c.polarSource !== 'signalk')
     throw new Error('config polarSource: expected auto, files or signalk');

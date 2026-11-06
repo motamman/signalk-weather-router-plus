@@ -12,12 +12,20 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { JobProgress, JobStatus, RouteRequest, RouteSummary } from './protocol';
 import type { JobLinks, JobPublic } from './response_schema';
-import { loadJsonFiles, removeJson, saveJson } from './jsonfiles';
+import { loadJsonFiles, removeJson, saveJson } from '../util/jsonfiles';
 
-export interface JobEvent {
-  id: number;
-  event: 'status' | 'progress' | 'route' | 'done' | 'error' | 'frontier';
-  data: Record<string, unknown>;
+/** What a job's event says: the end of a job typed (a listener reads its message or summary), the others as sent. */
+export type JobEventBody =
+  | { event: 'error'; data: { status: 'failed' | 'cancelled'; message: string } }
+  | { event: 'done'; data: { status: 'done'; summary: RouteSummary } }
+  | { event: 'status' | 'progress' | 'route' | 'frontier'; data: Record<string, unknown> };
+/** A job's event, numbered for the SSE replay (Last-Event-ID). Listeners get it with the job: on('event', (id, ev, job)). */
+export type JobEvent = JobEventBody & { id: number };
+
+/** The departure window or ensemble set a job is one route of (windows.ts, ensembles.ts): none for a route of its own. */
+export interface JobSeriesOf {
+  windowId?: string;
+  ensembleSetId?: string;
 }
 
 export interface Job {
@@ -224,13 +232,13 @@ export class JobManager extends EventEmitter {
    * from its Last-Event-ID. Frontier events are not kept: one per stage,
    * large, and they would push the status and progress lines out.
    */
-  private emitEvent(job: Job, event: JobEvent['event'], data: Record<string, unknown>, store = true): void {
-    const ev: JobEvent = { id: job.nextEventId++, event, data };
+  private emitEvent(job: Job, body: JobEventBody, store = true): void {
+    const ev = { ...body, id: job.nextEventId++ } as JobEvent;
     if (store) {
       job.events.push(ev);
       if (job.events.length > 500) job.events.splice(0, job.events.length - 500);
     }
-    this.emit('event', job.id, ev);
+    this.emit('event', job.id, ev, job);
   }
 
   links(id: string): JobLinks {
@@ -287,8 +295,12 @@ export class JobManager extends EventEmitter {
     return this.running;
   }
 
-  /** Queue a route request (a window's departure or a set's member with its id), started at once when none is running. */
-  submit(request: RouteRequest, windowId?: string, ensembleSetId?: string): Job {
+  /**
+   * Queue a route request, started at once when none is running. `of`: the window or set it is one route of. `created`:
+   * called with the job before it is queued, so a caller that follows its events knows it before the first one (a job
+   * can start, and fail, before submit returns).
+   */
+  submit(request: RouteRequest, of: JobSeriesOf = {}, created?: (job: Job) => void): Job {
     const job: Job = {
       id: randomUUID(),
       status: 'queued',
@@ -298,11 +310,12 @@ export class JobManager extends EventEmitter {
       events: [],
       nextEventId: 1,
     };
-    if (windowId) job.windowId = windowId;
-    if (ensembleSetId) job.ensembleSetId = ensembleSetId;
+    if (of.windowId) job.windowId = of.windowId;
+    if (of.ensembleSetId) job.ensembleSetId = of.ensembleSetId;
     this.jobs.set(job.id, job);
+    created?.(job);
     this.queue.push(job.id);
-    this.emitEvent(job, 'status', { status: 'queued', position: this.queue.length });
+    this.emitEvent(job, { event: 'status', data: { status: 'queued', position: this.queue.length } });
     this.pump();
     return job;
   }
@@ -319,7 +332,7 @@ export class JobManager extends EventEmitter {
     job.status = 'running';
     job.startedAt = new Date().toISOString();
     this.running = id;
-    this.emitEvent(job, 'status', { status: 'running' });
+    this.emitEvent(job, { event: 'status', data: { status: 'running' } });
     this.emit('start', job);
   }
 
@@ -329,14 +342,14 @@ export class JobManager extends EventEmitter {
     const p: JobProgress = { time: new Date().toISOString(), stage, total, message };
     job.progress.push(p);
     if (job.progress.length > 200) job.progress.splice(0, job.progress.length - 200);
-    this.emitEvent(job, 'progress', p as unknown as Record<string, unknown>);
+    this.emitEvent(job, { event: 'progress', data: p as unknown as Record<string, unknown> });
   }
 
   /** A search stage's front: streamed to listeners, not stored (see persist). */
   onFrontier(id: string, front: Record<string, unknown>): void {
     const job = this.jobs.get(id);
     if (!job) return;
-    this.emitEvent(job, 'frontier', front, false);
+    this.emitEvent(job, { event: 'frontier', data: front }, false);
   }
 
   onDone(
@@ -356,18 +369,19 @@ export class JobManager extends EventEmitter {
     job.skeleton = skeleton;
     job.fronts = fronts;
     job.summary = summary;
-    this.emitEvent(job, 'route', geojson);
-    this.emitEvent(job, 'done', { status: 'done', summary });
+    this.emitEvent(job, { event: 'route', data: geojson });
+    this.emitEvent(job, { event: 'done', data: { status: 'done', summary } });
     this.finish(job);
   }
 
   onError(id: string, message: string, cancelled = false): void {
     const job = this.jobs.get(id);
     if (!job) return;
-    job.status = cancelled ? 'cancelled' : 'failed';
+    const status = cancelled ? 'cancelled' : 'failed';
+    job.status = status;
     job.finishedAt = new Date().toISOString();
     job.error = message;
-    this.emitEvent(job, 'error', { status: job.status, message });
+    this.emitEvent(job, { event: 'error', data: { status, message } });
     this.finish(job);
   }
 
@@ -376,7 +390,7 @@ export class JobManager extends EventEmitter {
     if (!job) return;
     if (resourceId) job.resourceId = resourceId;
     if (error) job.publishError = error;
-    this.emitEvent(job, 'status', { status: job.status, resource_id: job.resourceId, publish_error: job.publishError });
+    this.emitEvent(job, { event: 'status', data: { status: job.status, resource_id: job.resourceId, publish_error: job.publishError } });
     this.persist(job);
   }
 

@@ -226,6 +226,23 @@ export const VESSEL_FIELDS = {
 const Point = Type.Object({ lat: Type.Number(), lon: Type.Number() });
 
 /** The whole route request: the type, the validator's ranges and the OpenAPI schema. */
+/** The fields of `forecast_member`: the schema (OpenAPI) and the check (validateRouteRequest) both read them. */
+const FORECAST_MEMBER_FIELDS = {
+  model: Type.Enum(ENSEMBLE_MODELS, { type: 'string', description: 'The ensemble (downloaded: plugin config Ensemble downloads)' }),
+  member: Type.Integer({
+    minimum: 0,
+    maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+    description: 'The member (0 = the control, where the ensemble has one), on disk in its cycle in use',
+  }),
+  cycle: Type.Optional(
+    Type.String({
+      pattern: '^[0-9]{10}$',
+      title: 'yyyymmddHH',
+      description: 'The ensemble cycle (yyyymmddHH) the member must be of; refused when that is no longer the one in use',
+    })
+  ),
+};
+
 export const RouteRequestSchema = Type.Object({
   start: Point,
   end: Point,
@@ -248,26 +265,10 @@ export const RouteRequestSchema = Type.Object({
     Type.Object(VESSEL_FIELDS, { description: 'Per-route overrides of the vessel settings (SI); absent keys use the settings.' })
   ),
   forecast_member: Type.Optional(
-    Type.Object(
-      {
-        model: Type.Enum(ENSEMBLE_MODELS, { type: 'string', description: 'The ensemble (downloaded: plugin config Ensemble downloads)' }),
-        member: Type.Integer({
-          minimum: 0,
-          maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
-          description: 'The member (0 = the control, where the ensemble has one), on disk in its cycle in use',
-        }),
-        cycle: Type.Optional(
-          Type.String({
-            pattern: '^[0-9]{10}$',
-            description: 'The ensemble cycle (yyyymmddHH) the member must be of; refused when that is no longer the one in use',
-          })
-        ),
-      },
-      {
-        description:
-          "Route on this ensemble member's forecast instead of the main one (no regional wind). Ensemble sets (POST /api/ensemble-sets) send one route per member with it. Absent = the main forecast.",
-      }
-    )
+    Type.Object(FORECAST_MEMBER_FIELDS, {
+      description:
+        "Route on this ensemble member's forecast instead of the main one (no regional wind). Ensemble sets (POST /api/ensemble-sets) send one route per member with it. Absent = the main forecast.",
+    })
   ),
 });
 
@@ -292,6 +293,9 @@ interface FieldJson {
   minimum?: number;
   maximum?: number;
   maxLength?: number;
+  /** A string's pattern, and its name for people (`title`). */
+  pattern?: string;
+  title?: string;
 }
 
 /** Why a field's value does not fit its schema, or null. */
@@ -309,11 +313,21 @@ function fieldError(name: string, v: unknown, schema: TSchema): string | null {
       if (s.minimum !== undefined && v < s.minimum) return `${name} must be >= ${s.minimum}`;
       if (s.maximum !== undefined && v > s.maximum) return `${name} must be <= ${s.maximum}`;
       return null;
+    case 'integer':
+      if (
+        typeof v !== 'number' ||
+        !Number.isInteger(v) ||
+        (s.minimum !== undefined && v < s.minimum) ||
+        (s.maximum !== undefined && v > s.maximum)
+      )
+        return `${name} must be a whole number ${s.minimum ?? ''}..${s.maximum ?? ''}`;
+      return null;
     case 'boolean':
       return typeof v === 'boolean' ? null : `${name} must be true or false`;
     case 'string':
       if (typeof v !== 'string') return `${name} must be a string`;
       if (s.maxLength !== undefined && v.length > s.maxLength) return `${name} must be at most ${s.maxLength} characters`;
+      if (s.pattern !== undefined && !new RegExp(s.pattern).test(v)) return `${name} must be ${s.title ?? `like ${s.pattern}`}`;
       return null;
     default:
       throw new Error(`request_schema: field ${name} has no check`);
@@ -350,15 +364,15 @@ export function validateRouteRequest(b: RouteRequest): string | null {
   if (b.forecast_member !== undefined) {
     // A member's forecast and no forecast at all cannot both be the route's weather.
     if (b.no_forecast === true) return 'forecast_member cannot be combined with no_forecast';
-    const e = b.forecast_member as unknown as Record<string, unknown> | null;
-    if (!e || typeof e !== 'object') return 'forecast_member must be {model, member}';
-    if (!(ENSEMBLE_MODELS as readonly string[]).includes(e.model as string))
-      return `forecast_member.model must be ${ENSEMBLE_MODELS.join(' or ')}`;
-    const n = e.member;
-    const max = ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1];
-    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > max) return `forecast_member.member must be a whole number 0..${max}`;
-    if (e.cycle !== undefined && (typeof e.cycle !== 'string' || !/^[0-9]{10}$/.test(e.cycle)))
-      return 'forecast_member.cycle must be yyyymmddHH';
+    const fm = b.forecast_member as unknown as Record<string, unknown> | null;
+    if (!fm || typeof fm !== 'object' || fm.model === undefined || fm.member === undefined)
+      return 'forecast_member must be {model, member}';
+    for (const [name, schema] of Object.entries(FORECAST_MEMBER_FIELDS)) {
+      const v = fm[name];
+      if (v === undefined) continue;
+      const e = fieldError(`forecast_member.${name}`, v, schema);
+      if (e) return e;
+    }
   }
   if (b.vessel !== undefined) {
     if (b.vessel === null || typeof b.vessel !== 'object') return 'vessel must be an object';

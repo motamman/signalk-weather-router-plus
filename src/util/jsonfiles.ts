@@ -1,7 +1,7 @@
 /**
- * The files the plugin keeps its records in, one JSON file each in a folder of their own: route jobs (jobs.ts),
- * departure windows (windows.ts) and ensemble sets (ensembles.ts). They are saved, removed and read back here, the one
- * way for all three. A failure is never thrown: it is returned, or reported through `log`, and what it means for the
+ * The files the plugin keeps its records in: route jobs (plugin/jobs.ts), departure windows and ensemble sets
+ * (plugin/jobseries.ts), one JSON file each in a folder of their own, and each ensemble's record of its cycle in use
+ * (data/ensemble.ts). They are saved, removed and read back here, the one way for all of them. A failure is never thrown: it is returned, or reported through `log`, and what it means for the
  * record (its save_error, a file left as it is) is its owner's to say.
  */
 

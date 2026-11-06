@@ -253,18 +253,23 @@ function parseIndex(text: string, url: string): IndexRecord[] {
   return out;
 }
 
-/** A cached message is there and starts with GRIB. */
+/**
+ * A cached message is there and starts with GRIB: false when there is no such file; a file that is there but cannot
+ * be read throws (a failing disk is reported, never taken for a message to fetch again).
+ */
 export function isGribFile(p: string): boolean {
+  let fd: number;
   try {
-    const fd = fs.openSync(p, 'r');
-    try {
-      const head = Buffer.alloc(4);
-      return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return false;
+    fd = fs.openSync(p, 'r');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+  try {
+    const head = Buffer.alloc(4);
+    return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -517,14 +522,15 @@ export class EcmwfClient {
     return msg;
   }
 
-  /** Delete cached cycles other than `keep`. */
+  /** Delete cached cycles other than `keep`. No cache folder yet: nothing to delete; one that cannot be read throws. */
   pruneCache(keep: Cycle[]): void {
     const keepNames = new Set(keep.map(c => `${c.yyyymmdd}${c.hh}`));
     let entries: string[];
     try {
       entries = fs.readdirSync(this.cacheDir);
-    } catch {
-      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
     }
     for (const e of entries) {
       if (/^\d{10}$/.test(e) && !keepNames.has(e)) {

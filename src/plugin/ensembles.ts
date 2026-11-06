@@ -1,26 +1,21 @@
 /**
  * Ensemble sets: the same route computed on each member of an ensemble (POST /api/ensemble-sets), so the passage's
  * routes in the weathers the ensemble thinks possible can be compared: where they go, when each arrives, how much each
- * motors, the strongest wind and highest waves each meets. Each member is an ordinary route job (JobManager) on that
- * member's forecast (request.forecast_member; worker/route.ts memberRun), submitted one at a time when the one before
- * has finished, as departure windows submit theirs (windows.ts), so a route asked for meanwhile waits behind one job.
- * Those jobs carry the set's id: they are left out of the job list and its trimming, never published to the Resources
- * API, and go when their set is deleted. Once a member is done its route is kept only in the job's file
- * (JobManager.release) and read from there when it is opened.
+ * motors, the strongest wind and highest waves each meets. A set is a series of route jobs, one per member, each on
+ * that member's forecast (request.forecast_member; worker/route.ts memberRun), submitted one at a time
+ * (jobseries.ts JobSeries: following, cancelling, saving and restoring are shared with the departure windows).
  *
- * Per member the set keeps what a comparison needs: the departure windows' metrics (windows.ts departureMetrics).
+ * Per member the set keeps what a comparison needs: the departure windows' metrics (jobseries.ts departureMetrics).
  *
  * SI throughout (m/s, m, s); times ISO 8601.
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Type, type Static } from 'typebox';
-import type { JobEvent, JobManager } from './jobs';
+import type { Job, JobManager, JobSeriesOf } from './jobs';
+import type { RouteRequest } from './protocol';
 import { RouteRequestSchema, validateRouteRequest, ENSEMBLE_MEMBERS_RANGE } from './request_schema';
-import { departureMetrics, DepartureMetricsSchema } from './windows';
-import { loadJsonFiles, removeJson, saveJson } from './jsonfiles';
+import { DepartureMetricsSchema, departureMetrics, JobSeries, type SeriesDeps, type SeriesItem } from './jobseries';
 import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
 import { cycleName } from '../data/decoded';
 
@@ -135,57 +130,44 @@ export function validateEnsembleSetRequest(b: unknown): string | null {
   return routeErr ? `route: ${routeErr}` : null;
 }
 
-export interface EnsembleSetDeps {
-  /** Stop the route worker's running job (a queued one the job manager cancels itself). */
-  cancelRunning: (jobId: string) => void;
+export interface EnsembleSetDeps extends SeriesDeps {
   /** The cycle (ISO) and members on disk of an ensemble's cycle in use, or null when none is. */
   onDisk: (model: EnsembleModelId) => { cycle: string; members: number[] } | null;
-  /** Where a failure the set carries is reported (persist). */
-  log: (msg: string) => void;
 }
 
-export class EnsembleSetManager {
-  private sets = new Map<string, EnsembleSet>();
-  private byJob = new Map<string, { s: EnsembleSet; k: number }>();
-  private readonly dir: string;
-  private readonly listener = (id: string, ev: JobEvent): void => this.onJobEvent(id, ev);
-
+export class EnsembleSetManager extends JobSeries<EnsembleSet> {
   constructor(
-    private readonly jobs: JobManager,
+    jobs: JobManager,
     dataDir: string,
-    private readonly deps: EnsembleSetDeps,
-    private readonly basePath = ''
+    private readonly setDeps: EnsembleSetDeps,
+    basePath = ''
   ) {
-    this.dir = path.join(dataDir, 'ensemble-sets');
-    fs.mkdirSync(this.dir, { recursive: true });
-    this.loadPersisted();
-    jobs.on('event', this.listener);
-  }
-
-  /** Stop listening (plugin stop). */
-  close(): void {
-    this.jobs.off('event', this.listener);
-  }
-
-  get running(): number {
-    return [...this.sets.values()].filter(s => s.status === 'running').length;
-  }
-
-  links(id: string): EnsembleSetPublic['links'] {
-    const b = `${this.basePath}/api/ensemble-sets/${id}`;
-    return { self: b, cancel: `${b}/cancel` };
+    super(
+      jobs,
+      dataDir,
+      setDeps,
+      {
+        noun: { one: 'ensemble set', a: 'an ensemble set', many: 'ensemble sets' },
+        short: 'set',
+        item: 'member',
+        folder: 'ensemble-sets',
+        route: 'ensemble-sets',
+        keep: ENSEMBLE_SET_LIMITS.keep,
+      },
+      basePath
+    );
   }
 
   /**
    * Start a set (the request validated by validateEnsembleSetRequest): the first `members` members on disk of the
-   * ensemble's cycle in use, the control first where there is one. Throws when the ensemble or that many members are
-   * not on disk.
+   * ensemble's cycle in use, the control first where there is one. Refused, with why, when the ensemble or that many
+   * members are not on disk.
    */
-  create(req: EnsembleSetRequest): EnsembleSet {
-    const disk = this.deps.onDisk(req.model);
+  create(req: EnsembleSetRequest): { set: EnsembleSet } | { refused: string } {
+    const disk = this.setDeps.onDisk(req.model);
     const name = ENSEMBLES[req.model].name;
-    if (!disk) throw new Error(`${name} is not on disk (plugin config: Ensemble downloads)`);
-    if (disk.members.length < req.members) throw new Error(`${name} has ${disk.members.length} members on disk, ${req.members} asked`);
+    if (!disk) return { refused: `${name} is not on disk (plugin config: Ensemble downloads)` };
+    if (disk.members.length < req.members) return { refused: `${name} has ${disk.members.length} members on disk, ${req.members} asked` };
     const s: EnsembleSet = {
       id: randomUUID(),
       status: 'running',
@@ -195,25 +177,13 @@ export class EnsembleSetManager {
       cycle: disk.cycle,
       members: disk.members.slice(0, req.members).map(member => ({ member, job_id: null, status: 'pending' })),
     };
-    this.sets.set(s.id, s);
-    this.advance(s);
-    return s;
+    this.start(s);
+    return { set: s };
   }
 
-  get(id: string): EnsembleSet | undefined {
-    return this.sets.get(id);
-  }
-
-  list(limit = 20): EnsembleSet[] {
-    return [...this.sets.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, limit);
-  }
-
-  /** The set as the API shows it: the members, the progress of the one computing, links. */
+  /** The set as the API shows it: the members, the main forecast's route, the progress of the one computing, links. */
   toPublic(s: EnsembleSet): EnsembleSetPublic {
-    const active = s.members.find(m => m.status === 'running' || m.status === 'queued');
-    const job = active?.job_id ? this.jobs.get(active.job_id) : undefined;
-    const last = job?.progress[job.progress.length - 1];
-    return { ...s, main: this.main(s), progress: last ? last.message : null, links: this.links(s.id) };
+    return { ...s, main: this.main(s), progress: this.progress(s), links: this.links(s.id) };
   }
 
   /** The main forecast's route of the set (request.main_job_id): its status, and its metrics once done. */
@@ -222,174 +192,35 @@ export class EnsembleSetManager {
     const job = id ? this.jobs.full(id) : undefined;
     if (!id || !job) return null;
     if (job.status !== 'done') return { job_id: id, status: job.status };
-    // A done job always carries its summary (JobManager.onDone sets it before the job is saved): departureMetrics
-    // cannot throw here.
     return { job_id: id, status: job.status, metrics: departureMetrics(job) };
   }
 
-  /** Cancel what is left: members not started, and the one queued or computing. */
-  cancel(id: string): boolean {
-    const s = this.sets.get(id);
-    if (!s || s.status !== 'running') return false;
-    // Not running from here on, so the cancelled job's event does not submit the next member.
-    s.status = 'cancelled';
-    for (const m of s.members) if (m.status === 'pending') m.status = 'cancelled';
-    for (const m of s.members) {
-      if ((m.status === 'queued' || m.status === 'running') && m.job_id) {
-        const what = this.jobs.cancel(m.job_id);
-        if (what === 'running') this.deps.cancelRunning(m.job_id);
-      }
-    }
-    this.finish(s, 'cancelled');
-    return true;
+  protected items(s: EnsembleSet): SeriesItem[] {
+    return s.members;
   }
 
-  /** A cancelled set whose member's route worker has not stopped yet: its job ends when the worker answers. */
-  stopping(s: EnsembleSet): boolean {
-    return s.members.some(m => m.job_id !== null && this.jobs.get(m.job_id)?.status === 'running');
+  protected holds(v: unknown): v is EnsembleSet {
+    return !!v && typeof v === 'object' && !!(v as EnsembleSet).id && Array.isArray((v as EnsembleSet).members);
   }
 
-  /** Delete a finished set and its route jobs; not while it runs, nor while it is stopping. */
-  delete(id: string): boolean {
-    const s = this.sets.get(id);
-    if (!s || s.status === 'running' || this.stopping(s)) return false;
-    for (const m of s.members) {
-      if (!m.job_id) continue;
-      this.byJob.delete(m.job_id);
-      this.jobs.delete(m.job_id);
-    }
-    this.sets.delete(id);
-    // A file that cannot be removed stays: the set comes back after a restart.
-    const why = removeJson(path.join(this.dir, `${id}.json`));
-    if (why) this.deps.log(`ensemble set ${id}: its file could not be deleted (${why}); it comes back after a restart`);
-    return true;
+  protected of(s: EnsembleSet): JobSeriesOf {
+    return { ensembleSetId: s.id };
   }
 
-  /**
-   * A member's route job moved on: running, or done (its metrics taken) or failed or cancelled, then the next member
-   * is submitted while the set runs. Events of jobs that are not a set member are ignored.
-   */
-  private onJobEvent(jobId: string, ev: JobEvent): void {
-    const at = this.byJob.get(jobId);
-    if (!at) return;
-    const { s, k } = at;
+  protected seriesOfJob(job: Job): string | undefined {
+    return job.ensembleSetId;
+  }
+
+  /** Member `k`'s route: the set's request on that member's forecast, of the set's cycle, never published. */
+  protected nextRoute(s: EnsembleSet, k: number): RouteRequest {
     const m = s.members[k];
-    if (ev.event === 'status' && ev.data.status === 'running' && m.status === 'queued') {
-      m.status = 'running';
-      this.persist(s);
-      return;
-    }
-    if (ev.event !== 'done' && ev.event !== 'error') return;
-    const job = this.jobs.get(jobId);
-    if (ev.event === 'done' && job) {
-      m.status = 'done';
-      // A done job always carries its summary (JobManager.onDone sets it first): departureMetrics cannot throw.
-      m.metrics = departureMetrics(job);
-    } else {
-      m.status = ev.data.status === 'cancelled' ? 'cancelled' : 'failed';
-      m.error = String(ev.data.message ?? job?.error ?? 'failed');
-    }
-    if (s.status === 'running') this.advance(s);
-    else this.persist(s);
-  }
-
-  /** Submit the next member, or finish the set. */
-  private advance(s: EnsembleSet): void {
-    for (let k = 0; k < s.members.length; k++) {
-      const m = s.members[k];
-      if (m.status !== 'pending') continue;
-      // Each member is its own route job, on that member's forecast, never published to the Resources API.
-      const name = `${s.request.route.name?.trim() || 'Ensemble'} · ${s.name} ${m.member === 0 ? 'control' : `member ${m.member}`}`;
-      const job = this.jobs.submit(
-        {
-          ...s.request.route,
-          // Every member of the set on the same cycle: one that is gone fails its member, never mixes two runs.
-          forecast_member: { model: s.request.model, member: m.member, cycle: cycleName(new Date(s.cycle)) },
-          publish: false,
-          name,
-        },
-        undefined,
-        s.id
-      );
-      m.job_id = job.id;
-      this.byJob.set(job.id, { s, k });
-      // Started at once and failed at once: its error event came before byJob knew the job, so it is taken here.
-      if (job.status === 'failed' || job.status === 'cancelled') {
-        m.status = job.status;
-        m.error = job.error ?? 'failed';
-        continue;
-      }
-      m.status = job.status === 'running' ? 'running' : 'queued';
-      this.persist(s);
-      return;
-    }
-    this.finish(s, 'done');
-  }
-
-  /** End the set with `status`, save it, and trim the finished ones. */
-  private finish(s: EnsembleSet, status: EnsembleSetStatus): void {
-    s.status = status;
-    s.finished_at = new Date().toISOString();
-    this.persist(s);
-    this.trim();
-  }
-
-  /**
-   * Save the ensemble set's file, how it outlives a restart (it runs from memory). A save that fails (a full or
-   * read-only disk) is the ensemble set's to carry, not its caller's: `save_error` says why its file is behind (the API
-   * shows it), the failure is reported, and the next change saves it again, clearing it. It never throws into a job
-   * event, a request or the start-up.
-   */
-  private persist(s: EnsembleSet): void {
-    delete s.save_error;
-    const why = saveJson(path.join(this.dir, `${s.id}.json`), s);
-    if (!why) return;
-    s.save_error = `its file could not be saved: ${why}`;
-    this.deps.log(`ensemble set ${s.id}: ${s.save_error}`);
-  }
-
-  /** Finished sets beyond ENSEMBLE_SET_LIMITS.keep, oldest first, deleted with their route jobs. */
-  private trim(): void {
-    const finished = [...this.sets.values()]
-      .filter(s => s.status !== 'running')
-      .sort((a, b) => (b.finished_at ?? b.created_at).localeCompare(a.finished_at ?? a.created_at));
-    for (const s of finished.slice(ENSEMBLE_SET_LIMITS.keep)) this.delete(s.id);
-  }
-
-  /**
-   * Sets from before a restart. One that was computing ends failed: its job in progress the job manager has already
-   * failed, its members not started are cancelled. Route jobs of sets that are gone are deleted.
-   */
-  private loadPersisted(): void {
-    /** A set as saved: an id and its members; any other file is not restored. */
-    const isSet = (v: unknown): v is EnsembleSet =>
-      !!v && typeof v === 'object' && !!(v as EnsembleSet).id && Array.isArray((v as EnsembleSet).members);
-    const noun = { one: 'ensemble set', a: 'an ensemble set', many: 'ensemble sets' };
-    for (const s of loadJsonFiles(this.dir, noun, isSet, this.deps.log)) {
-      this.sets.set(s.id, s);
-      s.members.forEach((m, k) => {
-        if (!m.job_id) return;
-        this.byJob.set(m.job_id, { s, k });
-        if (m.status !== 'queued' && m.status !== 'running') return;
-        const job = this.jobs.full(m.job_id);
-        if (job && (job.status === 'done' || job.status === 'cancelled')) {
-          m.status = job.status;
-          if (job.status === 'done') m.metrics = departureMetrics(job);
-        } else {
-          m.status = 'failed';
-          m.error = job?.error ?? 'plugin restarted while the member was being computed';
-        }
-      });
-      if (s.status === 'running') {
-        for (const m of s.members) if (m.status === 'pending') m.status = 'cancelled';
-        s.status = 'failed';
-        s.error = 'plugin restarted while the set was in progress';
-        s.finished_at = new Date().toISOString();
-        this.persist(s);
-      }
-    }
-    const known = new Set(this.byJob.keys());
-    for (const j of this.jobs.list(Number.MAX_SAFE_INTEGER, true)) if (j.ensembleSetId && !known.has(j.id)) this.jobs.delete(j.id);
-    this.trim();
+    const name = `${s.request.route.name?.trim() || 'Ensemble'} · ${s.name} ${m.member === 0 ? 'control' : `member ${m.member}`}`;
+    return {
+      ...s.request.route,
+      // Every member of the set on the same cycle: one that is gone fails its member, never mixes two runs.
+      forecast_member: { model: s.request.model, member: m.member, cycle: cycleName(new Date(s.cycle)) },
+      publish: false,
+      name,
+    };
   }
 }

@@ -423,14 +423,21 @@ function _rateNote(ok) {
 // not loaded") is a routine answer, not a server failure: it must not
 // wind up the backoff for every other caller.
 const _authChannels = new Map();
+/** Abort the request in flight on `channel`, if any: what it was for has been superseded (a new request, a screen cleared). */
+export function abortChannel(channel) {
+  const prev = _authChannels.get(channel);
+  if (prev) prev.abort();
+  _authChannels.delete(channel);
+}
+/** The channel of every request that opens a route on the map: opening another, computing one or clearing it supersedes it. */
+export const ROUTE_OPEN_CHANNEL = 'route-load';
 export async function authFetch(url, opts, channel) {
   if (AuthGate.tripped) throw new Error('auth-gate-tripped');
   opts = Object.assign({ credentials: 'same-origin' }, opts || {});
   const ctrl = new AbortController();
   opts.signal = ctrl.signal;
   if (channel) {
-    const prev = _authChannels.get(channel);
-    if (prev) { try { prev.abort(); } catch (_) {} }
+    abortChannel(channel);
     _authChannels.set(channel, ctrl);
   }
   AuthGate.track(ctrl);

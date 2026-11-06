@@ -94,6 +94,8 @@ uses [Semantic Versioning](https://semver.org/).
 - **A list's `limit` that is not a whole number from 1 is refused**
   (`400`) on `GET /api/routes` and `GET /api/windows`; it was read as
   the default. A larger one is still held to what the list can hold.
+  With no `limit`, `GET /api/windows` lists every window (at most 12);
+  its default was 20, more than it can hold.
 
 ### Fixed
 
@@ -122,11 +124,12 @@ uses [Semantic Versioning](https://semver.org/).
   rewrites: before, every save of a window's job read its route back
   from its file and wrote it again, so a read that failed lost the
   route. Until that file is saved, the job's own file holds the results
-  too: an old job file whose move fails keeps them, and a job whose
-  results and own file both fail to save has them only in memory, so a
-  restart before a save succeeds loses that job. Job files saved before
-  keep loading; their results are moved to their own file at start-up.
-  After a restart a job's event log is the one it finished with. Jobs, departure windows and ensemble sets
+  too. A restart brings back each job as its last successful save left
+  it: its own file, with its results inside for as long as their own
+  file was never saved; a job none of whose saves succeeded is lost. Job
+  files saved before keep loading; their results are moved to their own
+  file at start-up. After a restart a job's event log is the one it
+  finished with. Jobs, departure windows and ensemble sets
   save their files one way (`src/plugin/jsonfiles.ts`): a save that
   fails also says when its partial copy could not be removed.
 

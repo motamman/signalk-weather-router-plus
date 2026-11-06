@@ -130,7 +130,7 @@ test("GET /api/routes/:id/result, /signalk, /events: a departure window's route 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
   try {
     const jobs = new JobManager(dir, 50, '/x', m => assert.fail(`unexpected log: ${m}`));
-    const job = jobs.submit({ ...ROUTE, departure: '2026-11-02T00:00:00.000Z' }, 'w1');
+    const job = jobs.submit({ ...ROUTE, departure: '2026-11-02T00:00:00.000Z' }, { windowId: 'w1' });
     const geo = {
       type: 'FeatureCollection',
       features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: [] }, properties: {} }],
@@ -368,7 +368,8 @@ test('ensemble sets: create (400 off disk, 429 at the limit), list (a bad limit 
     }
     const listed = await call('GET /api/ensemble-sets', {});
     assert.equal(listed.status, 200);
-    assert.equal((listed.body as unknown as unknown[]).length, 2);
+    assert.equal((listed.body as unknown as unknown[]).length, 2, 'all of them by default');
+    assert.equal(((await call('GET /api/ensemble-sets', { query: { limit: '1' } })).body as unknown as unknown[]).length, 1);
     assert.equal((await call('GET /api/ensemble-sets/:id', { params: { id: 'nosuch' } })).status, 404);
     const got = await call('GET /api/ensemble-sets/:id', { params: { id: a.id } });
     assert.equal(got.status, 200);

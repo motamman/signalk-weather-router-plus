@@ -116,6 +116,18 @@ test('ensembles off: what an earlier setting left on disk goes, and the status i
   }
 });
 
+test('ensembles off: a GRIB cache left by a download that failed before any decode goes too', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ensref-'));
+  try {
+    put(root, path.join(ENSEMBLE_GRIB_DIR, 'ifs-ens', CYCLE_NAME, 'm01', 'enfo-000h-10u.grib2'));
+    assert.ok(!fs.existsSync(path.join(root, ENSEMBLE_DECODED_DIR)), 'no decoded folder');
+    await refreshEnsembles(state(root, []), null, () => null, undefined, neverRun);
+    assert.ok(!fs.existsSync(path.join(root, ENSEMBLE_GRIB_DIR, 'ifs-ens')));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('held or offline: each missing ensemble says why, and no download starts', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ensref-'));
   try {
@@ -236,6 +248,25 @@ test('a record of the cycle in use that cannot be read is reported each round, a
       )
     );
     assert.equal(readEnsembleCurrent(root, 'ifs-ens')?.cycle, CYCLE_NAME, 'complete: written again this round');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a cycle complete on disk whose record cannot be written is not in use, and its status and the log say why', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ensref-'));
+  try {
+    for (const n of [1, 2, 3, 4, 5]) decodedMember(root, n);
+    // A folder where the record's copy is written (on every OS): the record cannot be saved.
+    fs.mkdirSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json.tmp', 'inside'), { recursive: true });
+    const logged: string[] = [];
+    const st = state(root, ['ifs-ens']);
+    (st as unknown as { log: (level: string, m: string) => void }).log = (level, m) => logged.push(`${level}: ${m}`);
+    await refreshEnsembles(st, null, () => null, undefined, neverRun);
+    assert.equal(readEnsembleCurrent(root, 'ifs-ens'), null, 'not in use');
+    assert.match(st.ensembles['ifs-ens']?.error ?? '', /^cycle 2026110600 complete but not in use: current\.json could not be written: /);
+    assert.equal(st.ensembles['ifs-ens']?.loading, null);
+    assert.ok(logged.some(m => m.startsWith('error: ensembles: ECMWF IFS ENS: cycle 2026110600 complete but not in use: ')));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

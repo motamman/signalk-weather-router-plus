@@ -19,10 +19,6 @@ var signalk_weather_router_plus = (function () {
   'use strict';
   var React = null;
   var API = '/plugins/signalk-weather-router-plus/api';
-  var MIRRORS = ['ecmwf', 'aws', 'google'];
-  // The ensembles and member counts the plugin offers (src/data/ecmwf.ts ENSEMBLES, ENSEMBLE_MEMBER_CHOICES).
-  var ENSEMBLE_MODELS = [{ id: 'ifs-ens', name: 'ECMWF IFS ENS' }, { id: 'aifs-ens', name: 'ECMWF AIFS ENS' }];
-  var ENSEMBLE_MEMBERS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
   var DEFAULTS = { enabled: true, radius: 250000, window: 0, maxZoom: 15, diskCap: 20e9, workers: 2, followView: true };
   var UNIT_PATH = { distance: 'navigation/log', time: 'navigation/racing/timeToStart' };
   var MISSING = '—';
@@ -531,10 +527,15 @@ var signalk_weather_router_plus = (function () {
         'A folder of .pol / .csv files to offer instead of the bundled library (weather_routing_pi, GPL-3.0). Polars you generate are kept in the plugin data directory either way.'));
     var MIRROR_LABELS = { ecmwf: 'ECMWF (data.ecmwf.int)', aws: 'Amazon (AWS Open Data)', google: 'Google Cloud' };
     var fc = status && status.forecast ? status.forecast : null;
-    // Ensembles (config.ts resolveEnsemble): off unless enabled; on, IFS ENS until another is ticked.
-    var ensembleOn = !!get(['forecast', 'ensemble', 'enabled'], false);
+    // What the plugin config offers (config.ts, sent in the status): until the status answers, the mirror shows as set
+    // and the ensemble choices are not shown.
+    var choices = status && status.config_choices ? status.config_choices : null;
+    var mirrorNow = get(['forecast', 'mirror'], choices ? choices.mirror_default : '');
+    var ensDefaults = choices ? choices.ensemble_defaults : null;
+    var ensembleOn = ensDefaults ? !!get(['forecast', 'ensemble', 'enabled'], ensDefaults.enabled) : false;
     var ensembleStatus = status && Array.isArray(status.ensembles) ? status.ensembles : [];
-    var ensembleModels = get(['forecast', 'ensemble', 'models'], ['ifs-ens']);
+    var ensembleModels = ensDefaults ? get(['forecast', 'ensemble', 'models'], ensDefaults.models) : [];
+    // A config the plugin refused at start (models not a list) is shown as none ticked, so it can be put right here.
     if (!Array.isArray(ensembleModels)) ensembleModels = [];
     var forecastSection = card('Forecast download',
       "Where the ECMWF open-data forecast is fetched from. Same data on every mirror; pick the one that's fast from your connection.",
@@ -542,22 +543,18 @@ var signalk_weather_router_plus = (function () {
         ? statusDot('ok', 'Last fetched: the ' + String(fc.cycle).slice(0, 16).replace('T', ' ') + 'Z run, loaded ' + (fc.loaded_at ? String(fc.loaded_at).slice(0, 16).replace('T', ' ') + 'Z' : '') + (fc.model ? ' (' + fc.model + ')' : ''))
         : statusDot('off', status && status.forecast_loading ? 'Fetching a forecast now.' : 'No forecast loaded yet.')),
       row('Mirror',
-        h('select', { className: 'form-select form-control', style: { maxWidth: 320 }, value: get(['forecast', 'mirror'], 'ecmwf'),
+        h('select', { className: 'form-select form-control', style: { maxWidth: 320 }, value: mirrorNow,
           onChange: function (e) { set(['forecast', 'mirror'], e.target.value); } },
-          MIRRORS.map(function (m) { return h('option', { key: m, value: m }, MIRROR_LABELS[m] || m); })),
+          (choices ? choices.mirrors : [mirrorNow]).map(function (m) { return h('option', { key: m, value: m }, MIRROR_LABELS[m] || m); })),
         'Changes which server is contacted every six hours. Nothing else.'),
       ensembleStatus.length ? h('div', { className: 'mb-2 small' }, ensembleStatus.map(function (e) {
-        var text = e.name + ': ' + (e.cycle ? e.members.length + ' members of the ' + String(e.cycle).slice(0, 16).replace('T', ' ') + 'Z run, ' + gb(e.bytes) + ' on disk' : 'none on disk yet')
+        var text = e.name + ': ' + (e.cycle ? e.members.length + ' members of the ' + String(e.cycle).slice(0, 16).replace('T', ' ') + 'Z run, ' + (e.bytes === null ? MISSING : gb(e.bytes)) + ' on disk' : 'none on disk yet')
           + (e.loading ? '; downloading the ' + String(e.loading.cycle).slice(0, 16).replace('T', ' ') + 'Z run' + (e.loading.total ? ' (' + e.loading.done + ' of ' + e.loading.total + ')' : '') : '')
           + (e.error ? '; ' + e.error : '');
         return h('div', { key: e.model }, statusDot(e.error ? 'warn' : e.cycle ? 'ok' : 'off', text));
       })) : null,
-      row('Ensembles', check(['forecast', 'ensemble', 'enabled'], false, 'Download ensembles'),
-        "Each cycle, after the forecast, also download ECMWF ensembles (wind and waves, to the forecast's horizon), so Find Route can " +
-        "compute the route on each member's forecast as well: where each member's route goes and when it arrives. At 72 h, per member " +
-        'and cycle, on the test box (Pi 5): about 70 MB downloaded (5 IFS ENS members took 350,757,112 B, 2026-11-05); on disk 519 MB ' +
-        'for an IFS ENS member and 270 MB for an AIFS ENS member (du, 2026-11-06).'),
-      ensembleOn ? row('Which', h('div', null, ENSEMBLE_MODELS.map(function (m) {
+      ensDefaults ? row('Ensembles', check(['forecast', 'ensemble', 'enabled'], ensDefaults.enabled, 'Download ensembles'), choices.ensemble_note) : null,
+      ensembleOn ? row('Which', h('div', null, choices.ensembles.map(function (m) {
         var on = ensembleModels.indexOf(m.id) >= 0;
         var last = on && ensembleModels.length === 1;
         return h('div', { className: 'form-check', key: m.id },
@@ -569,9 +566,9 @@ var signalk_weather_router_plus = (function () {
           h('label', { className: 'form-check-label', htmlFor: 'wrp-ens-' + m.id }, m.name));
       })), 'At least one while ensembles are on.') : null,
       ensembleOn ? row('Members per ensemble',
-        h('select', { className: 'form-select form-control', style: { maxWidth: 120 }, value: get(['forecast', 'ensemble', 'members'], 5),
+        h('select', { className: 'form-select form-control', style: { maxWidth: 120 }, value: get(['forecast', 'ensemble', 'members'], ensDefaults.members),
           onChange: function (e) { set(['forecast', 'ensemble', 'members'], Number(e.target.value)); } },
-          ENSEMBLE_MEMBERS.map(function (n) { return h('option', { key: n, value: n }, String(n)); })),
+          choices.ensemble_members.map(function (n) { return h('option', { key: n, value: n }, String(n)); })),
         'Members 1 to this number of each ensemble (and its control where ECMWF publishes one). A route can use any number up to it.') : null);
     var weatherSection = card('Signal K Weather API',
       'Other apps on this Signal K server (Freeboard, KIP, …) can ask it for weather at a point.',

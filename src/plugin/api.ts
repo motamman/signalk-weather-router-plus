@@ -805,10 +805,11 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   });
 
   /**
-   * A list's `limit` query: absent, the list's default; a whole number from 1, held to `max` (a list holds no more);
-   * anything else is refused (400) rather than read as the default. Null when refused (the answer is sent).
+   * A list's `limit` query: absent, `def`, which is the whole list (`max`) unless the list says otherwise; a whole
+   * number from 1, held to `max` (a list holds no more); anything else is refused (400) rather than read as the
+   * default. Null when refused (the answer is sent).
    */
-  const listLimit = (req: Request, res: Response, def: number, max: number): number | null => {
+  const listLimit = (req: Request, res: Response, max: number, def = max): number | null => {
     const raw = req.query.limit;
     if (raw === undefined) return def;
     const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
@@ -822,7 +823,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   ro.get('/api/routes', (req: Request, res: Response) => {
     const jobs = jobsOr503(res);
     if (!jobs) return;
-    const limit = listLimit(req, res, 50, 500);
+    const limit = listLimit(req, res, 500, 50);
     if (limit === null) return;
     json(
       res,
@@ -1042,7 +1043,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   ro.get('/api/windows', (req: Request, res: Response) => {
     const windows = windowsOr503(res);
     if (!windows) return;
-    const limit = listLimit(req, res, 20, WINDOW_LIMITS.keep + WINDOW_LIMITS.maxRunning);
+    const limit = listLimit(req, res, WINDOW_LIMITS.keep + WINDOW_LIMITS.maxRunning);
     if (limit === null) return;
     json(
       res,
@@ -1102,13 +1103,12 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       json(res, 429, { error: `${sets.running} ensemble sets are being computed; wait for one to finish, or cancel it` });
       return;
     }
-    let s;
-    try {
-      s = sets.create(body);
-    } catch (e) {
-      json(res, 400, { error: (e as Error).message });
+    const made = sets.create(body);
+    if ('refused' in made) {
+      json(res, 400, { error: made.refused });
       return;
     }
+    const s = made.set;
     res.setHeader('Location', sets.links(s.id).self);
     json(res, 202, { id: s.id, status: s.status, members: s.members.length, links: sets.links(s.id) });
   });
@@ -1116,7 +1116,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   ro.get('/api/ensemble-sets', (req: Request, res: Response) => {
     const sets = setsOr503(res);
     if (!sets) return;
-    const limit = listLimit(req, res, 20, ENSEMBLE_SET_LIMITS.keep + ENSEMBLE_SET_LIMITS.maxRunning);
+    const limit = listLimit(req, res, ENSEMBLE_SET_LIMITS.keep + ENSEMBLE_SET_LIMITS.maxRunning);
     if (limit === null) return;
     json(
       res,

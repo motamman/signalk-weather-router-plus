@@ -115,7 +115,7 @@ export interface WorkerState {
    * Each chosen ensemble's bytes on disk (decoded runs and GRIB cache): measured by refreshEnsembles at each round and
    * after its pass and prunes, or once by the status for a model not measured yet (worker/forecast.ts ensembleBytesOf).
    */
-  ensembleBytes?: Partial<Record<EnsembleModelId, number>>;
+  ensembleBytes?: Partial<Record<EnsembleModelId, number | null>>;
 }
 
 /** A request's finding about the connection: a server answered ('ok'), or there was no connection ('offline', why). */

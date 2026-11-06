@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { cycleFor, type EcmwfClient, ENSEMBLE_PARAMS, ENSEMBLES, type IndexRecord } from './ecmwf';
+import { cycleFor, type EcmwfClient, ENSEMBLE_PARAMS, ENSEMBLES, type IndexRecord, isGribFile } from './ecmwf';
+import { dirBytes } from './decoded';
 import { GLOBAL_CELLS } from './loader';
 import {
   ENSEMBLE_DECODED_DIR,
@@ -90,7 +91,8 @@ test('prune: keeps the members wanted in the cycles kept and the pending GRIB ca
     // aifs-ens: no longer chosen.
     mk(ENSEMBLE_DECODED_DIR, 'aifs-ens', 'm00', '2026110500');
     mk(ENSEMBLE_GRIB_DIR, 'aifs-ens', '2026110500');
-    const removed = pruneEnsembles(root, { 'ifs-ens': { members: [1, 2], cycles: ['2026110500'], pending: '2026110512' } });
+    const { removed, problems } = pruneEnsembles(root, { 'ifs-ens': { members: [1, 2], cycles: ['2026110500'], pending: '2026110512' } });
+    assert.deepEqual(problems, []);
     const has = (...p: string[]) => fs.existsSync(path.join(root, ...p));
     assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json'));
     assert.ok(!has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm03'));
@@ -139,6 +141,39 @@ function fakeClient(published: number[]): { client: EcmwfClient; indexed: number
   } as unknown as EcmwfClient;
   return { client, indexed, fetched: () => fetched };
 }
+
+test('prune: a folder that cannot be read is reported and left, and the rest is still pruned', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-prune-'));
+  try {
+    // A file where member 1's folder of runs belongs: it cannot be listed (on every OS).
+    fs.mkdirSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens'), { recursive: true });
+    fs.writeFileSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01'), 'not a folder');
+    fs.mkdirSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm09', '2026110500'), { recursive: true });
+    const { removed, problems } = pruneEnsembles(root, { 'ifs-ens': { members: [1], cycles: ['2026110500'], pending: null } });
+    assert.deepEqual(removed, ['ifs-ens m09']);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /m01: /);
+    assert.ok(fs.existsSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01')), 'left as it is');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the GRIB cache and disk-use reads: missing is none; there but unreadable throws', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-reads-'));
+  try {
+    assert.equal(isGribFile(path.join(root, 'none.grib2')), false);
+    fs.writeFileSync(path.join(root, 'a.grib2'), 'GRIB....');
+    assert.equal(isGribFile(path.join(root, 'a.grib2')), true);
+    fs.mkdirSync(path.join(root, 'folder.grib2'));
+    assert.throws(() => isGribFile(path.join(root, 'folder.grib2')));
+    assert.equal(dirBytes(path.join(root, 'none')), 0);
+    assert.equal(dirBytes(root), 8);
+    assert.throws(() => dirBytes(path.join(root, 'a.grib2')), 'a file is not a folder to walk');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('a cycle not finished yet stops the model at its last step, before reading the ladder or fetching anything; the cache kept', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));

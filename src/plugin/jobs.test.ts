@@ -62,7 +62,7 @@ test("a window's job keeps its route results in memory until they are saved; onc
   try {
     const logged: string[] = [];
     const jobs = new JobManager(dir, 50, '/p', m => logged.push(m));
-    const unsaved = jobs.submit(ROUTE, 'win-1');
+    const unsaved = jobs.submit(ROUTE, { windowId: 'win-1' });
     folderAt(path.join(dir, 'jobs', 'results', `${unsaved.id}.json.tmp`));
     jobs.onDone(unsaved.id, GEOJSON, {}, SUMMARY);
     assert.match(unsaved.saveError ?? '', /^its route results could not be saved: /);
@@ -74,7 +74,7 @@ test("a window's job keeps its route results in memory until they are saved; onc
     assert.equal(unsaved.saveError, undefined);
     assert.equal(unsaved.geojson, undefined);
     assert.deepEqual(jobs.full(unsaved.id)?.geojson, GEOJSON);
-    const saved = jobs.submit(ROUTE, 'win-1');
+    const saved = jobs.submit(ROUTE, { windowId: 'win-1' });
     jobs.onDone(saved.id, GEOJSON, {}, SUMMARY);
     assert.equal(saved.saveError, undefined);
     assert.equal(saved.geojson, undefined, 'saved: out of memory');
@@ -95,7 +95,7 @@ test("a later save of a job never touches its route results' file, even one that
   try {
     const logged: string[] = [];
     const jobs = new JobManager(dir, 50, '/p', m => logged.push(m));
-    const j = jobs.submit(ROUTE, 'win-1');
+    const j = jobs.submit(ROUTE, { windowId: 'win-1' });
     jobs.onDone(j.id, GEOJSON, {}, SUMMARY);
     const results = path.join(dir, 'jobs', 'results', `${j.id}.json`);
     fs.writeFileSync(results, '{"geojson": {"type": "Feat');

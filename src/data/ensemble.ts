@@ -35,6 +35,7 @@ import {
 } from './ecmwf';
 import { buildStep, FloatSlab, type NanFillScratch } from './forecast';
 import { GLOBAL_CELLS } from './loader';
+import { saveJson } from '../util/jsonfiles';
 
 /** The GRIB cache of the ensembles, and their decoded runs, below the plugin data directory. */
 export const ENSEMBLE_GRIB_DIR = 'ecmwf-ens';
@@ -194,7 +195,8 @@ export function readEnsembleCurrent(cacheRoot: string, model: EnsembleModelId): 
  * checked them: worker/forecast.ts refreshEnsembles, each round and after each pass), so what is in use follows what is
  * on disk whatever stopped the pass that decoded it. Written only when it changes the record: another cycle or
  * horizon, or a wanted member the record lacks. Members recorded beyond those wanted stay until the next cycle
- * replaces the record: sets started on this cycle may still be routing on them.
+ * replaces the record: sets started on this cycle may still be routing on them. Null when recorded (or already so),
+ * else why the record could not be written: the cycle is then not in use, and the caller says so.
  */
 export function recordEnsembleCycle(
   cacheRoot: string,
@@ -202,26 +204,21 @@ export function recordEnsembleCycle(
   cycleTime: Date,
   wanted: number[],
   horizonHours: number
-): void {
+): string | null {
   const cycle = cycleName(cycleTime);
   const cur = readEnsembleCurrent(cacheRoot, model);
-  if (cur && cur.cycle === cycle && cur.horizonHours === horizonHours && wanted.every(n => cur.members.includes(n))) return;
-  writeEnsembleCurrent(cacheRoot, {
+  if (cur && cur.cycle === cycle && cur.horizonHours === horizonHours && wanted.every(n => cur.members.includes(n))) return null;
+  const record: EnsembleCurrent = {
     model,
     cycle,
     cycleTimeMs: cycleTime.getTime(),
     members: wanted,
     horizonHours,
     at: new Date().toISOString(),
-  });
-}
-
-function writeEnsembleCurrent(cacheRoot: string, c: EnsembleCurrent): void {
-  const dir = path.join(cacheRoot, ENSEMBLE_DECODED_DIR, c.model);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.${CURRENT_FILE}.tmp-${process.pid}`);
-  fs.writeFileSync(tmp, JSON.stringify(c));
-  fs.renameSync(tmp, path.join(dir, CURRENT_FILE));
+  };
+  // The model's folder holds its members' runs: there whenever a member is complete.
+  const why = saveJson(path.join(cacheRoot, ENSEMBLE_DECODED_DIR, model, CURRENT_FILE), record);
+  return why ? `${CURRENT_FILE} could not be written: ${why}` : null;
 }
 
 export interface EnsembleCycleOptions {
@@ -445,24 +442,29 @@ function decodeMember(
  * What stays of each chosen model: the members wanted, in the cycle in use (current.json) and, while a pass has not
  * completed, the cycle it is decoding (`pending`: its decoded members and its GRIB cache, so the next pass resumes).
  * Everything else goes: other members, other cycles, a completed cycle's GRIB cache, models no longer chosen.
- * Returns what was removed.
+ * Returns what was removed, and each folder that could not be read or removed (left as it is; the caller reports it).
  */
 export function pruneEnsembles(
   cacheRoot: string,
   keep: Partial<Record<EnsembleModelId, { members: number[]; cycles: string[]; pending: string | null }>>
-): string[] {
+): { removed: string[]; problems: string[] } {
   const removed: string[] = [];
+  const problems: string[] = [];
   const rm = (p: string, label: string): void => {
-    fs.rmSync(p, { recursive: true, force: true });
-    removed.push(label);
+    try {
+      fs.rmSync(p, { recursive: true, force: true });
+      removed.push(label);
+    } catch (err) {
+      problems.push(`${p} could not be removed: ${(err as Error).message}`);
+    }
   };
-  /** A folder's entries; none when it is missing (any other failure is the caller's to report). */
+  /** A folder's entries; none when it is missing, none and a problem when it cannot be read. */
   const list = (p: string): string[] => {
     try {
       return fs.readdirSync(p);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') problems.push(`${p} could not be read: ${(err as Error).message}`);
+      return [];
     }
   };
   const decodedRoot = path.join(cacheRoot, ENSEMBLE_DECODED_DIR);
@@ -478,7 +480,12 @@ export function pruneEnsembles(
       if (m === CURRENT_FILE || m.startsWith('.')) continue;
       const root = path.join(decodedRoot, model, m);
       if (!k.members.some(x => memberDir(x) === m)) rm(root, `${model} ${m}`);
-      else for (const c of pruneDecodedRuns(root, cycles)) removed.push(`${model} ${m} ${c}`);
+      else
+        try {
+          for (const c of pruneDecodedRuns(root, cycles)) removed.push(`${model} ${m} ${c}`);
+        } catch (err) {
+          problems.push(`${root}: ${(err as Error).message}`);
+        }
     }
   }
   for (const model of list(gribRoot)) {
@@ -489,5 +496,5 @@ export function pruneEnsembles(
     }
     for (const c of list(path.join(gribRoot, model))) if (c !== k.pending) rm(path.join(gribRoot, model, c), `${model} GRIB ${c}`);
   }
-  return removed;
+  return { removed, problems };
 }

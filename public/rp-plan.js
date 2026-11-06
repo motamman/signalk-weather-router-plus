@@ -4,7 +4,7 @@
 // result strip, itinerary, route library, waypoint and conditions popups,
 // Live mode with the Signal K vessel.
 
-import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
+import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, abortChannel, ROUTE_OPEN_CHANNEL, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { prefs } from './rp-prefs.js';
 import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats, watchEnsembleLegend } from './rp-layers.js';
@@ -44,8 +44,8 @@ let _winStale = false;  // the markers moved since the window on screen was star
 let _ens = null;
 let _ensTimer = null;
 // The set's place on the screen, and every request made for it: a set being started, polled, its lines fetched, a
-// route's set looked up. Each request holds the screen it was asked for, and acts only while that screen has not
-// ended. _ensGone ends it, saying whether the set is to be cancelled; a new screen takes its place.
+// route's set looked up, a member's route opened. Each request holds the screen it was asked for, and acts only while
+// that screen has not ended. _ensGone ends it, saying whether the set is to be cancelled; a new screen takes its place.
 let _ensScreen = { ended: false, cancel: false, pollFailing: false };
 
 let _activeReplanES = null;
@@ -518,7 +518,7 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
   // The same for the ensemble set: one of its members' routes keeps it, another route takes it off the screen.
   if (!_ens || !(_ens.members.some(m => m.job_id === id) || (_ens.main && _ens.main.job_id === id))) _ensGone(false);
   _ensForRoute(id);
-  authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
+  authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
       if (computed) _forgetComputing(id);
@@ -569,6 +569,8 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
 
 /** Take the route off the map and the page, as after Reset: its legs, guide, fronts, pins, strip, name and ensemble. */
 function _clearDisplayedRoute() {
+  // A route still being opened would come back over the cleared screen.
+  abortChannel(ROUTE_OPEN_CHANNEL);
   _currentRouteJobId = null;
   _currentRouteName = '';
   routeSource.clear();
@@ -1928,6 +1930,8 @@ function showModal() {
   _routeStale = false;
   _winRouteGone();
   _routeComputing = true;
+  // A route still being opened would come back over the one computing.
+  abortChannel(ROUTE_OPEN_CHANNEL);
   // A new request: the route on the map goes with its strip and name (the owner, 2026-10-12); a request that fails
   // leaves the map without a route and shows the error. The markers and waypoints stay.
   setSelectedRouteFeature(null);
@@ -2888,12 +2892,24 @@ function _ensRender() {
     + '</details>';
   /** @type {NodeListOf<HTMLElement>} */ (el.querySelectorAll('tr[data-job]')).forEach(tr => { tr.onclick = () => _ensOpen(tr.dataset.job); });
 }
-// Open one member's route, or the main forecast's (a set's job is not in the Saved list: its record is fetched first).
+/**
+ * Open one member's route, or the main forecast's (a set's job is not in the Saved list: its record is fetched first),
+ * on the route-open channel: another route opened, computed or cleared meanwhile aborts it (ROUTE_OPEN_CHANNEL). The
+ * set leaving the screen ends it too (_ensScreen).
+ */
 function _ensOpen(jobId) {
-  authFetch(API + '/routes/' + encodeURIComponent(jobId), { cache: 'no-store' }, 'ensemble-route')
+  const screen = _ensScreen;
+  authFetch(API + '/routes/' + encodeURIComponent(jobId), { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
-    .then(job => { _loadRouteJob(jobId, job); _ensRender(); })
-    .catch(err => appendLog('Could not open the member route: ' + err.message, 'error'));
+    .then(job => {
+      if (screen.ended) return;
+      _loadRouteJob(jobId, job);
+      _ensRender();
+    })
+    .catch(err => {
+      if (err.name === 'AbortError' || screen.ended) return;
+      appendLog('Could not open the member route: ' + err.message, 'error');
+    });
 }
 window.addEventListener('rp:units', _ensRender);
 /**
@@ -3109,12 +3125,12 @@ function _jobOnDone(job, d) {
   routeActive = true;
   _computeUiIdle(true);
   // Fetch the route GeoJSON separately (SSE is not for large payloads).
-  authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
+  authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
       _forgetComputing(id);
       // An answer for a job no longer current (a newer request started while this body was still being read: the
-      // 'route-load' channel cancels only the request, not the body read; PR #40 review) is dropped.
+      // route-open channel, ROUTE_OPEN_CHANNEL, cancels only the request, not the body read; PR #40 review) is dropped.
       if (_currentRouteJobId !== id) return;
       displayRoute(geojson);
       _displayedJobId = id;
@@ -4462,16 +4478,22 @@ function _winRender() {
   /** @type {NodeListOf<HTMLElement>} */ (out.querySelectorAll('tr.win-row[data-job]')).forEach(tr => { tr.onclick = () => _winOpen(tr.dataset.job); });
 }
 
-// Open one departure's route (a window job is not in the Saved list: its record is fetched first).
+/**
+ * Open one departure's route (a window job is not in the Saved list: its record is fetched first), on the route-open
+ * channel: another route opened, computed or cleared meanwhile aborts it (ROUTE_OPEN_CHANNEL).
+ */
 function _winOpen(jobId) {
-  authFetch(API + '/routes/' + encodeURIComponent(jobId), { cache: 'no-store' }, 'window-route')
+  authFetch(API + '/routes/' + encodeURIComponent(jobId), { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(job => {
       _winOpenJob = jobId;
       _loadRouteJob(jobId, job);
       _winRender();
     })
-    .catch(err => appendLog('Could not open the departure: ' + err.message, 'error'));
+    .catch(err => {
+      if (err.name === 'AbortError') return;
+      appendLog('Could not open the departure: ' + err.message, 'error');
+    });
 }
 
 (function() {

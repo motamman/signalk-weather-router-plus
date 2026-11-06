@@ -20,6 +20,10 @@ import * as path from 'node:path';
 import type { IRouter } from 'express';
 import {
   CONFIG_SCHEMA,
+  DEFAULT_MIRROR,
+  ENSEMBLE_DEFAULTS,
+  ENSEMBLE_DOWNLOAD_NOTE,
+  MIRRORS,
   resolveConfig,
   rtofsLoadSame,
   smocLoadSame,
@@ -37,6 +41,7 @@ import { siText } from './plugin/unittext';
 import { JobManager, type Job } from './plugin/jobs';
 import { windowNotification, WindowManager, type DepartureWindow } from './plugin/windows';
 import { EnsembleSetManager } from './plugin/ensembles';
+import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from './data/ecmwf';
 import { registerApi } from './plugin/api';
 import { NotStartedError } from './plugin/errors';
 import { TileService, TileStore, tileGenerationKeys, tileGroup } from './plugin/tiles';
@@ -174,6 +179,14 @@ export = function plugin(app: SkApp): SignalKPlugin {
   /** Routes since the plugin was loaded whose corridor search failed and ran on the coarse skeleton (decision E). */
   let corridorFallbacks = 0;
   let dataStatus: DataStatus | null = null;
+  /**
+   * The ensembles a route can run on now, as the data worker last reported them: each with a cycle in use and its
+   * members on disk (none when off). Route requests (api.ts) and ensemble sets (ensembles.ts) both read it.
+   */
+  const ensemblesOnDisk = (): { model: EnsembleModelId; name: string; cycle: string; members: number[] }[] =>
+    (dataStatus?.ensembles ?? []).flatMap(e =>
+      e.cycle && e.members.length ? [{ model: e.model, name: e.name, cycle: e.cycle, members: [...e.members] }] : []
+    );
   /** The route worker's own current sources (its SMOC on-demand areas and memory). */
   let routeCurrents: DataStatus['currents'] | null = null;
   let refreshTimer: NodeJS.Timeout | null = null;
@@ -1362,8 +1375,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
         cancelRunning: cancelRunningJob,
         /** From the data worker's last status: the ensemble's cycle in use and its members on disk, or null. */
         onDisk: model => {
-          const e = (dataStatus?.ensembles ?? []).find(x => x.model === model);
-          return e && e.cycle && e.members.length ? { cycle: e.cycle, members: [...e.members] } : null;
+          const e = ensemblesOnDisk().find(x => x.model === model);
+          return e ? { cycle: e.cycle, members: e.members } : null;
         },
         log: m => app.error(m),
       },
@@ -1556,6 +1569,15 @@ export = function plugin(app: SkApp): SignalKPlugin {
         jobs: jobs ? { running: jobs.runningId, queued: jobs.queueLength, total: jobs.list(500).length } : null,
         windows: windows ? { running: windows.running } : null,
         ensemble_sets: ensembleSets ? { running: ensembleSets.running } : null,
+        // What the plugin config offers (config.ts), for the configuration panel (public/remoteEntry.js) to show.
+        config_choices: {
+          mirrors: MIRRORS,
+          mirror_default: DEFAULT_MIRROR,
+          ensemble_note: ENSEMBLE_DOWNLOAD_NOTE,
+          ensembles: ENSEMBLE_MODELS.map(id => ({ id, name: ENSEMBLES[id].name })),
+          ensemble_members: ENSEMBLE_MEMBER_CHOICES,
+          ensemble_defaults: ENSEMBLE_DEFAULTS,
+        },
         // The name, draught and air draft are Signal K's (vessels.self.name, design.*), not plugin settings.
         vessel: config?.vessel ? { ...config.vessel, ...selfDesign(), name: selfName() } : undefined,
         polar_source: config?.polarSource,
@@ -1590,10 +1612,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       tiles: () => tiles,
       regionalRuns: () => (dataStatus?.regional ?? []).map(r => ({ name: r.source, cycle: r.cycle })),
       /** From the data worker's last status: each ensemble with a cycle in use, and its members on disk. */
-      ensembles: () =>
-        (dataStatus?.ensembles ?? [])
-          .filter(e => e.cycle && e.members.length)
-          .map(e => ({ model: e.model, name: e.name, members: [...e.members] })),
+      ensembles: ensemblesOnDisk,
       chartGroups: () => charts.groups(),
       chartRows: () => charts.chartRows(),
       downloadCoastline: () => coast.requestDownload(),

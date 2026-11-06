@@ -81,11 +81,13 @@ export async function runEnsembleDecodeTask(
     members: t.members,
     log: message => emit({ event: 'decode-log', message }),
     onProgress: (done, total, model) => emit({ event: 'decode-step', done, total, model }),
-    // The forecast's reserve stays free (memguard.ts DISK_RESERVE_BYTES); the sizes as the status writes them.
+    // The forecast's reserve stays free (memguard.ts DISK_RESERVE_BYTES); the sizes as the status writes them. The
+    // ensembles are optional: free disk that could not be measured stops them, with why.
     diskCheck: bytes => {
       const free = availableDisk(t.cacheRoot);
-      return free !== null && bytes + DISK_RESERVE_BYTES > free
-        ? `it needs {dataSize:${bytes}} of disk and {dataSize:${free}} is free ({dataSize:${DISK_RESERVE_BYTES}} must stay free); choose fewer members or ensembles, or free disk space`
+      if ('problem' in free) return `it needs {dataSize:${bytes}} of disk and the ${free.problem}`;
+      return bytes + DISK_RESERVE_BYTES > free.bytes
+        ? `it needs {dataSize:${bytes}} of disk and {dataSize:${free.bytes}} is free ({dataSize:${DISK_RESERVE_BYTES}} must stay free); choose fewer members or ensembles, or free disk space`
         : null;
     },
   });
