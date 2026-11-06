@@ -9,9 +9,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { cycleFor, type EcmwfClient, ENSEMBLE_PARAMS, ENSEMBLES, type IndexRecord } from './ecmwf';
+import { GLOBAL_CELLS } from './loader';
 import {
   ENSEMBLE_DECODED_DIR,
   ENSEMBLE_GRIB_DIR,
+  ensembleGribPath,
   ensembleMembers,
   ensembleSteps,
   memberDir,
@@ -106,31 +108,45 @@ test('prune: keeps the members wanted in the cycles kept and the pending GRIB ca
   }
 });
 
-test('a step not published yet stops the model: nothing decoded short, no cycle in use, the cache kept for the next round', async () => {
+/**
+ * A fake client for IFS ENS member 1: index records of 10 bytes for the steps in `published` (none for the others),
+ * and every field it is asked for written to the cache as a GRIB-headed message; `fetched` counts those.
+ */
+function fakeClient(published: number[]): { client: EcmwfClient; indexed: number[]; fetched: () => number } {
+  const indexed: number[] = [];
+  let fetched = 0;
+  const client = {
+    fetchEnsembleIndex: async (_c: unknown, _m: unknown, stream: string, _k: string, step: number) => {
+      indexed.push(step);
+      if (!published.includes(step)) return null;
+      return ENSEMBLE_PARAMS[stream as keyof typeof ENSEMBLE_PARAMS].map((param, i) => ({
+        param,
+        step: String(step),
+        levtype: 'sfc',
+        number: '1',
+        _offset: i * 10,
+        _length: 10,
+      }));
+    },
+    fetchEnsembleField: async (_c: unknown, _m: unknown, _s: string, _k: string, _st: number, _r: unknown, p: string) => {
+      fetched++;
+      const msg = new Uint8Array(Buffer.from('GRIB------'));
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, msg);
+      return msg;
+    },
+  } as unknown as EcmwfClient;
+  return { client, indexed, fetched: () => fetched };
+}
+
+test('a step not published yet stops the model before anything is fetched: nothing decoded short, no cycle in use, the cache kept', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
   try {
-    // IFS ENS, 6 h: steps 0, 3, 6; the server has +0 h only.
-    const indexed: number[] = [];
-    const client = {
-      fetchEnsembleIndex: async (_c: unknown, _m: unknown, stream: string, _k: string, step: number) => {
-        indexed.push(step);
-        if (step !== 0) return null;
-        return ENSEMBLE_PARAMS[stream as keyof typeof ENSEMBLE_PARAMS].map((param, i) => ({
-          param,
-          step: '0',
-          levtype: 'sfc',
-          number: '1',
-          _offset: i * 10,
-          _length: 10,
-        }));
-      },
-      fetchEnsembleField: async (_c: unknown, _m: unknown, _s: string, _k: string, _st: number, _r: unknown, p: string) => {
-        const msg = new Uint8Array(Buffer.from('GRIB------'));
-        fs.mkdirSync(path.dirname(p), { recursive: true });
-        fs.writeFileSync(p, msg);
-        return msg;
-      },
-    } as unknown as EcmwfClient;
+    // IFS ENS, 6 h: steps 0, 3, 6; the server has +0 h only. One +0 h message is cached from an earlier round.
+    const kept = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, 'enfo', 0, '10u');
+    fs.mkdirSync(path.dirname(kept), { recursive: true });
+    fs.writeFileSync(kept, 'GRIB------');
+    const { client, indexed, fetched } = fakeClient([0]);
     const [r] = await runEnsembleCycle(client, {
       cacheRoot: root,
       cycle: cycleFor(new Date('2026-11-05T00:00:00Z')),
@@ -142,9 +158,40 @@ test('a step not published yet stops the model: nothing decoded short, no cycle 
     assert.deepEqual(r.members, []);
     assert.deepEqual(r.steps, []);
     assert.deepEqual(indexed, [0, 0, 3], 'stopped at the first step missing');
+    assert.equal(fetched(), 0, 'every index is read before any message is fetched');
     assert.equal(readEnsembleCurrent(root, 'ifs-ens'), null, 'no cycle in use');
     assert.ok(!fs.existsSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01')), 'no member decoded');
-    assert.ok(fs.existsSync(path.join(root, ENSEMBLE_GRIB_DIR, 'ifs-ens', '2026110500', 'm01')), 'the +0 h messages stay cached');
+    assert.ok(fs.existsSync(kept), 'what an earlier round cached stays');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the disk check is asked about exactly what the pass writes, and a no stops it before anything is fetched', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
+  try {
+    // One message cached already: of the 5 fields × 3 steps of 10 bytes, 14 are still to fetch.
+    const kept = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, 'waef', 3, 'swh');
+    fs.mkdirSync(path.dirname(kept), { recursive: true });
+    fs.writeFileSync(kept, 'GRIB------');
+    const { client, fetched } = fakeClient([0, 3, 6]);
+    const asked: number[] = [];
+    const [r] = await runEnsembleCycle(client, {
+      cacheRoot: root,
+      cycle: cycleFor(new Date('2026-11-05T00:00:00Z')),
+      horizonS: 6 * 3600,
+      models: ['ifs-ens'],
+      members: 1,
+      diskCheck: bytes => {
+        asked.push(bytes);
+        return 'no room';
+      },
+    });
+    // The messages by the indexes' own lengths, and one member's decoded run: 5 fields × 3 steps of one global float32 field.
+    assert.deepEqual(asked, [14 * 10 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
+    assert.match(r.error ?? '', /ECMWF IFS ENS 2026110500: not downloaded: no room/);
+    assert.equal(fetched(), 0);
+    assert.deepEqual(r.members, []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

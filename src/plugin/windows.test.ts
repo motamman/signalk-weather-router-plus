@@ -83,7 +83,7 @@ interface Harness {
 
 function harness(opts: { dir?: string; validTo?: number | null; keepJobs?: number } = {}): Harness {
   const dir = opts.dir ?? tmp();
-  const jobs = new JobManager(dir, opts.keepJobs ?? 50, '/plugins/wrp');
+  const jobs = new JobManager(dir, opts.keepJobs ?? 50, '/plugins/wrp', () => undefined);
   const started: Job[] = [];
   jobs.on('start', (j: Job) => started.push(j));
   const cancelled: string[] = [];
@@ -143,7 +143,7 @@ test('validateWindowRequest: the route, the times, the step and the size of the 
 
 test('departureMetrics: strongest wind, highest waves, roughest sea, time close-hauled under sail, past the forecast', () => {
   const dir = tmp();
-  const jobs = new JobManager(dir, 50, '');
+  const jobs = new JobManager(dir, 50, '', () => undefined);
   const job = jobs.submit({ ...ROUTE, departure: new Date(T0).toISOString() });
   jobs.onDone(job.id, routeGeo(T0, { wind: 14, swh: 3.2, twa: [0, 45, 120, 50], beyond: true }), {}, summary(T0, 18));
   const m = departureMetrics(jobs.get(job.id)!);
@@ -373,7 +373,7 @@ test('a done departure keeps only its metrics in memory: its route is read from 
 
 test('a departure that fails as it is submitted is recorded, and the window goes on to the end', () => {
   const dir = tmp();
-  const jobs = new JobManager(dir, 50, '');
+  const jobs = new JobManager(dir, 50, '', () => undefined);
   // As dispatchRoute without a Resources API: the job fails before submit() returns.
   jobs.on('start', (j: Job) => jobs.onError(j.id, 'this Signal K server has no Resources API to read notes from'));
   const finished: DepartureWindow[] = [];

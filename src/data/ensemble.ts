@@ -183,6 +183,11 @@ export interface EnsembleCycleOptions {
   log?: (message: string) => void;
   /** After each step downloaded or member decoded: done of total for that model, for the status. */
   onProgress?: (done: number, total: number, model: EnsembleModelId) => void;
+  /**
+   * Before a model's download: given the bytes its pass will write (its GRIB messages not cached yet, by the indexes'
+   * own lengths, and the decoded runs of its members to decode), why the disk cannot take it, or null.
+   */
+  diskCheck?: (bytes: number) => string | null;
 }
 
 /**
@@ -254,9 +259,11 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
 }
 
 /**
- * Every field of `members` for the ladder into the cache, step by step. A step whose index the server does not have
- * is not published yet (ensembleSteps): the model's pass stops with an error, what is cached stays for the next round,
- * and nothing is decoded short.
+ * Every field of `members` for the ladder into the cache. Every step's index is read first: a step the server does not
+ * have is not published yet (ensembleSteps), and the model's pass stops with an error before anything is fetched (what
+ * is cached stays for the next round; nothing is decoded short). The indexes give the exact length of every message
+ * still to fetch: with the members' decoded runs, that is what the disk check (o.diskCheck) is asked about. Then the
+ * messages are fetched step by step.
  */
 async function downloadModel(
   client: EcmwfClient,
@@ -266,10 +273,10 @@ async function downloadModel(
   members: number[],
   ladder: number[]
 ): Promise<{ steps: number[]; downloaded: number; bytes: number }> {
-  const steps: number[] = [];
-  let downloaded = 0;
-  let bytes = 0;
-  let done = 0;
+  // Every step's index first: a step not published yet stops the pass before anything is fetched, and the indexes give
+  // the exact size of what is still to fetch, for the disk check.
+  const plan: { step: number; stream: string; kind: string; recs: { rec: IndexRecord; path: string }[] }[] = [];
+  let toFetch = 0;
   for (const step of ladder) {
     for (const [stream, params] of Object.entries(ENSEMBLE_PARAMS)) {
       for (const file of model.files) {
@@ -278,28 +285,46 @@ async function downloadModel(
         const paths = inFile.flatMap(m => params.map(p => ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, p)));
         if (paths.every(isGribFile)) continue;
         const idx = await client.fetchEnsembleIndex(o.cycle, model, stream, file.kind, step);
-        if (!idx)
+        if (!idx) {
+          const before = ladder[ladder.indexOf(step) - 1];
           throw new Error(
             step === ladder[0]
               ? `${model.name} ${name}: the first step (+${step} h) is not published`
-              : `${model.name} ${name}: +${step} h ${stream} is not published yet (to +${steps[steps.length - 1]} h so far); retried next round`
+              : `${model.name} ${name}: +${step} h ${stream} is not published yet (to +${before} h so far); retried next round`
           );
-        for (const m of inFile) {
-          const recs = memberRecords(idx, m, file.control, params);
-          for (const rec of recs) {
-            const p = ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, rec.param);
-            if (isGribFile(p)) continue;
-            const msg = await client.fetchEnsembleField(o.cycle, model, stream, file.kind, step, rec, p);
-            downloaded++;
-            bytes += msg.length;
-          }
         }
+        const recs = inFile
+          .flatMap(m =>
+            memberRecords(idx, m, file.control, params).map(rec => ({
+              rec,
+              path: ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, rec.param),
+            }))
+          )
+          .filter(r => !isGribFile(r.path));
+        for (const r of recs) toFetch += r.rec._length;
+        plan.push({ step, stream, kind: file.kind, recs });
       }
     }
-    steps.push(step);
+  }
+  // What the pass writes: the messages to fetch, and each member's decoded run (one global float32 field per field and step).
+  const decoded = members.length * ENSEMBLE_FIELDS.length * ladder.length * GLOBAL_CELLS * 4;
+  const short = o.diskCheck ? o.diskCheck(toFetch + decoded) : null;
+  if (short) throw new Error(`${model.name} ${name}: not downloaded: ${short}`);
+  let downloaded = 0;
+  let bytes = 0;
+  let done = 0;
+  for (const step of ladder) {
+    for (const part of plan.filter(x => x.step === step)) {
+      for (const { rec, path: p } of part.recs) {
+        if (isGribFile(p)) continue;
+        const msg = await client.fetchEnsembleField(o.cycle, model, part.stream, part.kind, step, rec, p);
+        downloaded++;
+        bytes += msg.length;
+      }
+    }
     o.onProgress?.(++done, ladder.length + members.length, model.id);
   }
-  return { steps, downloaded, bytes };
+  return { steps: ladder, downloaded, bytes };
 }
 
 /**

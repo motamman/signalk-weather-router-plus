@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { JobManager, type Job } from './jobs';
+import { JobManager, type Job, type JobEvent } from './jobs';
 import type { RouteRequest, RouteSummary } from './protocol';
 import { EnsembleSetManager, validateEnsembleSetRequest } from './ensembles';
 
@@ -29,7 +29,7 @@ function summary(hours: number): RouteSummary {
 
 function harness(onDisk: number[] | null = [0, 1, 2, 3, 4, 5, 6]) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
-  const jobs = new JobManager(dir, 50, '/p');
+  const jobs = new JobManager(dir, 50, '/p', () => undefined);
   const started: Job[] = [];
   jobs.on('start', (j: Job) => started.push(j));
   const cancelled: string[] = [];
@@ -119,4 +119,27 @@ test('the main forecast route named in the request is reported with its metrics 
   assert.equal(m.metrics!.total_time_s, 95 * 3600);
   assert.equal(h.sets.toPublic(h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 })).main, null);
   assert.match(validateEnsembleSetRequest({ route: ROUTE, model: 'ifs-ens', members: 5, main_job_id: '' })!, /main_job_id/);
+});
+
+test('a listener that throws on a job event is reported, and the job still reaches the worker', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
+  try {
+    const logged: string[] = [];
+    const jobs = new JobManager(dir, 50, '/p', m => logged.push(m));
+    // As an ensemble set's or a departure window's file failing to save on the 'running' event.
+    jobs.on('event', (_id: string, ev: JobEvent) => {
+      if (ev.event === 'status' && ev.data.status === 'running') throw new Error('ENOSPC: no space left on device');
+    });
+    const heard: string[] = [];
+    jobs.on('event', (_id: string, ev: JobEvent) => heard.push(String(ev.data.status ?? ev.event)));
+    const started: string[] = [];
+    jobs.on('start', (job: { id: string }) => started.push(job.id));
+    const job = jobs.submit({ start: { lat: 41.4, lon: -71.4 }, end: { lat: 41.2, lon: -71.6 } });
+    assert.deepEqual(started, [job.id], 'the job reached the worker');
+    assert.ok(heard.includes('running'), 'the other listener heard the event');
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], new RegExp(`job ${job.id}: a listener of its status event failed: ENOSPC`));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

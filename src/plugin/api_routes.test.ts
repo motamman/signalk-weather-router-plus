@@ -126,7 +126,7 @@ test('GET /api/routes/:id/events: a Last-Event-ID that is not a number replays e
 test("GET /api/routes/:id/result, /signalk, /events: a departure window's route comes from its file", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
   try {
-    const jobs = new JobManager(dir, 50, '/x');
+    const jobs = new JobManager(dir, 50, '/x', () => undefined);
     const job = jobs.submit({ ...ROUTE, departure: '2026-11-02T00:00:00.000Z' }, 'w1');
     const geo = {
       type: 'FeatureCollection',
@@ -193,7 +193,7 @@ test('POST /api/windows: no body is 400, too large 413 and a polar not in the li
 test("DELETE /api/routes/:id: a departure window's job is 409; DELETE /api/windows/:id: 409 until a cancelled departure has stopped", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
   try {
-    const jobs = new JobManager(dir, 50, '/x');
+    const jobs = new JobManager(dir, 50, '/x', () => undefined);
     const stopping: string[] = [];
     const windows = new WindowManager(jobs, dir, { cancelRunning: id => stopping.push(id), forecastValidToMs: () => null }, '/x');
     const call = api(jobs as unknown as Record<string, unknown>, dir, windows as unknown as Record<string, unknown>);

@@ -12,10 +12,8 @@ import * as path from 'node:path';
 import { availableSteps, type Cycle, cycleFor, EcmwfClient, ENSEMBLES, type EnsembleModelId, latestExpectedCycle } from '../../data/ecmwf';
 import {
   ENSEMBLE_DECODED_DIR,
-  ENSEMBLE_FIELDS,
   ENSEMBLE_GRIB_DIR,
   ensembleMembers,
-  ensembleSteps,
   memberComplete,
   pruneEnsembles,
   readEnsembleCurrent,
@@ -34,7 +32,7 @@ import {
   type WindowOptions,
 } from '../../data/decoded';
 import { runChildTask } from '../childtask';
-import { availableDisk, checkDecodeResources, DISK_RESERVE_BYTES, FIELD_STEP_BYTES } from '../memguard';
+import { checkDecodeResources } from '../memguard';
 import { type ResolvedConfig } from '../config';
 import { noteNetwork, requireInit } from './state';
 import type { WorkerState } from './state';
@@ -428,18 +426,8 @@ export async function refreshEnsembles(
     for (const m of missing) note(m, { loading: null, error: `cycle ${cycle} not downloaded: ${why}` });
     return;
   }
-  // Disk for what is missing, decoded (the GRIB messages are about a seventh of that: 350,757,112 bytes for 625 fields
-  // of IFS ENS, measured on brain 2026-11-05, against 625 × 4.15 MB decoded), with the main forecast's reserve.
-  const steps = (m: EnsembleModelId): number => ensembleSteps(ENSEMBLES[m], cycleFor(st.run!.cycleTime), horizonHours).length;
-  const need = todo.reduce((a, x) => a + x.members.length * ENSEMBLE_FIELDS.length * steps(x.m) * FIELD_STEP_BYTES, 0);
-  fs.mkdirSync(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR), { recursive: true });
-  const disk = availableDisk(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR));
-  if (disk !== null && need + DISK_RESERVE_BYTES > disk) {
-    const text = `cycle ${cycle} not downloaded: it needs {dataSize:${need}} of disk and {dataSize:${disk}} is free ({dataSize:${DISK_RESERVE_BYTES}} must stay free); choose fewer members or ensembles, or free disk space`;
-    for (const m of missing) note(m, { loading: null, error: text });
-    st.log('error', `ensembles: ${text}`);
-    return;
-  }
+  // The disk is checked in the child, against the exact size of what each model's pass writes (data/ensemble.ts
+  // downloadModel, forecastdecodetask.ts diskCheck).
   for (const m of missing) note(m, { loading: { cycle: st.run.cycleTime.toISOString(), done: 0, total: null }, error: null });
   st.ensembleAbort = new AbortController();
   try {

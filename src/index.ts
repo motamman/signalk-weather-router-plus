@@ -1328,7 +1328,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
     );
     updateTileGenerations();
     startPrebuilder(dataDir);
-    jobs = new JobManager(dataDir, config.routing.keepJobs, BASE_PATH);
+    jobs = new JobManager(dataDir, config.routing.keepJobs, BASE_PATH, m => app.error(m));
     jobs.on('start', (job: Job) => {
       // First start: the first forecast is still downloading. The route waits for it
       // rather than downloading its own copy of the same fields alongside.

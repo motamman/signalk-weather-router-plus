@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { cycleFor, ECMWF_MIRRORS, EcmwfClient, type EnsembleModelId } from '../data/ecmwf';
 import { cycleName, DECODED_DIR, DecodedRunWriter } from '../data/decoded';
 import { runEnsembleCycle, type EnsembleModelResult } from '../data/ensemble';
+import { availableDisk, DISK_RESERVE_BYTES } from './memguard';
 import { decodeForecastToDisk } from '../data/loader';
 
 export interface ForecastDecodeTask {
@@ -80,6 +81,13 @@ export async function runEnsembleDecodeTask(
     members: t.members,
     log: message => emit({ event: 'decode-log', message }),
     onProgress: (done, total, model) => emit({ event: 'decode-step', done, total, model }),
+    // The forecast's reserve stays free (memguard.ts DISK_RESERVE_BYTES); the sizes as the status writes them.
+    diskCheck: bytes => {
+      const free = availableDisk(t.cacheRoot);
+      return free !== null && bytes + DISK_RESERVE_BYTES > free
+        ? `it needs {dataSize:${bytes}} of disk and {dataSize:${free}} is free ({dataSize:${DISK_RESERVE_BYTES}} must stay free); choose fewer members or ensembles, or free disk space`
+        : null;
+    },
   });
 }
 
