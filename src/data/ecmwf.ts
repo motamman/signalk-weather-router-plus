@@ -232,6 +232,53 @@ export function availableSteps(cycle: Pick<Cycle, 'maxStep'>, horizonHours: numb
   return steps;
 }
 
+/** An index file's records (one JSON object per line), each checked to carry its offset, length and parameter. */
+function parseIndex(text: string, url: string): IndexRecord[] {
+  const out: IndexRecord[] = [];
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const rec = JSON.parse(t) as IndexRecord;
+    if (typeof rec._offset !== 'number' || typeof rec._length !== 'number' || typeof rec.param !== 'string')
+      throw new EcmwfError(`malformed index line in ${url}: ${t.slice(0, 120)}`);
+    out.push(rec);
+  }
+  return out;
+}
+
+/** A cached message is there and starts with GRIB. */
+export function isGribFile(p: string): boolean {
+  try {
+    const fd = fs.openSync(p, 'r');
+    try {
+      const head = Buffer.alloc(4);
+      return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A fetched message into the GRIB cache at `cached`, through a temporary file renamed into place. The temporary name
+ * is unique per writer: the data worker and the route worker (first boot, no decoded run yet) can fetch the same field
+ * at once, and threads share a pid. A rename that fails takes its temporary file with it; one that fails because
+ * another writer put the same message in place meanwhile has that as its answer.
+ */
+function writeCached(cached: string, msg: Uint8Array): void {
+  fs.mkdirSync(path.dirname(cached), { recursive: true });
+  const tmp = `${cached}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  fs.writeFileSync(tmp, msg);
+  try {
+    fs.renameSync(tmp, cached);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    if (!fs.existsSync(cached)) throw err;
+  }
+}
+
 export class EcmwfClient {
   /** Mirrors in order; index 0 is the one currently in use. */
   private mirrors: string[];
@@ -342,18 +389,7 @@ export class EcmwfClient {
     const url = this.stepUrl(cycle, stream, step, 'index');
     const res = await this.request(this.stepPath(cycle, stream, step, 'index'));
     if (res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${url}`);
-    const text = await res.text();
-    const out: IndexRecord[] = [];
-    for (const line of text.split('\n')) {
-      const t = line.trim();
-      if (!t) continue;
-      const rec = JSON.parse(t) as IndexRecord;
-      if (typeof rec._offset !== 'number' || typeof rec._length !== 'number' || typeof rec.param !== 'string') {
-        throw new EcmwfError(`malformed index line in ${url}: ${t.slice(0, 120)}`);
-      }
-      out.push(rec);
-    }
-    return out;
+    return parseIndex(await res.text(), url);
   }
 
   cachePath(cycle: Cycle, stream: string, step: number, param: string): string {
@@ -362,18 +398,7 @@ export class EcmwfClient {
 
   /** Is a cached message present and GRIB-headed? */
   hasCached(cycle: Cycle, stream: string, step: number, param: string): boolean {
-    const p = this.cachePath(cycle, stream, step, param);
-    try {
-      const fd = fs.openSync(p, 'r');
-      try {
-        const head = Buffer.alloc(4);
-        return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch {
-      return false;
-    }
+    return isGribFile(this.cachePath(cycle, stream, step, param));
   }
 
   /**
@@ -422,35 +447,25 @@ export class EcmwfClient {
     const idx = index ?? (await this.fetchIndex(cycle, stream, step));
     const rec = idx.find(r => r.param === param && (r.levtype === undefined || r.levtype === 'sfc'));
     if (!rec) return null;
-    const url = this.stepUrl(cycle, stream, step, 'grib2');
-    const res = await this.request(this.stepPath(cycle, stream, step, 'grib2'), {
-      headers: { Range: `bytes=${rec._offset}-${rec._offset + rec._length - 1}` },
-    });
-    if (res.status !== 206 && res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${param} from ${url}`);
+    const msg = await this.fetchMessage(this.stepPath(cycle, stream, step, 'grib2'), rec, step);
+    writeCached(cached, msg);
+    return msg;
+  }
+
+  /**
+   * One index record of a step file as its raw GRIB2 message, by HTTP Range (a server that ignores the range sends the
+   * whole file, which is sliced), checked to be the record's length and to start with GRIB.
+   */
+  private async fetchMessage(pathSuffix: string, rec: IndexRecord, step: number): Promise<Uint8Array> {
+    const res = await this.request(pathSuffix, { headers: { Range: `bytes=${rec._offset}-${rec._offset + rec._length - 1}` } });
+    if (res.status !== 206 && res.status !== 200)
+      throw new EcmwfError(`HTTP ${res.status} fetching ${rec.param} from ${this.baseUrl}${pathSuffix}`);
     const buf = new Uint8Array(await res.arrayBuffer());
-    let msg = buf;
-    if (res.status === 200) {
-      // Server ignored the range: slice the whole file.
-      msg = buf.subarray(rec._offset, rec._offset + rec._length);
-    }
-    if (msg.length !== rec._length) {
-      throw new EcmwfError(`short read for ${param} step ${step}: got ${msg.length} of ${rec._length} bytes`);
-    }
-    if (!(msg[0] === 0x47 && msg[1] === 0x52 && msg[2] === 0x49 && msg[3] === 0x42)) {
-      throw new EcmwfError(`fetched bytes for ${param} step ${step} do not start with GRIB`);
-    }
-    fs.mkdirSync(path.dirname(cached), { recursive: true });
-    // Unique per writer: the data worker and the route worker (first boot, no
-    // decoded run yet) can fetch the same field at once, and threads share a pid.
-    const tmp = `${cached}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-    fs.writeFileSync(tmp, msg);
-    try {
-      fs.renameSync(tmp, cached);
-    } catch (err) {
-      fs.rmSync(tmp, { force: true });
-      // Another writer put the same field in place meanwhile: that is the answer.
-      if (!fs.existsSync(cached)) throw err;
-    }
+    const msg = res.status === 200 ? buf.subarray(rec._offset, rec._offset + rec._length) : buf;
+    if (msg.length !== rec._length)
+      throw new EcmwfError(`short read for ${rec.param} step ${step}: got ${msg.length} of ${rec._length} bytes`);
+    if (!(msg[0] === 0x47 && msg[1] === 0x52 && msg[2] === 0x49 && msg[3] === 0x42))
+      throw new EcmwfError(`fetched bytes for ${rec.param} step ${step} do not start with GRIB`);
     return msg;
   }
 
@@ -468,16 +483,7 @@ export class EcmwfClient {
     const res = await this.request(p);
     if (res.status === 404 || res.status === 403) return null;
     if (res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${this.baseUrl}${p}`);
-    const out: IndexRecord[] = [];
-    for (const line of (await res.text()).split('\n')) {
-      const t = line.trim();
-      if (!t) continue;
-      const rec = JSON.parse(t) as IndexRecord;
-      if (typeof rec._offset !== 'number' || typeof rec._length !== 'number' || typeof rec.param !== 'string')
-        throw new EcmwfError(`malformed index line in ${this.baseUrl}${p}: ${t.slice(0, 120)}`);
-      out.push(rec);
-    }
-    return out;
+    return parseIndex(await res.text(), this.baseUrl + p);
   }
 
   /**
@@ -498,19 +504,8 @@ export class EcmwfClient {
       if (buf.length === rec._length && buf.toString('latin1', 0, 4) === 'GRIB') return new Uint8Array(buf);
       fs.unlinkSync(cachePath);
     }
-    const p = this.ensembleStepPath(cycle, model, stream, kind, step, 'grib2');
-    const res = await this.request(p, { headers: { Range: `bytes=${rec._offset}-${rec._offset + rec._length - 1}` } });
-    if (res.status !== 206 && res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${rec.param} from ${this.baseUrl}${p}`);
-    const buf = new Uint8Array(await res.arrayBuffer());
-    const msg = res.status === 200 ? buf.subarray(rec._offset, rec._offset + rec._length) : buf;
-    if (msg.length !== rec._length)
-      throw new EcmwfError(`short read for ${rec.param} step ${step}: got ${msg.length} of ${rec._length} bytes`);
-    if (!(msg[0] === 0x47 && msg[1] === 0x52 && msg[2] === 0x49 && msg[3] === 0x42))
-      throw new EcmwfError(`fetched bytes for ${rec.param} step ${step} do not start with GRIB`);
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmp = `${cachePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-    fs.writeFileSync(tmp, msg);
-    fs.renameSync(tmp, cachePath);
+    const msg = await this.fetchMessage(this.ensembleStepPath(cycle, model, stream, kind, step, 'grib2'), rec, step);
+    writeCached(cachePath, msg);
     return msg;
   }
 

@@ -384,7 +384,9 @@ export async function refreshEnsembles(
   st: WorkerState,
   offline: string | null,
   held: () => string | null,
-  changed: () => void = () => undefined
+  changed: () => void = () => undefined,
+  /** Runs the ensemble-decode child (tests give one that answers without a child process). */
+  runTask: typeof runChildTask = runChildTask
 ): Promise<void> {
   const { config: cfg } = requireInit(st);
   const e = cfg.forecast.ensemble;
@@ -401,9 +403,15 @@ export async function refreshEnsembles(
   if (!st.run) return;
   const cycle = cycleName(st.run.cycleTime);
   const horizonHours = cfg.forecast.horizonS / HOUR_S;
-  const missing = e.models.filter(m =>
-    ensembleMembers(ENSEMBLES[m], e.members).some(n => !memberComplete(st.cacheRoot, m, n, cycle, horizonHours))
-  );
+  // Each wanted member's decoded run checked once a round (memberComplete reads its index and stats every field file):
+  // the models with members still to get, and those members.
+  const todo = e.models
+    .map(m => ({
+      m,
+      members: ensembleMembers(ENSEMBLES[m], e.members).filter(n => !memberComplete(st.cacheRoot, m, n, cycle, horizonHours)),
+    }))
+    .filter(x => x.members.length > 0);
+  const missing = todo.map(x => x.m);
   const pending = Object.fromEntries(missing.map(m => [m, cycle])) as Partial<Record<EnsembleModelId, string>>;
   const note = (m: EnsembleModelId, s: Partial<NonNullable<WorkerState['ensembles'][EnsembleModelId]>>): void => {
     // checkedAt last: this note's time, never the entry's earlier one.
@@ -423,15 +431,7 @@ export async function refreshEnsembles(
   // Disk for what is missing, decoded (the GRIB messages are about a seventh of that: 350,757,112 bytes for 625 fields
   // of IFS ENS, measured on brain 2026-11-05, against 625 × 4.15 MB decoded), with the main forecast's reserve.
   const steps = (m: EnsembleModelId): number => ensembleSteps(ENSEMBLES[m], cycleFor(st.run!.cycleTime), horizonHours).length;
-  const need = missing.reduce(
-    (a, m) =>
-      a +
-      ensembleMembers(ENSEMBLES[m], e.members).filter(n => !memberComplete(st.cacheRoot, m, n, cycle, horizonHours)).length *
-        ENSEMBLE_FIELDS.length *
-        steps(m) *
-        FIELD_STEP_BYTES,
-    0
-  );
+  const need = todo.reduce((a, x) => a + x.members.length * ENSEMBLE_FIELDS.length * steps(x.m) * FIELD_STEP_BYTES, 0);
   fs.mkdirSync(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR), { recursive: true });
   const disk = availableDisk(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR));
   if (disk !== null && need + DISK_RESERVE_BYTES > disk) {
@@ -443,7 +443,7 @@ export async function refreshEnsembles(
   for (const m of missing) note(m, { loading: { cycle: st.run.cycleTime.toISOString(), done: 0, total: null }, error: null });
   st.ensembleAbort = new AbortController();
   try {
-    const results = await runChildTask(
+    const results = await runTask(
       {
         task: 'ensemble-decode',
         cacheRoot: st.cacheRoot,

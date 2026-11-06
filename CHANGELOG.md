@@ -26,8 +26,10 @@ uses [Semantic Versioning](https://semver.org/).
   only, water not checked) and the route opened on a white
   band; the arrival spread is in the result strip and a members table in
   the Itinerary.
-  Measured on the test box at 72 h: about 70 MB to download and 519 MB
-  on disk per IFS ENS member.
+  On the test box (Pi 5), 72 h: 5 IFS ENS members downloaded
+  350,757,112 B (2026-11-05; arithmetic: about 70 MB a member), and a
+  decoded IFS ENS member takes 519,126,603 B on disk (`du -sb`,
+  2026-11-06, the 06Z run).
 - **Polar sets from Polar Management (polar-format 2).** A `polarSet`
   2.0.0 active in Polar Management is routed on its `best` table; a v1
   `polarTable` routes as before. A null cell (no sailing solution) has no

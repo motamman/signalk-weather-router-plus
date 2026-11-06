@@ -327,9 +327,10 @@ export const CONFIG_SCHEMA = {
           type: 'object',
           title: 'Ensemble downloads',
           description:
-            "Also download ECMWF ensembles, each cycle after the forecast, so a route can be checked against each member's weather " +
-            '(how much the arrival varies, how many members meet the wind or wave limit). Wind and waves of the forecast horizon: ' +
-            'for 72 h, about 70 MB to download per member and cycle (measured for IFS ENS) and 0.5 GB on disk (5 fields × 25 steps × 4.15 MB).',
+            "Also download ECMWF ensembles, each cycle after the forecast (wind and waves, to the forecast's horizon), so Find Route " +
+            "can compute the route on each member's forecast as well: where each member's route goes and when it arrives. At 72 h, " +
+            'per member and cycle, on the test box (Pi 5): about 70 MB downloaded (5 IFS ENS members took 350,757,112 B, 2026-11-05); ' +
+            'on disk 519 MB for an IFS ENS member and 270 MB for an AIFS ENS member (du, 2026-11-06).',
           properties: {
             enabled: { type: 'boolean', title: 'Download ensembles', default: false },
             models: {

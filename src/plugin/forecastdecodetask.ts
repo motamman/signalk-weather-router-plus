@@ -54,6 +54,15 @@ export interface EnsembleDecodeTask {
   members: number;
 }
 
+/** The GRIB client a decode task downloads with: the configured mirror, the GRIB cache under the data directory, its log as events. */
+function taskClient(cacheRoot: string, mirror: string, emit: (e: ForecastDecodeEvent) => void): EcmwfClient {
+  return new EcmwfClient({
+    baseUrl: ECMWF_MIRRORS[mirror] ?? ECMWF_MIRRORS.ecmwf,
+    cacheDir: path.join(cacheRoot, 'ecmwf'),
+    log: message => emit({ event: 'decode-log', message: `ecmwf: ${message}` }),
+  });
+}
+
 /**
  * The child's ensemble pass (data/ensemble.ts runEnsembleCycle) for the main forecast's cycle in use, its log lines
  * and progress steps sent as events; the answer is each model's result.
@@ -61,11 +70,7 @@ export interface EnsembleDecodeTask {
 export async function runEnsembleDecodeTask(
   t: EnsembleDecodeTask,
   emit: (e: ForecastDecodeEvent) => void,
-  client: EcmwfClient = new EcmwfClient({
-    baseUrl: ECMWF_MIRRORS[t.mirror] ?? ECMWF_MIRRORS.ecmwf,
-    cacheDir: path.join(t.cacheRoot, 'ecmwf'),
-    log: message => emit({ event: 'decode-log', message: `ecmwf: ${message}` }),
-  })
+  client: EcmwfClient = taskClient(t.cacheRoot, t.mirror, emit)
 ): Promise<EnsembleModelResult[]> {
   return runEnsembleCycle(client, {
     cacheRoot: t.cacheRoot,
@@ -81,11 +86,7 @@ export async function runEnsembleDecodeTask(
 export async function runForecastDecodeTask(
   t: ForecastDecodeTask,
   emit: (e: ForecastDecodeEvent) => void,
-  client: EcmwfClient = new EcmwfClient({
-    baseUrl: ECMWF_MIRRORS[t.mirror] ?? ECMWF_MIRRORS.ecmwf,
-    cacheDir: path.join(t.cacheRoot, 'ecmwf'),
-    log: message => emit({ event: 'decode-log', message: `ecmwf: ${message}` }),
-  })
+  client: EcmwfClient = taskClient(t.cacheRoot, t.mirror, emit)
 ): Promise<ForecastDecodeResult> {
   const cycle = cycleFor(new Date(t.cycle));
   const writer = new DecodedRunWriter(path.join(t.cacheRoot, DECODED_DIR), cycleName(cycle.time));

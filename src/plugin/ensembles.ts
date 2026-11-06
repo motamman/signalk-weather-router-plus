@@ -211,11 +211,8 @@ export class EnsembleSetManager {
     const job = id ? this.jobs.full(id) : undefined;
     if (!id || !job) return null;
     if (job.status !== 'done') return { job_id: id, status: job.status };
-    try {
-      return { job_id: id, status: job.status, metrics: departureMetrics(job) };
-    } catch {
-      return { job_id: id, status: job.status };
-    }
+    // A done job always carries its summary (JobManager.onDone sets it before the job is saved): departureMetrics cannot throw here.
+    return { job_id: id, status: job.status, metrics: departureMetrics(job) };
   }
 
   /** Cancel what is left: members not started, and the one queued or computing. */

@@ -98,6 +98,11 @@ reviews:
            was measured, or says it was not. Flag comments that describe
            planned or removed behaviour.
 
+        8. TESTS: a behaviour change in src/ or public/ with no test in the
+           same PR is a finding: name the test file and what it should
+           assert. (This rule sits here, not under the test files, so it
+           applies to a PR that changes no test.)
+
         When you flag a rule above, quote its number and name, cite the file and
         line, and say what the one structural fix is.
 
@@ -113,17 +118,16 @@ reviews:
         - a unit symbol written as a literal beside a number;
         - a quantity formatted with toFixed instead of through the unit
           helpers.
-        Also apply rules 0, 2 and 7 of the src/**/*.ts instructions. An answer
+        Also apply rules 0, 2, 7 and 8 of the src/**/*.ts instructions. An answer
         that arrives after the screen moved on (another route opened, cleared,
         replaced) must not be applied.
 
     - path: "src/**/*.test.ts"
       instructions: |
         A test that is loosened, skipped, or given an allowlist is unfinished
-        unless the list is empty; flag it and ask what blocks removing it. A
-        behaviour change in src/ or public/ with no test in the same PR is a
-        finding: name the file and what the test should assert. Tests must not
-        call the network.
+        unless the list is empty; flag it and ask what blocks removing it.
+        Tests must not call the network. (Missing tests for a behaviour change
+        are rule 8 of the src/**/*.ts instructions.)
 
     - path: "{README,CHANGELOG,WHATSNEW}.md"
       instructions: |

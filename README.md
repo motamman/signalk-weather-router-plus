@@ -196,9 +196,11 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 
   *Measured on the test box (Pi 5), 2026-11-05, 72 h:* IFS ENS, 5
   members: 625 fields, 350,757,112 B downloaded (arithmetic: about
-  70 MB per member), decoded in 121.8 s, 519 MB on disk per member
-  (5 fields × 25 steps × 4.15 MB). AIFS ENS, the control and 5 members:
-  390 fields, 206,788,659 B, 75.3 s, 270 MB per member (13 steps).
+  70 MB per member), decoded in 121.8 s. AIFS ENS, the control and 5
+  members: 390 fields, 206,788,659 B (arithmetic: about 34.5 MB per
+  member), 75.3 s. *On disk, measured 2026-11-06 (`du -sb`, the 06Z run,
+  72 h):* 519,126,603 B per IFS ENS member (25 steps) and 269,947,987 B
+  per AIFS ENS member (13 steps), the same for each of the 21 members.
   The time of one member's route is not measured yet.
 - **Land:** GSHHG shorelines as shapefiles (`GSHHS_f_L1.shp` for full
   resolution, automatically including L2–L4 siblings; add `GSHHS_f_L6.shp` for Antarctica) or the OSM

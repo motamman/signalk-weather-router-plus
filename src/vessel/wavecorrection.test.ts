@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { adaptManagedPolar } from '../plugin/managedpolar';
 import { simulateLegTime } from '../engine/legsim';
 import { NoCurrent, type WindSource } from '../engine/environment';
+import type { Route } from '../engine/route';
+import { waveCorrectionWarnings } from '../engine/smoother';
 import { PolarDiagram } from './polar';
 import { makeVessel } from './vessel';
 import { waveFactor, type WaveCorrection } from './wavecorrection';
@@ -138,4 +140,48 @@ test('the table is read with Tm02 (mp2), not the mean period mwp; without a Tm02
   assert.equal(none.uncorrectedWaveSeconds, 0);
   // Without a wave correction nothing is counted.
   assert.equal(plain.noPeriodWaveSeconds, 0);
+});
+
+test('the route carries a waves_no_period warning for the time sailed without a Tm02, replacing the one before', () => {
+  const polar = new PolarDiagram([0, 90, 180], [4, 8], [0, 0, 3, 4, 2, 3]);
+  const vessel = makeVessel({ motorSpeedMs: 2 });
+  const sim = { modePolicy: 'sail_max' as const, sailThreshMs: 0.5, simStepM: 100 };
+  const t0 = new Date('2026-01-01T00:00:00Z');
+  const wc = { ...sim, waveCorrection: correction() };
+  // One leg due east, as the simulator test above; the waypoints' own fields beyond place and time are not read.
+  const leg = simulateLegTime(0, 0, t0, 0.05, 0, vessel, polar, sea(2, 270, NaN, 10), new NoCurrent(), wc);
+  const route = (warnings?: Route['warnings']): Route =>
+    ({
+      waypoints: [
+        { lon: 0, lat: 0, time: t0 },
+        { lon: 0.05, lat: 0, time: new Date(t0.getTime() + leg.seconds * 1000) },
+      ],
+      warnings,
+    }) as unknown as Route;
+  const env = (wind: WindSource, s: typeof sim) => ({ vessel, polar, wind, current: new NoCurrent(), sim: s });
+  const other = { leg_index: 0, violation: 'wind_over_limit', from: [0, 0], to: [0.05, 0], repaired: false, detail: '60' };
+  const stale = { leg_index: 0, violation: 'waves_no_period', from: [0, 0], to: [0.05, 0], repaired: false, detail: '1' };
+
+  // No Tm02: one warning for the leg, with its seconds; a stale one is replaced, another kind kept.
+  const r = route([other, stale] as Route['warnings']);
+  waveCorrectionWarnings(r, env(sea(2, 270, NaN, 10), wc));
+  const noPeriod = (r.warnings ?? []).filter(w => w.violation === 'waves_no_period');
+  assert.equal(noPeriod.length, 1);
+  assert.equal(noPeriod[0].leg_index, 0);
+  assert.equal(noPeriod[0].detail, String(Math.round(leg.noPeriodWaveSeconds)));
+  assert.ok(leg.noPeriodWaveSeconds > 0);
+  assert.ok(
+    (r.warnings ?? []).some(w => w.violation === 'wind_over_limit'),
+    'other warnings stay'
+  );
+
+  // With a Tm02 the warning goes.
+  const fixed = route([stale] as Route['warnings']);
+  waveCorrectionWarnings(fixed, env(sea(2, 270, 5, 10), wc));
+  assert.equal(fixed.warnings, undefined);
+
+  // Without a wave correction the route's warnings are left as they are.
+  const off = route([stale] as Route['warnings']);
+  waveCorrectionWarnings(off, env(sea(2, 270, NaN, 10), sim));
+  assert.deepEqual(off.warnings, [stale]);
 });

@@ -30,6 +30,7 @@ import {
   type EnsembleModel,
   type EnsembleModelId,
   type IndexRecord,
+  isGribFile,
 } from './ecmwf';
 import { buildStep, FloatSlab, type NanFillScratch } from './forecast';
 import { GLOBAL_CELLS } from './loader';
@@ -102,21 +103,6 @@ export function ensembleGribPath(
     memberDir(member),
     `${stream}-${String(step).padStart(3, '0')}h-${param}.grib2`
   );
-}
-
-/** A cached message is there and GRIB-headed. */
-function cached(p: string): boolean {
-  try {
-    const fd = fs.openSync(p, 'r');
-    try {
-      const head = Buffer.alloc(4);
-      return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return false;
-  }
 }
 
 /** Where member `member`'s decoded run of `cycle` is (written or not). */
@@ -290,7 +276,7 @@ async function downloadModel(
         const inFile = members.filter(m => (m === 0) === file.control);
         if (!inFile.length) continue;
         const paths = inFile.flatMap(m => params.map(p => ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, p)));
-        if (paths.every(cached)) continue;
+        if (paths.every(isGribFile)) continue;
         const idx = await client.fetchEnsembleIndex(o.cycle, model, stream, file.kind, step);
         if (!idx)
           throw new Error(
@@ -302,7 +288,7 @@ async function downloadModel(
           const recs = memberRecords(idx, m, file.control, params);
           for (const rec of recs) {
             const p = ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, rec.param);
-            if (cached(p)) continue;
+            if (isGribFile(p)) continue;
             const msg = await client.fetchEnsembleField(o.cycle, model, stream, file.kind, step, rec, p);
             downloaded++;
             bytes += msg.length;

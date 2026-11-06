@@ -105,3 +105,19 @@ test('layered wind: the source of each sample, the finest regional one where it 
   assert.deepEqual([...r.speed], [...plain.speed], 'the same wind as atManyAt');
   assert.deepEqual([...r.dir], [...plain.dir]);
 });
+
+test('layered wind: the batched wave read passes the Tm02 (mp2) through from a base with only wavesAt, NaN where it has none', () => {
+  // A base without wavesFullAtManyAt: its point answers are batched. West of 5°E it has a Tm02, east of it none (NaN, as
+  // a forecast without mp2), and north of 49°N no waves at all.
+  const base: BaseWind = {
+    ...uniform(5, 270),
+    wavesAt: (lon, lat) => (lat > 49 ? null : { swh: 1.5, mwp: 7, mp2: lon < 5 ? 6.5 : NaN, mwd: 200 }),
+  };
+  const lw = new LayeredWind(base, []);
+  const t = T0 + 3600_000;
+  const w = lw.wavesFullAtManyAt(Float64Array.of(1, 8, 1), Float64Array.of(45, 45, 49.5), Float64Array.of(t, t, t));
+  assert.equal(w.mp2[0], 6.5);
+  assert.ok(Number.isNaN(w.mp2[1]), 'no Tm02 in the forecast: NaN, so the route counts the time sailed uncorrected');
+  assert.ok(Number.isNaN(w.mp2[2]) && Number.isNaN(w.swh[2]), 'no waves: every field NaN');
+  assert.deepEqual([w.swh[0], w.mwp[0], w.mwd[0]], [1.5, 7, 200]);
+});

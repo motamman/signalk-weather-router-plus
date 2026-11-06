@@ -549,9 +549,10 @@ var signalk_weather_router_plus = (function () {
         return h('div', { key: e.model }, statusDot(e.error ? 'warn' : e.cycle ? 'ok' : 'off', text));
       })) : null,
       row('Ensembles', check(['forecast', 'ensemble', 'enabled'], false, 'Download ensembles'),
-        "Each cycle, after the forecast, also download ECMWF ensembles (wind and waves, the forecast's horizon), so a route can be checked " +
-        "against each member's weather: how much the arrival varies, how many members meet the wind or wave limit. For 72 h about 70 MB " +
-        'to download per member and cycle, and 0.5 GB on disk.'),
+        "Each cycle, after the forecast, also download ECMWF ensembles (wind and waves, to the forecast's horizon), so Find Route can " +
+        "compute the route on each member's forecast as well: where each member's route goes and when it arrives. At 72 h, per member " +
+        'and cycle, on the test box (Pi 5): about 70 MB downloaded (5 IFS ENS members took 350,757,112 B, 2026-11-05); on disk 519 MB ' +
+        'for an IFS ENS member and 270 MB for an AIFS ENS member (du, 2026-11-06).'),
       ensembleOn ? row('Which', h('div', null, ENSEMBLE_MODELS.map(function (m) {
         var on = ensembleModels.indexOf(m.id) >= 0;
         var last = on && ensembleModels.length === 1;

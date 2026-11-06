@@ -2717,6 +2717,7 @@ function _ensGone(cancel) {
 /** Each finished route of the set on screen (the main forecast's and the members'): its line fetched once and drawn. */
 function _ensDraw() {
   const set = _ens;
+  const gen = _ensGen;
   const routes = set.main && set.main.status === 'done' ? [{ ...set.main, main: true }, ...set.members] : set.members;
   for (const m of routes) {
     if (m.status !== 'done' || !m.job_id || _ensDrawn.has(m.job_id)) continue;
@@ -2724,7 +2725,7 @@ function _ensDraw() {
     authFetch(API + '/routes/' + encodeURIComponent(m.job_id) + '/result', { cache: 'no-store' }, null)
       .then(r => (r.ok ? r.json() : null))
       .then(geo => {
-        if (!geo || !_ens || _ens.id !== set.id) return;   // the set left the screen meanwhile
+        if (gen !== _ensGen || !geo || !_ens || _ens.id !== set.id) return;   // the set left the screen meanwhile (even to come back)
         const pts = (geo.features || []).filter(f => f.geometry && f.geometry.type === 'Point').map(f => f.geometry.coordinates);
         if (pts.length < 2) return;
         const coords = unwrapLonLats(pts).map(c => ol.proj.fromLonLat(c));
@@ -2735,7 +2736,7 @@ function _ensDraw() {
         _ensLines.set(m.job_id, { coords, main: !!m.main });
         _ensCorridor();
       })
-      .catch(() => { _ensDrawn.delete(m.job_id); });
+      .catch(() => { if (gen === _ensGen) _ensDrawn.delete(m.job_id); });
   }
 }
 // ── The corridor: where all the set's routes lie, display only ──
@@ -2791,6 +2792,8 @@ function _ensCorridor() {
   const pieces = steps.map(_ensHull).filter(h => h.length >= 3).map(h => [h.concat([h[0]])]);
   if (pieces.length) _ensCorridorSource.addFeature(new ol.Feature(new ol.geom.MultiPolygon(pieces)));
 }
+/** A table cell's number in the user's unit (`ud`: unitDesc), or — when there is none or the unit is not known (Best departure's and the ensemble's tables). */
+function _unitCell(v, ud) { return v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p); }
 /** A member's name in the table: "control" for member 0, else "member N". */
 function _ensWho(m) { return m.member === 0 ? 'control' : 'member ' + m.member; }
 /** The result strip's line: how far the set is, and the arrivals of the members' routes. */
@@ -2818,8 +2821,6 @@ function _ensRender() {
   const was = el.querySelector('details');
   const open = was ? /** @type {HTMLDetailsElement} */ (was).open : true;
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
-  /** A value in the user's unit, or — when there is none or the unit is not known. */
-  const num = (v, ud) => (v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p));
   const STATUS = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled' };
   // The main forecast's route first, so it can be opened again after a member's.
   const main = set.main ? [{ ...set.main, who: 'main forecast' }] : [];
@@ -2834,7 +2835,7 @@ function _ensRender() {
     return '<tr data-job="' + escapeHtml(m.job_id) + '" style="cursor:pointer;"' + opened + ' title="Click to open this member\'s route">'
       + '<td>' + (m.who ? '<b>' + who + '</b>' : who) + '</td><td title="' + escapeHtml(fmtWhen(x.arrival)) + '">' + escapeHtml(_winWhen(x.arrival)) + '</td>'
       + '<td>' + _winDuration(x.total_time_s, true) + '</td><td>' + _winDuration(x.motoring_time_s) + '</td>'
-      + '<td>' + num(x.max_wind_ms, speedU) + '</td><td>' + num(x.max_swh_m, waveU) + '</td></tr>';
+      + '<td>' + _unitCell(x.max_wind_ms, speedU) + '</td><td>' + _unitCell(x.max_swh_m, waveU) + '</td></tr>';
   });
   el.innerHTML = '<details' + (open ? ' open' : '') + '><summary>' + escapeHtml(set.name) + ' (' + _shortUtc(set.cycle) + '): the route on each of ' + set.members.length + ' members</summary>'
     + '<div class="ens-scroll"><table><thead><tr><th>Member</th><th>Arrives</th><th>Passage</th><th>Motor</th>'
@@ -4383,7 +4384,6 @@ function _winRender() {
   const t = _winDuration;
   // Numbers in the cells, the unit in the header (the panel is narrow).
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
-  const num = (v, ud) => (v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p));
   let html = '<div class="win-sort"><label for="windowSort" style="margin:0;">Best by</label><select id="windowSort" aria-label="Rank the departures by">'
     + Object.entries(_WIN_SORTS).map(([id, s]) => '<option value="' + id + '"' + (id === sortId ? ' selected' : '') + '>' + s.label + '</option>').join('')
     + '</select></div>';
@@ -4398,7 +4398,7 @@ function _winRender() {
     }
     html += '<tr class="' + cls + '" data-job="' + escapeHtml(d.job_id) + '" title="Arrives ' + escapeHtml(fmtWhen(m.arrival)) + '. Click to open this departure’s route' + (m.beyond_forecast ? ' (arrives after the forecast ends: its last legs ran on conditions held at the last step)' : '') + '">'
       + '<td>' + lead + '</td><td>' + t(m.total_time_s, true) + (m.beyond_forecast ? ' *' : '') + '</td>'
-      + '<td>' + num(m.max_wind_ms, speedU) + '</td><td>' + num(m.max_swh_m, waveU) + '</td><td>' + t(m.motoring_time_s) + '</td><td>' + t(m.upwind_time_s) + '</td></tr>';
+      + '<td>' + _unitCell(m.max_wind_ms, speedU) + '</td><td>' + _unitCell(m.max_swh_m, waveU) + '</td><td>' + t(m.motoring_time_s) + '</td><td>' + t(m.upwind_time_s) + '</td></tr>';
   });
   html += '</tbody></table></div>';
   if (w.departures.some(d => d.metrics && d.metrics.beyond_forecast)) html += '<div class="ctl-hint">* arrives after the forecast ends; not ranked.</div>';
