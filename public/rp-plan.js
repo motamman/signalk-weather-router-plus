@@ -1988,6 +1988,11 @@ function _warningKind(w) {
     const s = Number(w.detail);
     return "seas outside the polar's wave correction: sailed uncorrected" + (s > 0 && fmtTime(s) ? ' for ' + fmtTime(s) : '');
   }
+  // Waves in the forecast but no Tm02 (mp2), the period the wave correction is read with: sailed uncorrected.
+  if (w.violation === 'waves_no_period') {
+    const s = Number(w.detail);
+    return "no wave period (Tm02) in the forecast for the polar's wave correction: sailed uncorrected" + (s > 0 && fmtTime(s) ? ' for ' + fmtTime(s) : '');
+  }
   return escapeHtml(String(w.violation || 'warning').replace(/_/g, ' '));
 }
 // The search's own reason, as a line under the row's text (a long sentence, with quantities as unit tokens): shown,

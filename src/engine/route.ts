@@ -80,7 +80,8 @@ export interface RouteWarning {
    * stretch follows the mesh route instead (mesh/legrun.ts), which can be slower, with many short tacks; from and to
    * are the stretch's ends. `beat_motored`: a beat no tack fitted in, motored straight (experimental/propagator.ts).
    * `waves_outside_correction`: time sailed where the sea was outside the polar's wave-correction table, so at the
-   * polar's speed uncorrected (smoother.ts waveCorrectionWarnings).
+   * polar's speed uncorrected (smoother.ts waveCorrectionWarnings). `waves_no_period`: time sailed where the forecast
+   * had waves but no Tm02 (mp2) to read that table with, so uncorrected too.
    */
   violation:
     | 'leg_crosses_land'
@@ -89,7 +90,8 @@ export interface RouteWarning {
     | 'detour_motored'
     | 'search_failed'
     | 'beat_motored'
-    | 'waves_outside_correction';
+    | 'waves_outside_correction'
+    | 'waves_no_period';
   from: [number, number];
   to: [number, number];
   repaired: boolean;

@@ -92,13 +92,13 @@ test("Polar Management's switch off, or no table: no correction; a malformed tab
     assert.throws(() => adaptManagedPolar(set(bad), 'boat', 1), /wave correction/);
 });
 
-/** Wind from the north at 8 m/s and 2 m waves at 5 s from `mwd`, everywhere. */
-function sea(swh: number, mwd: number): WindSource {
+/** Wind from the north at 8 m/s and `swh` m waves from `mwd`, everywhere: Tm02 (mp2) `mp2` s, mean period mwp `mwp` s. */
+function sea(swh: number, mwd: number, mp2 = 5, mwp = mp2): WindSource {
   return {
     hasWaves: true,
     at: () => [8, 0],
     atMany: lons => ({ speed: new Float64Array(lons.length).fill(8), dir: new Float64Array(lons.length) }),
-    wavesAt: () => ({ swh, mwp: 5, mwd }),
+    wavesAt: () => ({ swh, mwp, mp2, mwd }),
   };
 }
 
@@ -117,4 +117,25 @@ test('the simulator sails at polar × factor, and counts the time sailed where t
   assert.equal(high.seconds, plain.seconds);
   assert.equal(high.uncorrectedWaveSeconds, high.seconds);
   assert.equal(plain.uncorrectedWaveSeconds, 0);
+});
+
+test('the table is read with Tm02 (mp2), not the mean period mwp; without a Tm02 the sea is sailed uncorrected and counted', () => {
+  const polar = new PolarDiagram([0, 90, 180], [4, 8], [0, 0, 3, 4, 2, 3]);
+  const vessel = makeVessel({ motorSpeedMs: 2 });
+  const sim = { modePolicy: 'sail_max' as const, sailThreshMs: 0.5, simStepM: 100 };
+  const t0 = new Date('2026-01-01T00:00:00Z');
+  const wc = { ...sim, waveCorrection: correction() };
+  // Due east, 2 m waves from the west: following seas, where the 2 m layer's factor depends on the period
+  // (1.1 at 5 s, 1.15 at 10 s).
+  const plain = simulateLegTime(0, 0, t0, 0.05, 0, vessel, polar, sea(2, 270, 5, 10), new NoCurrent(), sim);
+  const following = simulateLegTime(0, 0, t0, 0.05, 0, vessel, polar, sea(2, 270, 5, 10), new NoCurrent(), wc);
+  assert.ok(Math.abs(following.seconds - plain.seconds / 1.1) < 1e-6, `${following.seconds} vs ${plain.seconds / 1.1}: read at mp2 5 s`);
+  assert.equal(following.noPeriodWaveSeconds, 0);
+  // No Tm02 in the forecast: the polar's speed, all of it counted apart from seas outside the table.
+  const none = simulateLegTime(0, 0, t0, 0.05, 0, vessel, polar, sea(2, 270, NaN, 10), new NoCurrent(), wc);
+  assert.equal(none.seconds, plain.seconds);
+  assert.equal(none.noPeriodWaveSeconds, none.seconds);
+  assert.equal(none.uncorrectedWaveSeconds, 0);
+  // Without a wave correction nothing is counted.
+  assert.equal(plain.noPeriodWaveSeconds, 0);
 });

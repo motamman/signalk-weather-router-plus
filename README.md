@@ -53,7 +53,7 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 - **Forecast:** ECMWF IFS 0.25° open data, `oper`/`wave` streams for every
   cycle: 00z/12z to 360 h (every 3 h to 144 h, then every 6 h), 06z/18z to
   144 h. Fields: the base fields `10u`, `10v`, `msl`, `swh`, `mwp`,
-  `mwd`, the optional peak wave period `pp1d`, and the extra fields when
+  `mwd`, the optional wave periods `mp2` and `pp1d`, and the extra fields when
   they are on (below). Only those fields are fetched (byte-range
   requests against the published `.index` files, roughly 4.7 MB per
   step instead of 140 MB) and cached on disk under the plugin's data
@@ -62,10 +62,13 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   Weather API and routing work anywhere: 1440 × 721 cells × 4 B =
   4.15 MB per field per step. A 72 h horizon (25 steps) is 623 MB with
   the six base fields and 1.35 GB with the extra fields (`2t`, `tprate`,
-  `skt`, `2d`, `ptype`, `tcc`, `10fg`). The peak wave period (`pp1d`) is
-  fetched when it can be, about 104 MB more at 72 h (25 × 4.15 MB); it
-  is optional: a forecast without it is complete, and nothing reads it
-  yet (it is there for wave-correction tables made for peak period).
+  `skt`, `2d`, `ptype`, `tcc`, `10fg`). Two wave periods are fetched
+  when they can be, each about 104 MB more on disk at 72 h
+  (25 × 4.15 MB): the mean zero-crossing period Tm02 (`mp2`, 440,100 B
+  per step to download for the 05 Nov 18Z run at +24 h, from its
+  `.index`), which the wave correction is read with, and the peak period
+  (`pp1d`), which nothing reads yet. Both are optional: a forecast
+  without them is complete.
 
   **When a run is due.** ECMWF publishes each cycle at once, 454 minutes
   after its run time for 00z/12z and 387 minutes for 06z/18z (measured
@@ -3029,9 +3032,15 @@ and puts a route point where it changes, on the line already sailed
 the stretch into it, shown as **Sails** on the leg cards. The speed stays
 `best`'s. A set's `waveCorrection` table multiplies the sailing speed by
 its factor for the sea the boat meets (significant height, ECMWF's mean
-period `mwp`, the waves' angle off the heading; interpolated in angle,
-then period, then height). A sea outside the table is sailed uncorrected
-and the leg gets a `waves_outside_correction` warning. The correction is
+zero-crossing period Tm02 `mp2`, the waves' angle off the heading;
+interpolated in angle, then period, then height). Tm02, not ECMWF's mean
+period `mwp`: `mwp` is the energy mean period Tm−1,0, longer than Tm01
+or Tm02, and open data has no Tm01, so `mp2` is the nearest to TimeZero's
+tables (SignalK/sailsconfiguration#13). A sea outside the table is sailed
+uncorrected and the leg gets a `waves_outside_correction` warning; where
+the forecast has waves but no `mp2` (an older run, a step whose `mp2`
+could not be fetched, an AIFS ENS member), it is sailed uncorrected too,
+never read with `mwp`, and the leg gets a `waves_no_period` warning. The correction is
 off when `polars.applyWaveCorrection` is false, and motoring speed is not
 corrected.
 

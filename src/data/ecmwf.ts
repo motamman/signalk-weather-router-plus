@@ -31,11 +31,15 @@ export const ECMWF_MIRRORS: Record<string, string> = {
 export const ATM_PARAMS = ['10u', '10v', 'msl'] as const;
 export const WAVE_PARAMS = ['swh', 'mwp', 'mwd'] as const;
 /**
- * Wave fields fetched and decoded when they can be, never required: the peak period (pp1d), kept beside the mean
- * because a polar's wave-correction table may be made for either (not read yet). A cycle cached, or a run decoded,
- * without them is complete, so an update never makes a boat that is offline throw away the forecast it has.
+ * Wave fields fetched and decoded when they can be, never required:
+ *  - mp2, the mean zero-crossing period Tm02: the period a polar's wave-correction table is read with
+ *    (vessel/wavecorrection.ts). ECMWF's mwp is the energy mean period Tm−1,0, longer than Tm01 or Tm02; open data has
+ *    no Tm01, so mp2 is the nearest to TimeZero's tables (SignalK/sailsconfiguration#13, 2026-11-04).
+ *  - pp1d, the peak period, kept for tables made for it (not read yet).
+ * A cycle cached, or a run decoded, without them is complete, so an update never makes a boat that is offline throw
+ * away the forecast it has.
  */
-export const OPTIONAL_WAVE_PARAMS = ['pp1d'] as const;
+export const OPTIONAL_WAVE_PARAMS = ['mp2', 'pp1d'] as const;
 
 /**
  * The ECMWF ensembles the plugin can download, each on the same open-data server, grid (0.25°) and `.index` byte-range

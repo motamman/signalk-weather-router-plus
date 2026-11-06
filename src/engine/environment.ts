@@ -3,8 +3,10 @@
 export interface WaveConditions {
   /** Significant wave height, metres. */
   swh: number;
-  /** Mean wave period, seconds. */
+  /** Mean wave period, seconds (ECMWF mwp, the energy mean period Tm−1,0). */
   mwp: number;
+  /** Mean zero-crossing period Tm02, seconds (ECMWF mp2), NaN where the forecast has none: the wave correction's period. */
+  mp2: number;
   /** Mean wave direction FROM, degrees true. */
   mwd: number;
 }
@@ -21,12 +23,12 @@ export interface WindSource {
   wavesAtMany?(lons: Float64Array, lats: Float64Array, time: Date): Float64Array;
   /** As wavesAtMany with one time per point. Optional. */
   wavesAtManyAt?(lons: Float64Array, lats: Float64Array, timesMs: Float64Array): Float64Array;
-  /** Height (m), mean period (s) and mean direction FROM (degrees) per point at its own time, NaN where there is none; for the comfort cost. Optional: without it the search calls `wavesAt` per point. */
+  /** Height (m), mean period and Tm02 (s) and mean direction FROM (degrees) per point at its own time, NaN where there is none; for the comfort cost and the wave correction. Optional: without it the search calls `wavesAt` per point. */
   wavesFullAtManyAt?(
     lons: Float64Array,
     lats: Float64Array,
     timesMs: Float64Array
-  ): { swh: Float64Array; mwp: Float64Array; mwd: Float64Array };
+  ): { swh: Float64Array; mwp: Float64Array; mp2: Float64Array; mwd: Float64Array };
 }
 
 export interface CurrentSource {

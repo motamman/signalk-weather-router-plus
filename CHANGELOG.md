@@ -40,20 +40,25 @@ uses [Semantic Versioning](https://semver.org/).
   the sails.
 - **Wave correction.** A polar set's `waveCorrection` table multiplies the
   sailing speed by its factor for the forecast sea the boat meets: the
-  significant height, ECMWF's mean period (`mwp`) and the waves' angle
-  off the heading, interpolated in angle, then period, then height.
-  A sea outside the table is never taken as factor 1 or extrapolated: it
-  is sailed uncorrected and the leg carries a `waves_outside_correction`
-  warning with the seconds. Off when Polar Management's
+  significant height, ECMWF's mean zero-crossing period Tm02 (`mp2`) and
+  the waves' angle off the heading, interpolated in angle, then period,
+  then height. Tm02 rather than ECMWF's mean period `mwp`, which is the
+  energy mean period Tm−1,0, longer than the Tm01 or Tm02 tables are made
+  for (SignalK/sailsconfiguration#13). A sea outside the table is never
+  taken as factor 1 or extrapolated: it is sailed uncorrected and the leg
+  carries a `waves_outside_correction` warning with the seconds. Waves
+  with no `mp2` in the forecast are sailed uncorrected too, never with
+  `mwp`, with a `waves_no_period` warning. Off when Polar Management's
   `polars.applyWaveCorrection` is false; motoring speed is not corrected.
   The wave limit and the comfort weight still only weigh the route
   choice, so no sea counts twice.
-- **The peak wave period is downloaded.** ECMWF's `pp1d` is fetched and
-  decoded beside the other wave fields when it can be, one more global
-  field per step (4.15 MB). A forecast without it still counts as
-  complete, so an update never makes a boat that is offline throw away
-  the forecast it has, and a `pp1d` message that cannot be fetched or
-  decoded is skipped, never failing the step. Nothing reads it yet.
+- **Two more wave periods are downloaded.** ECMWF's Tm02 (`mp2`, read
+  by the wave correction) and peak period (`pp1d`, not read yet) are
+  fetched and decoded beside the other wave fields when they can be, one
+  more global field each per step (4.15 MB). A forecast without them
+  still counts as complete, so an update never makes a boat that is
+  offline throw away the forecast it has, and a message that cannot be
+  fetched or decoded is skipped, never failing the step.
 
 ### Fixed
 

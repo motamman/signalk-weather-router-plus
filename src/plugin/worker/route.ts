@@ -510,7 +510,8 @@ export function compactFront(f: StageFront): { stage: number; total: number; poi
 }
 
 /** Fields the engine samples: wind (at, atMany) and waves (wavesAt). */
-const ROUTE_PARAMS = ['10u', '10v', 'swh', 'mwp', 'mwd'];
+// mp2 (Tm02, the wave correction's period) where the run has it: a run or step without it is read without it.
+const ROUTE_PARAMS = ['10u', '10v', 'swh', 'mwp', 'mwd', 'mp2'];
 
 /**
  * Degrees added around the corridor box for the route's forecast area.
@@ -759,7 +760,7 @@ export async function route(
       progress(
         0,
         0,
-        `polar: wave correction applied to the sailing speed (${waveCorrection.layers.length} height layer(s), {length:${waveCorrection.heightsM[0]}} to {length:${waveCorrection.heightsM[waveCorrection.heightsM.length - 1]}}; the forecast's mean wave period); seas outside its table are sailed uncorrected and marked on the leg`
+        `polar: wave correction applied to the sailing speed (${waveCorrection.layers.length} height layer(s), {length:${waveCorrection.heightsM[0]}} to {length:${waveCorrection.heightsM[waveCorrection.heightsM.length - 1]}}; read with the forecast's Tm02, mp2); seas outside its table, or without a Tm02 in the forecast, are sailed uncorrected and marked on the leg`
       );
     const departureMs = request.departure ? Date.parse(request.departure) : Date.now();
     // A motor route reads the forecast too (until 2026-10-30 it did not, so its wind and wave limits and its comfort
@@ -1309,6 +1310,7 @@ const PER_SEGMENT_WARNINGS: ReadonlySet<RouteWarning['violation']> = new Set([
   'wind_over_limit',
   'waves_over_limit',
   'waves_outside_correction',
+  'waves_no_period',
 ]);
 
 /** Repair limits: passes over the route, and detours in all. */

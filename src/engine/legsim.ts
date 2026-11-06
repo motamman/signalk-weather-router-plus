@@ -46,6 +46,11 @@ export interface LegSimResult {
   overLimitSeconds: number;
   /** Seconds sailed where the sea was outside the polar's wave-correction table, so sailed uncorrected (0 without one). */
   uncorrectedWaveSeconds: number;
+  /**
+   * Seconds sailed where the forecast had waves but no Tm02 (mp2) to read the wave-correction table with, so sailed
+   * uncorrected (0 without a table). Never read with the mean period mwp instead: a different period.
+   */
+  noPeriodWaveSeconds: number;
 }
 
 /**
@@ -76,7 +81,8 @@ export interface SimOptions {
   tackPenaltyS?: number;
   /**
    * A polar set's wave correction (vessel/wavecorrection.ts): the sailing speed times its factor for the sea the boat
-   * meets (mean period, the waves' angle off the heading); a sea outside its table is sailed uncorrected and counted.
+   * meets (Tm02, the waves' angle off the heading); a sea outside its table, or with no Tm02 in the forecast, is sailed
+   * uncorrected and counted.
    * Absent, or a forecast without waves: no correction.
    */
   waveCorrection?: WaveCorrection;
@@ -239,6 +245,7 @@ export function simulateLegTime(
       overSwhSeconds: 0,
       overLimitSeconds: 0,
       uncorrectedWaveSeconds: 0,
+      noPeriodWaveSeconds: 0,
     };
   }
   const bearingDeg = haversineBearing(aLon, aLat, cLon, cLat);
@@ -269,6 +276,7 @@ export function simulateLegTime(
       overSwhSeconds: 0,
       overLimitSeconds: 0,
       uncorrectedWaveSeconds: 0,
+      noPeriodWaveSeconds: 0,
     };
   }
   return {
@@ -282,6 +290,7 @@ export function simulateLegTime(
     overSwhSeconds: sc.overSwh[0],
     overLimitSeconds: sc.overAny[0],
     uncorrectedWaveSeconds: sc.uncorrectedWave[0],
+    noPeriodWaveSeconds: sc.noPeriodWave[0],
   };
 }
 
@@ -323,23 +332,24 @@ export function currentAtTimes(
   return { u, v };
 }
 
-/** Height, mean period and mean direction FROM per point at its own time (NaN where there is none). */
+/** Height, mean period, Tm02 and mean direction FROM per point at its own time (NaN where there is none). */
 export function wavesFullAtTimes(
   wind: WindSource,
   lons: Float64Array,
   lats: Float64Array,
   timesMs: Float64Array
-): { swh: Float64Array; mwp: Float64Array; mwd: Float64Array } {
+): { swh: Float64Array; mwp: Float64Array; mp2: Float64Array; mwd: Float64Array } {
   if (wind.wavesFullAtManyAt) return wind.wavesFullAtManyAt(lons, lats, timesMs);
   const n = lons.length;
   const swh = new Float64Array(n).fill(NaN);
   const mwp = new Float64Array(n).fill(NaN);
+  const mp2 = new Float64Array(n).fill(NaN);
   const mwd = new Float64Array(n).fill(NaN);
   for (let k = 0; k < n; k++) {
     const v = wind.wavesAt(lons[k], lats[k], new Date(timesMs[k]));
-    if (v) [swh[k], mwp[k], mwd[k]] = [v.swh, v.mwp, v.mwd];
+    if (v) [swh[k], mwp[k], mp2[k], mwd[k]] = [v.swh, v.mwp, v.mp2, v.mwd];
   }
-  return { swh, mwp, mwd };
+  return { swh, mwp, mp2, mwd };
 }
 
 /** Significant wave height per point at its own time (NaN where there is none). */
@@ -380,6 +390,8 @@ export interface CandidateScores {
   overAny: Float64Array;
   /** Seconds sailed outside the wave-correction table (SimOptions.waveCorrection). */
   uncorrectedWave: Float64Array;
+  /** Seconds sailed with waves but no Tm02 to read the table with. */
+  noPeriodWave: Float64Array;
 }
 
 /**
@@ -424,6 +436,7 @@ export function scoreCandidatesFromParent(
   const overSwh = new Float64Array(n);
   const overAny = new Float64Array(n);
   const uncorrectedWave = new Float64Array(n);
+  const noPeriodWave = new Float64Array(n);
   if (n === 0)
     return {
       seconds,
@@ -440,6 +453,7 @@ export function scoreCandidatesFromParent(
       overSwh,
       overAny,
       uncorrectedWave,
+      noPeriodWave,
     };
   const comfortW = opts.comfortWeight && opts.comfortWeight > 0 && wind.hasWaves ? opts.comfortWeight : 0;
   const avoidWind = opts.maxWindMode === 'avoid';
@@ -513,15 +527,20 @@ export function scoreCandidatesFromParent(
         cv = 0;
       }
 
-      // The wave correction's factor for the sea this candidate meets here; outside its table, none (counted below).
-      // A sample missing its height, period or direction has no sea to look up: sailed uncorrected, not counted as
-      // outside the table.
+      // The wave correction's factor for the sea this candidate meets here, read with Tm02 (mp2); outside its table,
+      // none (counted below). Waves without a Tm02 (a run or step without mp2, an ensemble member) have no period to
+      // read it with: sailed uncorrected and counted apart, never read with mwp. A sample missing its height or
+      // direction has no sea at all: sailed uncorrected, not counted.
       let sailFactor = 1;
       let uncorrected = false;
-      if (wc && full && Number.isFinite(full.swh[q]) && Number.isFinite(full.mwp[q]) && Number.isFinite(full.mwd[q])) {
-        const f = waveFactor(wc, full.swh[q], full.mwp[q], seaAngle(bearings[i], full.mwd[q]).angle);
-        if (f === null) uncorrected = true;
-        else sailFactor = f;
+      let noPeriod = false;
+      if (wc && full && Number.isFinite(full.swh[q]) && Number.isFinite(full.mwd[q])) {
+        if (!Number.isFinite(full.mp2[q])) noPeriod = true;
+        else {
+          const f = waveFactor(wc, full.swh[q], full.mp2[q], seaAngle(bearings[i], full.mwd[q]).angle);
+          if (f === null) uncorrected = true;
+          else sailFactor = f;
+        }
       }
       const { progress, sailUsed, inNoGo, waterSpeed } = stepAlongHeading(
         bearings[i],
@@ -552,6 +571,7 @@ export function scoreCandidatesFromParent(
         penalty[i] += stepS * surcharge;
       }
       if (uncorrected && sailUsed) uncorrectedWave[i] += stepS;
+      if (noPeriod && sailUsed) noPeriodWave[i] += stepS;
       if (comfortW > 0 && full && Number.isFinite(full.swh[q])) {
         // The sea as this candidate meets it: the index of the water (wind and
         // swell against the current) weighted by the angle of the waves to the heading.
@@ -603,5 +623,6 @@ export function scoreCandidatesFromParent(
     overSwh,
     overAny,
     uncorrectedWave,
+    noPeriodWave,
   };
 }

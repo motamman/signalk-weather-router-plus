@@ -49,10 +49,11 @@ test('with a comfort weight the route leaves heavy head seas for calm water; its
     at: () => [7, 90],
     atMany: lons => ({ speed: new Float64Array(lons.length).fill(7), dir: new Float64Array(lons.length).fill(90) }),
     hasWaves: true,
-    wavesAt: lon => ({ swh: heavy(lon) ? 4 : 0.3, mwp: 8, mwd: 180 }),
+    wavesAt: lon => ({ swh: heavy(lon) ? 4 : 0.3, mwp: 8, mp2: 8, mwd: 180 }),
     wavesFullAtManyAt: lons => ({
       swh: Float64Array.from(lons, l => (heavy(l) ? 4 : 0.3)),
       mwp: new Float64Array(lons.length).fill(8),
+      mp2: new Float64Array(lons.length).fill(8),
       mwd: new Float64Array(lons.length).fill(180),
     }),
   };

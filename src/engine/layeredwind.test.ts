@@ -9,7 +9,7 @@ function uniform(speed: number, dir: number): BaseWind {
     at: () => [speed, dir],
     atMany: lons => ({ speed: new Float64Array(lons.length).fill(speed), dir: new Float64Array(lons.length).fill(dir) }),
     hasWaves: true,
-    wavesAt: () => ({ swh: 1.5, mwp: 7, mwd: 200 }),
+    wavesAt: () => ({ swh: 1.5, mwp: 7, mp2: 7, mwd: 200 }),
     validRange: [new Date(T0), new Date(T0 + 240 * 3600_000)],
   };
 }

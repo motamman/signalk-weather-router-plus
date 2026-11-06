@@ -63,7 +63,7 @@ function shearedWind(): WindSource {
       return { speed: s, dir: d };
     },
     hasWaves: true,
-    wavesAt: (lon, lat) => ({ swh: 0.5 + lat, mwp: 6, mwd: dir(lon, lat) }),
+    wavesAt: (lon, lat) => ({ swh: 0.5 + lat, mwp: 6, mp2: 6, mwd: dir(lon, lat) }),
     wavesAtMany: (_lons, lats) => Float64Array.from(lats, l => 0.5 + l),
   };
 }
