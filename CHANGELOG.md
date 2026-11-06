@@ -21,8 +21,9 @@ uses [Semantic Versioning](https://semver.org/).
   forecast (`POST /api/ensemble-sets`; `forecast_member` on a route
   request). The members' routes show dotted cyan on the map and the main
   forecast's thin and solid, with the **corridor** they all lie in shaded
-  under them (the area between the outermost routes along the main
-  route; display only, water not checked) and the route opened on a white
+  under them (for each 1/200 of the way along every route, the convex
+  hull of all the routes there, so every route lies inside it; display
+  only, water not checked) and the route opened on a white
   band; the arrival spread is in the result strip and a members table in
   the Itinerary.
   Measured on the test box at 72 h: about 70 MB to download and 519 MB

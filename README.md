@@ -182,10 +182,12 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   that member's wind and waves (no regional wind); every member of a set
   is of the same ensemble cycle. On the map the members' routes are
   dotted cyan and the main forecast's thin and solid, with the
-  **corridor** they all lie in shaded under them: the area between the
-  outermost routes, slice by slice along the main route, joined at the
-  start and the destination (display only; water is not checked, so two
-  members either side of an island put the island in it). The route
+  **corridor** they all lie in shaded under them: each route is cut into
+  200 steps by progress along its own length, and each step's piece is
+  the convex hull of every route's points in it, so every route lies
+  inside by construction; it is wider where the routes progress unevenly
+  (display only; water is not checked, so two members either side of an
+  island put the island in it). The route
   opened sits on a white band. The result strip gives how far the set is and the earliest,
   median and latest arrival, and the Itinerary tab lists each member's
   arrival, passage, motoring, strongest wind and highest waves; a row

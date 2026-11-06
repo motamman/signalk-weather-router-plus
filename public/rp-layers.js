@@ -2217,7 +2217,7 @@ function _routeLegendRow() {
   if (snap) item(_lineSym('#7F0000', 2, [4, 4]), 'moved to the nearest water');
   if (ringSource.getFeatures().length) item(_sym('<circle cx="15" cy="7" r="5.5" fill="rgba(255,152,0,0.10)" stroke="rgba(255,152,0,0.95)" stroke-width="2" stroke-dasharray="3 2"/>'), 'arrival circle (approximate waypoint)');
   const ens = _ensLegendInfo ? _ensLegendInfo() : null;
-  if (ens && ens.corridor) item(_sym('<rect x="2" y="2" width="26" height="10" fill="rgba(0,184,212,0.12)" stroke="rgba(0,184,212,0.5)"/>'), 'ensemble corridor: where all the routes lie');
+  if (ens && ens.corridor) item(_sym('<rect x="2" y="2" width="26" height="10" fill="rgba(0,184,212,0.15)"/>'), 'ensemble corridor: where all the routes lie');
   if (ens && ens.main) item(_lineSym('#1f6b8d', 2), 'ensemble: main forecast\'s route');
   if (ens && ens.members) item(_lineSym('#00b8d4', 3.5, [1, 7], 'round'), 'ensemble: a member\'s route');
   if (ens && ens.open) item(_sym('<line x1="2" y1="7" x2="28" y2="7" stroke="rgba(0,0,0,0.45)" stroke-width="13"/><line x1="2" y1="7" x2="28" y2="7" stroke="rgba(255,255,255,0.9)" stroke-width="11"/>'), 'ensemble: the route opened');

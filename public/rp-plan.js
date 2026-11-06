@@ -2641,20 +2641,21 @@ const _ENS_STYLE = {
   ],
   main: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#1f6b8d', width: 2 }) }),
   member: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#00b8d4', width: 3.5, lineDash: [1, 7], lineCap: 'round' }) }),
-  // The corridor (_ensCorridor): the members' colour, faint, under every line of the set.
-  corridor: new ol.style.Style({
-    fill: new ol.style.Fill({ color: 'rgba(0, 184, 212, 0.12)' }),
-    stroke: new ol.style.Stroke({ color: 'rgba(0, 184, 212, 0.5)', width: 1 }),
-    zIndex: -1,
-  }),
 };
 map.addLayer(new ol.layer.Vector({
   source: _ensSource,
   zIndex: 4,
-  /** The corridor; the route opened highlighted; otherwise the main forecast's style or a member's. */
-  style: f =>
-    f.get('corridor') ? _ENS_STYLE.corridor
-      : f.get('job') === _currentRouteJobId ? _ENS_STYLE.open : f.get('main') ? _ENS_STYLE.main : _ENS_STYLE.member,
+  /** The route opened highlighted; otherwise the main forecast's style or a member's. */
+  style: f => (f.get('job') === _currentRouteJobId ? _ENS_STYLE.open : f.get('main') ? _ENS_STYLE.main : _ENS_STYLE.member),
+}));
+// The corridor (_ensCorridor), under the set's lines: its pieces overlap, so they are filled solid in the members' colour
+// and the layer as a whole is made faint, which shades the area they cover evenly.
+const _ensCorridorSource = new ol.source.Vector();
+map.addLayer(new ol.layer.Vector({
+  source: _ensCorridorSource,
+  zIndex: 3,
+  opacity: 0.15,
+  style: new ol.style.Style({ fill: new ol.style.Fill({ color: '#00b8d4' }) }),
 }));
 // The route legend (rp-layers.js) names what of the set is on the map, as the layer changes.
 watchEnsembleLegend(_ensSource, () => {
@@ -2663,7 +2664,7 @@ watchEnsembleLegend(_ensSource, () => {
     main: fs.some(f => f.get('main')),
     members: fs.some(f => f.get('job') && !f.get('main')),
     open: fs.some(f => f.get('job') && f.get('job') === _currentRouteJobId),
-    corridor: fs.some(f => f.get('corridor')),
+    corridor: _ensCorridorSource.getFeatures().length > 0,
   };
 });
 const _ensDrawn = new Set();   // member jobs whose line is on the map
@@ -2708,6 +2709,7 @@ function _ensGone(cancel) {
     authFetch(API + '/ensemble-sets/' + encodeURIComponent(_ens.id) + '/cancel', { method: 'POST' }, null).catch(() => {});
   _ens = null;
   _ensSource.clear();
+  _ensCorridorSource.clear();
   _ensDrawn.clear();
   _ensLines.clear();
   _ensRender();
@@ -2736,85 +2738,58 @@ function _ensDraw() {
       .catch(() => { _ensDrawn.delete(m.job_id); });
   }
 }
-// ── The corridor: the envelope of the set's routes, display only ──
-// Every line drawn (the main forecast's and each finished member's) is placed against a spine (the main forecast's
-// route, else the first member's drawn): how far along it each point is, and how far to its left or right. The spine
-// is cut into ENS_CORRIDOR_SLICES slices; in each, the corridor reaches the farthest point to either side (the spine
-// itself counts as 0), so it is the area between the outermost routes, joined at the start and the destination where
-// every route begins and ends. In map coordinates (EPSG:3857): a picture, not a measurement. Water is not checked:
-// two members either side of an island put the island in the corridor.
-const ENS_CORRIDOR_SLICES = 200;   // display resolution along the spine
-/** The point of polyline `line` nearest `p`: its distance along the line (`cum`: the length to each vertex) and its signed offset (left +). */
-function _ensProject(line, cum, p) {
-  let best = { s: 0, d: 0, dd: Infinity };
-  for (let i = 1; i < line.length; i++) {
-    const a = line[i - 1], b = line[i];
-    const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx * dx + dy * dy;
-    if (!len2) continue;
-    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2));
-    const qx = a[0] + t * dx, qy = a[1] + t * dy, dd = (p[0] - qx) ** 2 + (p[1] - qy) ** 2;
-    if (dd < best.dd) {
-      const len = Math.sqrt(len2);
-      best = { s: cum[i - 1] + t * len, d: (dx * (p[1] - a[1]) - dy * (p[0] - a[0])) / len, dd };
-    }
+// ── The corridor: where all the set's routes lie, display only ──
+// Every line drawn (the main forecast's and each finished member's) is cut by progress along its own length into
+// ENS_CORRIDOR_SLICES steps. For each step, the convex hull of every route's points in it (where each enters and leaves
+// the step, and its turns between) is one piece; the corridor is all the pieces. Each piece of a route lies inside its
+// step's hull, so every route is inside the corridor by construction. Where the routes progress unevenly (one goes round
+// early), a step pairs different places and the corridor is wider there. In map coordinates (EPSG:3857): a picture, not
+// a measurement. Water is not checked: two routes either side of an island put the island in it.
+const ENS_CORRIDOR_SLICES = 200;   // display resolution: steps along each route
+/** The convex hull of `pts` ([x, y] map coordinates), counter-clockwise, without repeating the first point. */
+function _ensHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower = [], upper = [];
+  for (const q of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop();
+    lower.push(q);
   }
-  return best;
-}
-/** The point of polyline `line` at distance `s` along it, and the unit normal to its left there. */
-function _ensAlong(line, cum, s) {
-  let i = 1;
-  while (i < line.length - 1 && cum[i] < s) i++;
-  const a = line[i - 1], b = line[i], len = cum[i] - cum[i - 1] || 1;
-  const t = Math.max(0, Math.min(1, (s - cum[i - 1]) / len));
-  return { p: [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])], n: [-(b[1] - a[1]) / len, (b[0] - a[0]) / len] };
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], q) <= 0) upper.pop();
+    upper.push(q);
+  }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
 }
 /** Draw the corridor again from every line drawn so far; none until there are two. */
 function _ensCorridor() {
-  const old = _ensSource.getFeatureById('corridor');
-  if (old) _ensSource.removeFeature(old);
+  _ensCorridorSource.clear();
   const routes = [..._ensLines.values()];
   if (routes.length < 2) return;
-  const spine = (routes.find(r => r.main) || routes[0]).coords;
-  const cum = [0];
-  for (let i = 1; i < spine.length; i++) cum.push(cum[i - 1] + Math.hypot(spine[i][0] - spine[i - 1][0], spine[i][1] - spine[i - 1][1]));
-  const total = cum[cum.length - 1];
-  if (!(total > 0)) return;
-  const n = ENS_CORRIDOR_SLICES, step = total / n;
-  const left = new Array(n + 1).fill(0), right = new Array(n + 1).fill(0);
-  const reach = (k, d) => { if (d > left[k]) left[k] = d; if (d < right[k]) right[k] = d; };
-  for (const r of routes) {
-    // Each leg cut to the slice length, so a long leg reaches every slice it passes.
-    const pts = [];
-    for (let i = 1; i < r.coords.length; i++) {
-      const a = r.coords[i - 1], b = r.coords[i];
-      const parts = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
-      for (let j = 0; j < parts; j++) pts.push([a[0] + (b[0] - a[0]) * j / parts, a[1] + (b[1] - a[1]) * j / parts]);
-    }
-    pts.push(r.coords[r.coords.length - 1]);
-    // Between two points in a row, every slice they span (a leg crossing a slice between them still widens it).
-    let prev = null;
-    for (const p of pts) {
-      const q = _ensProject(spine, cum, p);
-      const k = Math.round(q.s / step);
-      if (prev) {
-        const k0 = prev.k, k1 = k, span = k1 - k0;
-        for (let x = Math.min(k0, k1); x <= Math.max(k0, k1); x++) reach(x, span ? prev.d + (q.d - prev.d) * (x - k0) / span : q.d);
-      } else reach(k, q.d);
-      prev = { k, d: q.d };
+  const n = ENS_CORRIDOR_SLICES;
+  const steps = Array.from({ length: n }, () => []);
+  for (const { coords: c } of routes) {
+    const cum = [0];
+    for (let i = 1; i < c.length; i++) cum.push(cum[i - 1] + Math.hypot(c[i][0] - c[i - 1][0], c[i][1] - c[i - 1][1]));
+    const total = cum[cum.length - 1];
+    if (!(total > 0)) continue;
+    const step = total / n;
+    const at = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    for (let i = 1; i < c.length; i++) {
+      const s0 = cum[i - 1], s1 = cum[i], len = s1 - s0;
+      if (!len) continue;
+      // The part of this segment in each step it crosses: where it enters and where it leaves.
+      for (let k = Math.min(n - 1, Math.floor(s0 / step)); k <= Math.min(n - 1, Math.floor(s1 / step)); k++) {
+        const t0 = Math.max(0, (k * step - s0) / len), t1 = Math.min(1, ((k + 1) * step - s0) / len);
+        if (t0 > t1) continue;
+        steps[k].push(at(c[i - 1], c[i], t0), at(c[i - 1], c[i], t1));
+      }
     }
   }
-  const leftEdge = [], rightEdge = [];
-  for (let k = 0; k <= n; k++) {
-    const { p, n: nrm } = _ensAlong(spine, cum, k * step);
-    leftEdge.push([p[0] + nrm[0] * left[k], p[1] + nrm[1] * left[k]]);
-    rightEdge.push([p[0] + nrm[0] * right[k], p[1] + nrm[1] * right[k]]);
-  }
-  const ring = leftEdge.concat(rightEdge.reverse());
-  ring.push(ring[0]);
-  const f = new ol.Feature(new ol.geom.Polygon([ring]));
-  f.setId('corridor');
-  f.set('corridor', true);
-  _ensSource.addFeature(f);
+  const pieces = steps.map(_ensHull).filter(h => h.length >= 3).map(h => [h.concat([h[0]])]);
+  if (pieces.length) _ensCorridorSource.addFeature(new ol.Feature(new ol.geom.MultiPolygon(pieces)));
 }
 /** A member's name in the table: "control" for member 0, else "member N". */
 function _ensWho(m) { return m.member === 0 ? 'control' : 'member ' + m.member; }
