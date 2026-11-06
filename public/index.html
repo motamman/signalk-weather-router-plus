@@ -1000,7 +1000,7 @@
     </div>
     <div class="rp-label" id="rpLabel"><span class="rp-phase">Starting…</span><span class="rp-sub"></span><span class="rp-elapsed"></span></div>
   </div>
-  <label style="display:block;font-size:11px;cursor:pointer;margin-top:var(--s-1);" title="Draw the router's search on the map while a route computes: the front of each stage and the best path so far. Off by default; the same switch is in Layers → Base."><input type="checkbox" id="frontToggleRoute" style="width:auto;margin-right:4px;">Show decision lines (the router's search)</label>
+  <label style="display:block;font-size:11px;cursor:pointer;margin-top:var(--s-1);" title="Draw the router's search on the map while a route computes: the front of each stage, the best path so far, and the blue dashed guide the search followed (the coarse A* skeleton). Off by default; the same switch is in Layers → Base."><input type="checkbox" id="frontToggleRoute" style="width:auto;margin-right:4px;">Show decision lines (the router's search)</label>
   <button id="resetBtn" style="width:100%;padding:7px;margin-top:var(--s-1);background:var(--surface-2);color:var(--text);border:1px solid var(--border-hard);border-radius:var(--r-sm);cursor:pointer;font-size:var(--f-sm);transition:background var(--t-quick);">Clear all</button>
   <div id="status"></div>
   <div id="planHint" class="hint"></div>
@@ -1159,7 +1159,7 @@
     <label style="display:block;font-size:11px;cursor:pointer;"><input type="checkbox" id="vesselToggle" style="width:auto;margin-right:4px;" checked>Own vessel (Signal K position)</label>
     <label style="display:block;font-size:11px;cursor:pointer;" title="Notes from Signal K's Resources API (hazards, warnings, remarks, e.g. from signalk-passage-briefing) in the map view; click one to read it."><input type="checkbox" id="notesToggle" style="width:auto;margin-right:4px;" checked>Signal K notes</label>
     <label style="display:block;font-size:11px;cursor:pointer;" title="An arrow on each leg of the route, pointing the way the waves travel, coloured by the sea as the boat meets it (the sea-state index weighted for the waves' angle to the course: head seas count more, following seas less)."><input type="checkbox" id="seasRouteToggle" style="width:auto;margin-right:4px;" checked>Seas along the route</label>
-    <label style="display:block;font-size:11px;cursor:pointer;" title="The router's search: the front of each stage (the candidates it kept, each with its own arrival time; not isochrones) and the best path so far, live while a route runs. Off by default; the same switch sits beside Find Route."><input type="checkbox" id="frontToggle" style="width:auto;margin-right:4px;">Decision lines (the router's search)</label>
+    <label style="display:block;font-size:11px;cursor:pointer;" title="The router's search: the front of each stage (the candidates it kept, each with its own arrival time; not isochrones), the best path so far, live while a route runs, and the blue dashed guide the search followed (the coarse A* skeleton). Off by default; the same switch sits beside Find Route."><input type="checkbox" id="frontToggle" style="width:auto;margin-right:4px;">Decision lines (the router's search)</label>
     </div>
     <div class="layer-group" data-group="weather">
     <label style="display:block;font-size:11px;cursor:pointer;"><input type="checkbox" id="windToggle" style="width:auto;margin-right:4px;">Wind barbs</label>

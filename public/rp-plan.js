@@ -500,7 +500,8 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
   // Another saved route: the departures compared for the one before leave the screen; one of the window's own keeps them.
   if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
   // The same for the ensemble set: one of its members' routes keeps it, another route takes it off the screen.
-  if (!_ens || !_ens.members.some(m => m.job_id === id)) _ensGone(false);
+  if (!_ens || !(_ens.members.some(m => m.job_id === id) || (_ens.main && _ens.main.job_id === id))) _ensGone(false);
+  _ensForRoute(id);
   authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
@@ -1926,9 +1927,8 @@ function showModal() {
   const nameInput = /** @type {HTMLInputElement} */ (document.getElementById('routeNameInput'));
   if (nameInput) nameInput.value = '';
   renderResultStrip(null);
-  // A new request: the set for the route before is cancelled if still computing (its members would queue ahead of
-  // this one's) and leaves the screen; Find Route starts this route's own.
-  _ensGone(true);
+  // The set of the route before leaves the screen with it (a new request, Find Route, also cancels it).
+  _ensGone(false);
   updatePlanHint();
   RouteProgress.start();
   // The progress takes the button's place until the job ends (_computeUiIdle), in view: it is a little taller than the
@@ -2611,16 +2611,23 @@ window.addEventListener('rp:status', (/** @type {CustomEvent} */ e) => {
 // other on the server, polled every 3 s while it runs. The members' routes are drawn as thin grey lines under the main
 // one, the result strip says how far it is and the spread of arrivals, the Itinerary lists the members, and a row
 // opens that member's route (as Best departure opens a departure's).
+// Under the route layer (rp-layers.js routeLayer, zIndex 15), which draws the route opened in full: here every route of
+// the set as one line, and a highlight under the one opened. Not opened: the main forecast's thin and solid, the
+// members' thicker, dotted and brighter.
 const _ensSource = new ol.source.Vector();
+const _ENS_STYLE = {
+  open: new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(255, 214, 0, 0.6)', width: 11 }) }),
+  main: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#1f6b8d', width: 2 }) }),
+  member: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#00b8d4', width: 3.5, lineDash: [1, 7], lineCap: 'round' }) }),
+};
 map.addLayer(new ol.layer.Vector({
   source: _ensSource,
   zIndex: 4,
-  style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(80, 90, 110, 0.55)', width: 1.5 }) }),
+  style: f => (f.get('job') === _currentRouteJobId ? _ENS_STYLE.open : f.get('main') ? _ENS_STYLE.main : _ENS_STYLE.member),
 }));
 const _ensDrawn = new Set();   // member jobs whose line is on the map
-let _ensOpenJob = null;        // the member route opened from the table
-function _ensStart(route, want) {
-  const req = { route: { ...route }, model: want.model, members: want.members };
+function _ensStart(route, want, mainJobId) {
+  const req = { route: { ...route }, model: want.model, members: want.members, main_job_id: mainJobId };
   delete req.route.publish;
   authFetch(API + '/ensemble-sets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) }, null)
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
@@ -2651,7 +2658,6 @@ function _ensGone(cancel) {
   if (cancel && _ens && _ens.status === 'running')
     authFetch(API + '/ensemble-sets/' + encodeURIComponent(_ens.id) + '/cancel', { method: 'POST' }, null).catch(() => {});
   _ens = null;
-  _ensOpenJob = null;
   _ensSource.clear();
   _ensDrawn.clear();
   _ensRender();
@@ -2659,7 +2665,8 @@ function _ensGone(cancel) {
 // Each finished member's route line, fetched once.
 function _ensDraw() {
   const set = _ens;
-  for (const m of set.members) {
+  const routes = set.main && set.main.status === 'done' ? [{ ...set.main, main: true }, ...set.members] : set.members;
+  for (const m of routes) {
     if (m.status !== 'done' || !m.job_id || _ensDrawn.has(m.job_id)) continue;
     _ensDrawn.add(m.job_id);
     authFetch(API + '/routes/' + encodeURIComponent(m.job_id) + '/result', { cache: 'no-store' }, null)
@@ -2669,7 +2676,8 @@ function _ensDraw() {
         const pts = (geo.features || []).filter(f => f.geometry && f.geometry.type === 'Point').map(f => f.geometry.coordinates);
         if (pts.length < 2) return;
         const line = new ol.Feature(new ol.geom.LineString(unwrapLonLats(pts).map(c => ol.proj.fromLonLat(c))));
-        line.set('member', m.member);
+        line.set('job', m.job_id);
+        line.set('main', !!m.main);
         _ensSource.addFeature(line);
       })
       .catch(() => { _ensDrawn.delete(m.job_id); });
@@ -2693,6 +2701,7 @@ function _ensLine() {
 // The Itinerary tab's table: one row per member, numbers in the cells and the units in the header (as Best departure's).
 function _ensRender() {
   if (_lastRouteProps) renderResultStrip(_lastRouteProps, _lastNavWarns);
+  _ensSource.changed();   // the highlight follows the route opened
   const el = document.getElementById('itinEnsemble');
   if (!el) return;
   const set = _ens;
@@ -2702,15 +2711,18 @@ function _ensRender() {
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
   const num = (v, ud) => (v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p));
   const STATUS = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled' };
-  const rows = set.members.map(m => {
-    const opened = m.job_id && (m.job_id === _ensOpenJob || m.job_id === _currentRouteJobId) ? ' class="win-open"' : '';
+  // The main forecast's route first, so it can be opened again after a member's.
+  const main = set.main ? [{ ...set.main, who: 'main forecast' }] : [];
+  const rows = main.concat(set.members).map(m => {
+    const opened = m.job_id && m.job_id === _currentRouteJobId ? ' class="win-open"' : '';
+    const who = m.who || _ensWho(m);
     if (!m.metrics) {
-      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + _ensWho(m) + '</td><td colspan="5" style="text-align:left;">'
+      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + who + '</td><td colspan="5" style="text-align:left;">'
         + escapeHtml(STATUS[m.status] || m.status) + (m.error && m.status === 'failed' ? ': ' + escapeHtml(unitText(m.error)) : '') + '</td></tr>';
     }
     const x = m.metrics;
     return '<tr data-job="' + escapeHtml(m.job_id) + '" style="cursor:pointer;"' + opened + ' title="Click to open this member\'s route">'
-      + '<td>' + _ensWho(m) + '</td><td title="' + escapeHtml(fmtWhen(x.arrival)) + '">' + escapeHtml(_winWhen(x.arrival)) + '</td>'
+      + '<td>' + (m.who ? '<b>' + who + '</b>' : who) + '</td><td title="' + escapeHtml(fmtWhen(x.arrival)) + '">' + escapeHtml(_winWhen(x.arrival)) + '</td>'
       + '<td>' + _winDuration(x.total_time_s, true) + '</td><td>' + _winDuration(x.motoring_time_s) + '</td>'
       + '<td>' + num(x.max_wind_ms, speedU) + '</td><td>' + num(x.max_swh_m, waveU) + '</td></tr>';
   });
@@ -2718,23 +2730,30 @@ function _ensRender() {
     + '<div class="ens-scroll"><table><thead><tr><th>Member</th><th>Arrives</th><th>Passage</th><th>Motor</th>'
     + '<th title="Strongest wind on any leg">Wind<br>' + escapeHtml(speedU.u) + '</th><th title="Highest significant waves on any leg">Waves<br>' + escapeHtml(waveU.u) + '</th></tr></thead><tbody>'
     + rows.join('') + '</tbody></table></div>'
-    + '<div class="ctl-hint">Each member\'s own route search on that member\'s forecast (wind and waves; no regional wind), with this route\'s start, destination, waypoints, boat and options. Grey on the map. Click a row to open that route.</div>'
+    + '<div class="ctl-hint">Each member\'s own route search on that member\'s forecast (wind and waves; no regional wind), with this route\'s start, destination, waypoints, boat and options. On the map: the main forecast\'s route thin and solid, the members\' dotted, the one opened highlighted. Click a row to open that route.</div>'
     + '</details>';
   /** @type {NodeListOf<HTMLElement>} */ (el.querySelectorAll('tr[data-job]')).forEach(tr => { tr.onclick = () => _ensOpen(tr.dataset.job); });
 }
-// Open one member's route (a set's job is not in the Saved list: its record is fetched first).
+// Open one member's route, or the main forecast's (a set's job is not in the Saved list: its record is fetched first).
 function _ensOpen(jobId) {
   authFetch(API + '/routes/' + encodeURIComponent(jobId), { cache: 'no-store' }, 'ensemble-route')
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
-    .then(job => { _ensOpenJob = jobId; _loadRouteJob(jobId, job); _ensRender(); })
+    .then(job => { _loadRouteJob(jobId, job); _ensRender(); })
     .catch(err => appendLog('Could not open the member route: ' + err.message, 'error'));
 }
 window.addEventListener('rp:units', _ensRender);
-// The newest set, if it routed the plan on the page: shown again after a reload (and followed while it runs).
-authFetch(API + '/ensemble-sets?limit=1', { cache: 'no-store' }, null)
-  .then(r => (r.ok ? r.json() : []))
-  .then(list => { if (Array.isArray(list) && list.length && _winMatchesPlan(list[0])) _ensPoll(list[0].id); })
-  .catch(() => { /* none: nothing to show */ });
+// The set of a route: its main forecast's route names it (request.main_job_id). Looked up whenever that route is
+// opened or followed (a saved route, a reload while it computes), so the set comes and goes with its route.
+function _ensForRoute(id) {
+  if (_ens && ((_ens.main && _ens.main.job_id === id) || _ens.members.some(m => m.job_id === id))) return;
+  authFetch(API + '/ensemble-sets?limit=12', { cache: 'no-store' }, null)
+    .then(r => (r.ok ? r.json() : []))
+    .then(list => {
+      const set = Array.isArray(list) ? list.find(x => x.request && x.request.main_job_id === id) : null;
+      if (set && _currentRouteJobId === id) _ensPoll(set.id);
+    })
+    .catch(() => { /* none: the route has no set */ });
+}
 
 // The finished job's stage fronts (faint) replace the live ones; dropped once another route is open (loadSkeleton).
 function _loadFronts(id) {
@@ -2811,6 +2830,7 @@ function attachToJob(id, jobRow) {
   showModal();
   _currentRouteJobId = id;
   _currentRouteName = jobRow && jobRow.request ? (jobRow.request.name || '') : ((/** @type {HTMLInputElement} */ (document.getElementById('routeName')).value || '').trim());
+  _ensForRoute(id);
   appendLog('job ' + id);
   // The search's boat comes with the first stage (_jobOnFrontier): the start as drawn can be on land, which the router
   // first leaves for usable water (up to 1 km, worker/route.ts SNAP_MAX_M; the owner's review of #78). A reconnect
@@ -3019,6 +3039,9 @@ document.getElementById('findRoute').addEventListener('click', /** @this {HTMLBu
   infoEl.innerHTML = '';
   _routeComputing = true;
 
+  // A new request: the set of the route before is cancelled if still computing (its members would queue ahead of
+  // this one's).
+  _ensGone(true);
   const body = buildRoutePayload();
   // Find Route only: Best departure and the LIVE re-plans build their requests from buildRoutePayload too, and route
   // no ensemble.
@@ -3038,7 +3061,7 @@ document.getElementById('findRoute').addEventListener('click', /** @this {HTMLBu
       attachToJob(job.id, { request: body });
       loadRouteHistory();
       // After attachToJob (its showModal clears the set before): the same route on each chosen member.
-      if (ensemble) _ensStart(body, ensemble);
+      if (ensemble) _ensStart(body, ensemble, job.id);
     })
     .catch(err => {
       if (_attachSeq !== seq) { appendLog('Could not start the route calculation: ' + err.message, 'error'); return; }

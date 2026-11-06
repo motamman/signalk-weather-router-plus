@@ -41,6 +41,9 @@ export const EnsembleSetRequestSchema = Type.Object({
     maximum: ENSEMBLE_MEMBERS_RANGE[1],
     description: 'How many of its members on disk to route (the control first where there is one)',
   }),
+  main_job_id: Type.Optional(
+    Type.String({ description: "The same route's job on the main forecast, listed with the members for comparison (GET .../main)" })
+  ),
 });
 export type EnsembleSetRequest = Static<typeof EnsembleSetRequestSchema>;
 
@@ -77,6 +80,20 @@ export type EnsembleSet = Static<typeof EnsembleSetSchema>;
 /** A set as the API answers it (EnsembleSetManager.toPublic): the member computing's last progress line, and links. */
 export const EnsembleSetPublicSchema = Type.Object({
   ...EnsembleSetSchema.properties,
+  main: Type.Union(
+    [
+      Type.Object({
+        job_id: Type.String(),
+        status: Type.String(),
+        metrics: Type.Optional(DepartureMetricsSchema),
+      }),
+      Type.Null(),
+    ],
+    {
+      description:
+        "The route on the main forecast (request.main_job_id), with the members' metrics; null without one or once that job is gone",
+    }
+  ),
   progress: Type.Union([Type.String(), Type.Null()]),
   links: Type.Object({ self: Type.String(), cancel: Type.String() }),
 });
@@ -91,6 +108,8 @@ export function validateEnsembleSetRequest(b: unknown): string | null {
   const n = r.members;
   if (typeof n !== 'number' || !Number.isInteger(n) || n < ENSEMBLE_MEMBERS_RANGE[0] || n > ENSEMBLE_MEMBERS_RANGE[1])
     return `members must be a whole number ${ENSEMBLE_MEMBERS_RANGE[0]}..${ENSEMBLE_MEMBERS_RANGE[1]}`;
+  if (r.main_job_id !== undefined && (typeof r.main_job_id !== 'string' || !r.main_job_id || r.main_job_id.length > 64))
+    return 'main_job_id must be a route job id';
   if ((r.route as { forecast_member?: unknown }).forecast_member !== undefined)
     return 'route: forecast_member is set per member by the set; leave it out';
   const routeErr = validateRouteRequest(r.route as EnsembleSetRequest['route']);
@@ -174,7 +193,20 @@ export class EnsembleSetManager {
     const active = s.members.find(m => m.status === 'running' || m.status === 'queued');
     const job = active?.job_id ? this.jobs.get(active.job_id) : undefined;
     const last = job?.progress[job.progress.length - 1];
-    return { ...s, progress: last ? last.message : null, links: this.links(s.id) };
+    return { ...s, main: this.main(s), progress: last ? last.message : null, links: this.links(s.id) };
+  }
+
+  /** The main forecast's route of the set (request.main_job_id): its status, and its metrics once done. */
+  private main(s: EnsembleSet): EnsembleSetPublic['main'] {
+    const id = s.request.main_job_id;
+    const job = id ? this.jobs.full(id) : undefined;
+    if (!id || !job) return null;
+    if (job.status !== 'done') return { job_id: id, status: job.status };
+    try {
+      return { job_id: id, status: job.status, metrics: departureMetrics(job) };
+    } catch {
+      return { job_id: id, status: job.status };
+    }
   }
 
   /** Cancel what is left: members not started, and the one queued or computing. */

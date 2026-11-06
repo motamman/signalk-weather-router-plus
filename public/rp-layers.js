@@ -312,13 +312,16 @@ export function showSearchBoat(path, label) {
 export function clearSearchBoat() { searchBoatSource.clear(); }
 
 // --- Skeleton layer (A* presumptive route, blue) ---
+// Part of the router's search, as the stage fronts are: shown and hidden with them by the Decision lines switch.
 const skeletonLayer = new ol.layer.Vector({
   source: skeletonSource,
   style: new ol.style.Style({
     stroke: new ol.style.Stroke({ color: '#2060cc', width: 2, lineDash: [8, 4] })
   }),
-  zIndex: 16
+  zIndex: 16,
+  visible: false,
 });
+frontLayer.on('change:visible', () => skeletonLayer.setVisible(frontLayer.getVisible()));
 
 // --- Proposed-route layer (Live mode re-plan preview, dashed purple) ---
 // Drawn alongside the active route while the user decides Accept/Dismiss.

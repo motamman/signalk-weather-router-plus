@@ -107,3 +107,16 @@ test('cancel: members not started are cancelled, the running one is asked to sto
   );
   assert.equal(h.sets.delete(s.id), false, 'not while its member is stopping');
 });
+
+test('the main forecast route named in the request is reported with its metrics once done', () => {
+  const h = harness();
+  const main = h.jobs.submit(ROUTE);
+  const s = h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5, main_job_id: main.id });
+  assert.deepEqual(h.sets.toPublic(s).main, { job_id: main.id, status: 'running' });
+  h.finish(95); // the main route, ahead of the members in the queue
+  const m = h.sets.toPublic(h.sets.get(s.id)!).main!;
+  assert.equal(m.status, 'done');
+  assert.equal(m.metrics!.total_time_s, 95 * 3600);
+  assert.equal(h.sets.toPublic(h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 })).main, null);
+  assert.match(validateEnsembleSetRequest({ route: ROUTE, model: 'ifs-ens', members: 5, main_job_id: '' })!, /main_job_id/);
+});
