@@ -1,0 +1,140 @@
+# CodeRabbit review configuration for signalk-weather-router-plus.
+# Schema: https://coderabbit.ai/integrations/schema.v2.json
+#
+# The rules below are the project's own (see CLAUDE.md). A review that ignores
+# them is noise; a review that cites the rule, the file and the line is what we
+# want.
+
+language: en-US
+
+knowledge_base:
+  # Read the project's rules before reviewing.
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CLAUDE.md"
+
+reviews:
+  profile: assertive
+  high_level_summary: true
+  review_status: true
+  poem: false
+  collapse_walkthrough: true
+
+  # Changes requested for blocking findings; approved once the required threads
+  # are resolved, the latest commit is reviewed and the pre-merge checks pass.
+  # The owner merges nothing without this approval.
+  auto_approvals:
+    enabled: true
+
+  pre_merge_checks:
+    docstrings:
+      mode: warning
+      threshold: 80
+
+  path_filters:
+    - "!dist/**"
+    - "!node_modules/**"
+    - "!data/**"
+    - "!test-data/**"
+    - "!public/ol.js"
+
+  path_instructions:
+    - path: "src/**/*.ts"
+      instructions: |
+        Review against the project's rules, in this order of weight.
+
+        0. NO HACKS. A change fixes the cause at the one place it lives, or it
+           is not accepted. Flag, by name, each of these:
+           - a tuned factor, budget, margin or threshold picked to make a case
+             pass, and a ladder of fallbacks tried one after another;
+           - a try/catch that swallows an error to make a failure go away;
+           - a `?? default`, `?? 0` or `!` that silences a missing value rather
+             than expressing a real default;
+           - a retry, a delay or a timer added to outrun a race instead of
+             owning the work;
+           - a copy of an existing helper or rule with a tweak, instead of a
+             change to the one that exists;
+           - router behaviour changed, or a test loosened, to make a test or a
+             reviewer pass.
+           When the diff fixes a reported site but the same defect exists
+           elsewhere, say so: the fix is the class, not the site. Do not ask
+           for a guard against a case the code cannot reach; show how it is
+           reached, or drop the finding.
+
+        1. UNITS: everything the plugin emits (to Signal K, in the API, in
+           route files) is SI, dimensionless values as a ratio or an index,
+           converted once where the data comes in. Flag any value emitted in
+           display units, and any conversion done twice.
+
+        2. ONE RULE, ONE PLACE: a rule kept in two places (a formula, a
+           validation, a threshold, a lookup table) is a defect even when both
+           copies agree today. Point at the second copy and name the one place
+           it should live.
+
+        3. MEMORY: large data stays on disk and a request reads the slice it
+           needs, as the decoded forecast, the land rasters and the tile store
+           already do. Every worker thread pays separately for what it holds,
+           and the allocator keeps a thread's peak. Flag new data held in
+           worker memory beyond a request, and copies of data another thread
+           already holds.
+
+        4. OPTIONAL INTEGRATIONS: a feature that is off, or a Signal K plugin
+           that is not installed, changes nothing: no behaviour, no download,
+           nothing shown. Flag code that acts differently when the other side
+           is absent.
+
+        5. ROUTES: the route a user drew is never changed; the weather result
+           is a separate route with its own name. A route never crosses water
+           too shallow for the boat; a failure fails the route rather than
+           falling back to a weaker check.
+
+        6. GLOBAL USE: the plugin serves boats anywhere. Data sources are
+           global by default; a regional source is an addition, never a
+           requirement.
+
+        7. HONESTY: a comment, a doc string, a log line or a UI string
+           describes only what exists. Every number in a comment names where it
+           was measured, or says it was not. Flag comments that describe
+           planned or removed behaviour.
+
+        When you flag a rule above, quote its number and name, cite the file and
+        line, and say what the one structural fix is.
+
+    - path: "public/*.js"
+      instructions: |
+        The web app shows every quantity in the units the Signal K user chose
+        (their unit preferences); there is no unit selector in the plugin and
+        no fallback: a quantity without a known unit shows "—". The one
+        approved exception: settings measured in seconds show in seconds.
+        Flag, as a defect:
+        - a conversion written by hand (a constant that turns an SI value into
+          a display value) outside the unit helpers;
+        - a unit symbol written as a literal beside a number;
+        - a quantity formatted with toFixed instead of through the unit
+          helpers.
+        Also apply rules 0, 2 and 7 of the src/**/*.ts instructions. An answer
+        that arrives after the screen moved on (another route opened, cleared,
+        replaced) must not be applied.
+
+    - path: "src/**/*.test.ts"
+      instructions: |
+        A test that is loosened, skipped, or given an allowlist is unfinished
+        unless the list is empty; flag it and ask what blocks removing it. A
+        behaviour change in src/ or public/ with no test in the same PR is a
+        finding: name the file and what the test should assert. Tests must not
+        call the network.
+
+    - path: "{README,CHANGELOG,WHATSNEW}.md"
+      instructions: |
+        These describe only what is built. Flag an entry that claims a feature
+        or a fix the diff does not contain, a measurement without where and
+        when it was taken, and text left describing behaviour the diff
+        changed.
+
+  auto_review:
+    enabled: true
+    drafts: false
+
+chat:
+  auto_reply: true
