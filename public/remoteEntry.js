@@ -525,7 +525,6 @@ var signalk_weather_router_plus = (function () {
       row('Default polar', text(['polarFile'], 'blank = the bundled Catalina 36'), 'A .csv or .pol file. Used for internal fallback or an explicit internal selection.'),
       row('Library folder', text(['polarsDir'], 'blank = the ~700 bundled polars'),
         'A folder of .pol / .csv files to offer instead of the bundled library (weather_routing_pi, GPL-3.0). Polars you generate are kept in the plugin data directory either way.'));
-    var MIRROR_LABELS = { ecmwf: 'ECMWF (data.ecmwf.int)', aws: 'Amazon (AWS Open Data)', google: 'Google Cloud' };
     var fc = status && status.forecast ? status.forecast : null;
     // What the plugin config offers (config.ts, sent in the status): until the status answers, the mirror shows as set
     // and the ensemble choices are not shown.
@@ -545,7 +544,7 @@ var signalk_weather_router_plus = (function () {
       row('Mirror',
         h('select', { className: 'form-select form-control', style: { maxWidth: 320 }, value: mirrorNow,
           onChange: function (e) { set(['forecast', 'mirror'], e.target.value); } },
-          (choices ? choices.mirrors : [mirrorNow]).map(function (m) { return h('option', { key: m, value: m }, MIRROR_LABELS[m] || m); })),
+          (choices ? choices.mirrors : [{ id: mirrorNow, label: mirrorNow }]).map(function (m) { return h('option', { key: m.id, value: m.id }, m.label); })),
         'Changes which server is contacted every six hours. Nothing else.'),
       ensembleStatus.length ? h('div', { className: 'mb-2 small' }, ensembleStatus.map(function (e) {
         var text = e.name + ': ' + (e.cycle ? e.members.length + ' members of the ' + String(e.cycle).slice(0, 16).replace('T', ' ') + 'Z run, ' + (e.bytes === null ? MISSING : gb(e.bytes)) + ' on disk' : 'none on disk yet')

@@ -22,7 +22,25 @@ const SUMMARY: RouteSummary = {
   departure: '2026-11-06T12:00:00.000Z',
   arrival: '2026-11-06T14:00:00.000Z',
 };
-const GEOJSON = { type: 'FeatureCollection', features: [] };
+/** A route as routeformat.ts writes one: its line, then a point per waypoint. */
+const GEOJSON = {
+  type: 'FeatureCollection',
+  features: [
+    {
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [
+          [-71.4, 41.4],
+          [-71.6, 41.2],
+        ],
+      },
+      properties: {},
+    },
+    { type: 'Feature', geometry: { type: 'Point', coordinates: [-71.4, 41.4] }, properties: { time: '2026-11-06T12:00:00.000Z' } },
+    { type: 'Feature', geometry: { type: 'Point', coordinates: [-71.6, 41.2] }, properties: { time: '2026-11-06T14:00:00.000Z' } },
+  ],
+};
 
 /** A folder where `file` belongs: writing over it, and removing it, fail. */
 function folderAt(file: string): void {

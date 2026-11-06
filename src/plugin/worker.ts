@@ -103,7 +103,7 @@ const st: WorkerState = {
   forecastMemory: { heldBytes: 0, last: null },
   lastDecode: null,
   decodingBlockBytes: null,
-  diskBytes: { decoded: 0, grib: 0 },
+  diskBytes: { decoded: null, grib: null },
   overlayLand: null,
   polar: null,
   landCache: null,

@@ -227,10 +227,10 @@ export interface DataStatus {
     /** Directory and bytes of the run in use. */
     decodedDir: string;
     decodedBytes: number;
-    /** Bytes of every decoded run kept on disk (keepCycles). */
-    decodedDiskBytes: number;
-    /** Bytes of the GRIB message cache. */
-    gribCacheBytes: number;
+    /** Bytes of every decoded run kept on disk (keepCycles); null when not measured (not yet, or the folder could not be read: the log says why). */
+    decodedDiskBytes: number | null;
+    /** Bytes of the GRIB message cache; null when not measured, as above. */
+    gribCacheBytes: number | null;
   } | null;
   /** Last streaming decode: time, the one-step block it reused, bytes written. */
   lastDecode: { at: string; cycle: string; ms: number; stepBlockBytes: number; writtenBytes: number; downloaded: number } | null;

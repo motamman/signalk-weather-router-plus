@@ -42,8 +42,11 @@ export interface WorkerState {
   lastDecode: DataStatus['lastDecode'];
   /** One-step block size while a decode runs. */
   decodingBlockBytes: number | null;
-  /** Bytes of the decoded runs and GRIB cache on disk, refreshed after each forecast check. */
-  diskBytes: { decoded: number; grib: number };
+  /**
+   * Bytes of the decoded runs and GRIB cache on disk, measured after each forecast check; null when not measured (not
+   * yet, or their folders could not be read: refreshDiskBytes reports why).
+   */
+  diskBytes: { decoded: number | null; grib: number | null };
   /** On-demand overlay land rasters (data / tiles worker). */
   overlayLand: OnDemandLand | null;
   polar: PolarDiagram | null;

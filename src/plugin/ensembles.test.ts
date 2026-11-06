@@ -27,6 +27,33 @@ function summary(hours: number): RouteSummary {
   };
 }
 
+/** A route as routeformat.ts writes one: its line, then a point per waypoint (here the start and the end). */
+function routeGeo(hours: number): Record<string, unknown> {
+  const pt = (lon: number, lat: number, ms: number) => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [lon, lat] },
+    properties: { time: new Date(ms).toISOString(), mode: 'sailing', wind_ms: 8, swh_m: 1.5 },
+  });
+  return {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [-71.4, 41.4],
+            [-64.8, 32.3],
+          ],
+        },
+        properties: {},
+      },
+      pt(-71.4, 41.4, T0),
+      pt(-64.8, 32.3, T0 + hours * H),
+    ],
+  };
+}
+
 /** The set a request started (create refused nothing). */
 function made(r: ReturnType<EnsembleSetManager['create']>): EnsembleSet {
   assert.ok('set' in r, 'refused' in r ? r.refused : '');
@@ -48,7 +75,7 @@ function harness(onDisk: number[] | null = [0, 1, 2, 3, 4, 5, 6]) {
   const finish = (hours: number): void => {
     const id = jobs.runningId;
     assert.ok(id);
-    jobs.onDone(id, { type: 'FeatureCollection', features: [] }, {}, summary(hours));
+    jobs.onDone(id, routeGeo(hours), {}, summary(hours));
   };
   return { dir, jobs, sets, started, cancelled, finish };
 }

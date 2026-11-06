@@ -172,8 +172,8 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   every step's index (the last step's first, so a cycle not finished
   yet costs one index) and checks the free disk against the size of
   every message still to fetch plus the members' decoded runs, keeping
-  the forecast's reserve free; when that does not fit, the cycle is not
-  fetched and the status says how much is needed and free.
+  the forecast's reserve free; when that does not fit, or the free disk
+  cannot be measured, the cycle is not fetched and the status says why.
 
   A route can then be **routed on each member**: with *Route each
   ensemble member too* ticked (Route → Plan, above Find Route, with the
@@ -2733,6 +2733,9 @@ Plugin, forecast, currents, tides and queue status. Access: readonly.
 | `overlay_prebuild` | tiles built ahead of time: `{enabled, workers, workers_ready, paused, areas, window, max_zoom, walk_started_at, seen, built, skipped, not_kept, errors, last_error, at, complete, built_total, build_ms_avg}`; `areas`: `[{kind: "view" or "boat", lat, lon, radius_m}]`; `at`: `{area, hour, z}` of the last tile started; `complete`: every tile of the window is saved. Null before start |
 | `weather_provider_registered` | the Weather API provider is registered |
 | `jobs` | `{running: id or null, queued, total}`, or null before start |
+| `windows`, `ensemble_sets` | `{running}`: departure windows and ensemble sets computing, or null before start |
+| `ensembles` | each ensemble chosen in the plugin config: `{model, name, cycle, members, bytes, loading, error, checkedAt}`; `cycle` (ISO) and `members`: the cycle in use and its members on disk; `bytes`: on disk, null when its folders could not be read (the log says why); `loading`: a pass under way; `error`: why the last pass could not get or use the cycle. Empty when ensembles are off |
+| `config_choices` | what the plugin config offers, for the configuration panel: `{mirrors: [{id, label}], mirror_default, ensembles: [{id, name}], ensemble_members, ensemble_defaults: {enabled, models, members}, ensemble_note}` |
 | `vessel`, `polar`, `router`, `land`, `harmonic_dir`, `extra_fields` | the resolved configuration: vessel parameters (internal camelCase names; `draughtM` and `airDraftM` are Signal K's `design.draft.maximum` and `design.airHeight`, null when unset), default polar file, default open-water router, coastline shapefiles, tidal-harmonic directory, extra fields on/off |
 
 `forecast` fields: `cycle`, `valid_from`, `valid_to`, `steps` (number of
@@ -2741,7 +2744,9 @@ steps), `params`, `coverage` (`"global"`), `storage`
 complete decoded run was already on disk; `"grib"`: decoded from the
 GRIB cache or download), `ready_ms`, `fields_downloaded`, `decoded_dir`,
 `decoded_bytes` (this run on disk), `decoded_at`, `decode_ms`,
-`decoded_disk_bytes` (all decoded runs kept), `grib_cache_bytes`,
+`decoded_disk_bytes` (all decoded runs kept), `grib_cache_bytes` (each
+null when not measured: not yet, or its folder could not be read, which
+the log says),
 `last_decode` (`{at, cycle, ms, stepBlockBytes, writtenBytes,
 downloaded}` or null), and `memory`: `{data_worker_held_bytes,
 data_worker_largest_recent_window, route_worker_held_bytes,

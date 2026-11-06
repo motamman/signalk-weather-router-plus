@@ -28,9 +28,11 @@ uses [Semantic Versioning](https://semver.org/).
   the Itinerary. Before fetching, every step's index is read (the last
   step's first) and the free disk is checked against the size of every
   message still to fetch plus the decoded runs, keeping the forecast's
-  reserve free. The data worker alone records each ensemble's cycle in
-  use (`current.json`), from the members complete on disk; a record it
-  cannot read is reported in the log. A set whose file cannot be saved
+  reserve free; a disk that cannot be measured stops the download, with
+  why. The data worker alone records each ensemble's cycle in use
+  (`current.json`), from the members complete on disk; a record it
+  cannot read, or cannot write (the cycle is then not in use), is
+  reported in the log and the ensemble's status. A set whose file cannot be saved
   carries `save_error` (as a departure window does, below), and
   `forecast_member` is refused with `no_forecast`, and refused (`400`)
   when that ensemble or member is not on disk as the data worker last
@@ -96,6 +98,14 @@ uses [Semantic Versioning](https://semver.org/).
   the default. A larger one is still held to what the list can hold.
   With no `limit`, `GET /api/windows` lists every window (at most 12);
   its default was 20, more than it can hold.
+- **The forecast's disk figures in the status are null when not
+  measured** (`decoded_disk_bytes`, `grib_cache_bytes`): before the
+  first measure they read 0, and a folder that could not be read was
+  counted as empty. The reason is in the log.
+- **The status lists what the plugin config offers** (`config_choices`:
+  the mirrors with their names, the ensembles, the member counts and the
+  defaults), and the configuration panel shows those instead of its own
+  copies.
 
 ### Fixed
 
@@ -111,6 +121,19 @@ uses [Semantic Versioning](https://semver.org/).
   the next change saves it again and clears it. A window file that
   cannot be read at start-up, or does not hold a window, and a delete
   that fails, are reported in the log instead of passing silently.
+- **Cache and prune failures are reported, not read as nothing there.**
+  A cached GRIB message that exists but cannot be read was taken for a
+  missing one and fetched again; a cache or decoded-run folder that
+  could not be read was pruned as empty or measured as 0 bytes. Now only
+  a missing file or folder counts as none; anything else is reported
+  (the forecast's prune and disk measure in the log, a cached message
+  that cannot be read fails the load that wanted it).
+- **A route being opened is dropped when the route on screen changes.**
+  Every change of the route on the map (another one opened from Saved,
+  a departure or a member, Find Route, Clear, Reset) goes through one
+  place, which aborts a route still being fetched for the one before. A
+  departure window's route answered after the route was cleared or
+  another opened could be drawn over it.
 - **A route job whose file cannot be saved says so, and the queue goes
   on.** A full or read-only disk made the job's save throw when it
   finished, before the next job was started, so the queue stopped. The

@@ -147,7 +147,10 @@ test('departureMetrics: strongest wind, highest waves, roughest sea, time close-
   const jobs = new JobManager(dir, 50, '', m => assert.fail(`unexpected log: ${m}`));
   const job = jobs.submit({ ...ROUTE, departure: new Date(T0).toISOString() });
   jobs.onDone(job.id, routeGeo(T0, { wind: 14, swh: 3.2, twa: [0, 45, 120, 50], beyond: true }), {}, summary(T0, 18));
-  const m = departureMetrics(jobs.get(job.id)!);
+  const done = jobs.get(job.id);
+  assert.ok(done);
+  const m = departureMetrics(done);
+  assert.ok(m, 'its route is in hand');
   assert.equal(m.max_wind_ms, 14);
   assert.equal(m.max_swh_m, 3.2);
   assert.equal(m.max_sea_index, 73, 'the encounter index where given');
@@ -156,6 +159,8 @@ test('departureMetrics: strongest wind, highest waves, roughest sea, time close-
   assert.equal(m.beyond_forecast, true);
   assert.equal(m.total_time_s, 18 * 3600);
   assert.equal(m.arrival, new Date(T0 + 18 * H).toISOString());
+  // A done job whose route is not in hand (its results file not read back): no metrics.
+  assert.equal(departureMetrics({ ...done, geojson: undefined }), null);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

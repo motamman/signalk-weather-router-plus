@@ -61,15 +61,24 @@ interface PointProps {
   mode?: string;
 }
 
-/** What a finished route job tells about its passage (a done job with its route: JobManager.full for a released one). */
-export function departureMetrics(job: Job): DepartureMetrics {
+/** A route's GeoJSON as routeformat.ts writes it: the route's line, then a point per waypoint, each with properties. */
+interface RouteGeoJson {
+  features: { geometry: { type: string }; properties: Record<string, unknown> }[];
+}
+
+/**
+ * What a finished route job tells about its passage, from its summary and its route; null when its route is not in
+ * hand (a released job whose results file could not be read back: JobManager.full reports that).
+ */
+export function departureMetrics(job: Job): DepartureMetrics | null {
   const s = job.summary;
-  if (!s) throw new Error('the job has no summary');
-  const features = (
-    (job.geojson as { features?: { geometry?: { type?: string }; properties?: Record<string, unknown> }[] } | undefined)?.features ?? []
-  ).filter(f => f && f.properties);
-  const line = features.find(f => f.geometry?.type === 'LineString')?.properties ?? {};
-  const pts = features.filter(f => f.geometry?.type === 'Point').map(f => f.properties as PointProps);
+  if (!s) throw new Error(`route job ${job.id}: done without a summary`);
+  if (!job.geojson) return null;
+  const features = (job.geojson as unknown as RouteGeoJson).features;
+  const lineFeature = features.find(f => f.geometry.type === 'LineString');
+  if (!lineFeature) throw new Error(`route job ${job.id}: its route has no line`);
+  const line = lineFeature.properties;
+  const pts = features.filter(f => f.geometry.type === 'Point').map(f => f.properties as PointProps);
   let maxWind: number | null = null;
   let maxSwh: number | null = null;
   let maxSea: number | null = null;
@@ -137,6 +146,13 @@ export interface SeriesDeps {
   cancelRunning: (jobId: string) => void;
   /** Where a failure the series carries, or a file that cannot be read or removed, is reported. */
   log: (msg: string) => void;
+}
+
+/** A done item's metrics from its job; a job whose route could not be read back gives none, and the item says so. */
+function takeMetrics(d: SeriesItem, job: Job): void {
+  const m = departureMetrics(job);
+  if (m) d.metrics = m;
+  else d.error = 'its route could not be read back (the log says why): no metrics';
 }
 
 export abstract class JobSeries<S extends SeriesRecord> {
@@ -266,7 +282,7 @@ export abstract class JobSeries<S extends SeriesRecord> {
     }
     if (ev.event === 'done') {
       d.status = 'done';
-      d.metrics = departureMetrics(job);
+      takeMetrics(d, job);
     } else if (ev.event === 'error') {
       d.status = ev.data.status;
       d.error = ev.data.message;
@@ -339,7 +355,7 @@ export abstract class JobSeries<S extends SeriesRecord> {
         const job = this.jobs.full(d.job_id);
         if (job && (job.status === 'done' || job.status === 'cancelled')) {
           d.status = job.status;
-          if (job.status === 'done') d.metrics = departureMetrics(job);
+          if (job.status === 'done') takeMetrics(d, job);
         } else {
           d.status = 'failed';
           d.error = job?.error ?? `plugin restarted while the ${this.kind.item} was being computed`;

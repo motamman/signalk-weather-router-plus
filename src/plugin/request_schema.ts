@@ -314,20 +314,22 @@ function fieldError(name: string, v: unknown, schema: TSchema): string | null {
       if (s.maximum !== undefined && v > s.maximum) return `${name} must be <= ${s.maximum}`;
       return null;
     case 'integer':
-      if (
-        typeof v !== 'number' ||
-        !Number.isInteger(v) ||
-        (s.minimum !== undefined && v < s.minimum) ||
-        (s.maximum !== undefined && v > s.maximum)
-      )
-        return `${name} must be a whole number ${s.minimum ?? ''}..${s.maximum ?? ''}`;
+      // Every whole-number field of a request is bounded: its range is the message.
+      if (s.minimum === undefined || s.maximum === undefined)
+        throw new Error(`request_schema: field ${name} is a whole number with no range`);
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < s.minimum || v > s.maximum)
+        return `${name} must be a whole number ${s.minimum}..${s.maximum}`;
       return null;
     case 'boolean':
       return typeof v === 'boolean' ? null : `${name} must be true or false`;
     case 'string':
       if (typeof v !== 'string') return `${name} must be a string`;
       if (s.maxLength !== undefined && v.length > s.maxLength) return `${name} must be at most ${s.maxLength} characters`;
-      if (s.pattern !== undefined && !new RegExp(s.pattern).test(v)) return `${name} must be ${s.title ?? `like ${s.pattern}`}`;
+      if (s.pattern !== undefined) {
+        // A pattern says what it is in `title`, which is the message.
+        if (s.title === undefined) throw new Error(`request_schema: field ${name} has a pattern and no title`);
+        if (!new RegExp(s.pattern).test(v)) return `${name} must be ${s.title}`;
+      }
       return null;
     default:
       throw new Error(`request_schema: field ${name} has no check`);

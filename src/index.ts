@@ -41,7 +41,7 @@ import { siText } from './plugin/unittext';
 import { JobManager, type Job } from './plugin/jobs';
 import { windowNotification, WindowManager, type DepartureWindow } from './plugin/windows';
 import { EnsembleSetManager } from './plugin/ensembles';
-import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from './data/ecmwf';
+import { ECMWF_MIRROR_LABELS, ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from './data/ecmwf';
 import { registerApi } from './plugin/api';
 import { NotStartedError } from './plugin/errors';
 import { TileService, TileStore, tileGenerationKeys, tileGroup } from './plugin/tiles';
@@ -1571,7 +1571,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         ensemble_sets: ensembleSets ? { running: ensembleSets.running } : null,
         // What the plugin config offers (config.ts), for the configuration panel (public/remoteEntry.js) to show.
         config_choices: {
-          mirrors: MIRRORS,
+          mirrors: MIRRORS.map(id => ({ id, label: ECMWF_MIRROR_LABELS[id] })),
           mirror_default: DEFAULT_MIRROR,
           ensemble_note: ENSEMBLE_DOWNLOAD_NOTE,
           ensembles: ENSEMBLE_MODELS.map(id => ({ id, name: ENSEMBLES[id].name })),

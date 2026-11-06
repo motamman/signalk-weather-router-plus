@@ -385,9 +385,18 @@ function loadSkeleton(id) {
 
 // ─────────── Route library: recent jobs (GET /api/routes) ───────────
 // Track the job id of the route currently displayed on the map. Used by
-// the Publish + Delete buttons and set from two places: the history
-// list, and the SSE `done` event after a fresh compute.
+// the Publish + Delete buttons; changed only by _setRouteOnScreen.
 let _currentRouteJobId = null;
+/**
+ * The route on screen becomes job `id` (null: none) named `name`. Every change of it goes through here: a route still
+ * being opened (a request on ROUTE_OPEN_CHANNEL) is for the route that was, and is aborted, its body read with it, so
+ * no answer for another route is ever drawn.
+ */
+function _setRouteOnScreen(id, name) {
+  if (id !== _currentRouteJobId) abortChannel(ROUTE_OPEN_CHANNEL);
+  _currentRouteJobId = id;
+  _currentRouteName = name;
+}
 
 function _jobLabel(j) {
   const rq = j.request || {};
@@ -511,8 +520,7 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
     attachToJob(id, job);
     return;
   }
-  _currentRouteJobId = id;
-  _currentRouteName = job && job.request ? (job.request.name || '') : '';
+  _setRouteOnScreen(id, job && job.request ? (job.request.name || '') : '');
   // Another saved route: the departures compared for the one before leave the screen; one of the window's own keeps them.
   if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
   // The same for the ensemble set: one of its members' routes keeps it, another route takes it off the screen.
@@ -522,8 +530,6 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
       if (computed) _forgetComputing(id);
-      // Another route opened while this body was still being read (the channel cancels only the request): dropped.
-      if (_currentRouteJobId !== id) return;
       if (_displayedJobId !== id) _clearRouteTime();
       displayRoute(geojson);
       _displayedJobId = id;   // a Publish of this saved route writes its itinerary too
@@ -555,10 +561,12 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
     })
     .catch(err => {
       // Forgotten when the server answered that the route will not come (4xx: no such job, or no route to load) or
-      // another route was opened; a request cut off by a reload, the server out of reach, or not ready (5xx: 503
-      // while the plugin starts) keeps it, as the status lookup does (_jobOnError).
-      if (computed && ((err.status && err.status < 500) || _currentRouteJobId !== id)) _forgetComputing(id);
-      if (_currentRouteJobId !== id) return;   // another route was opened meanwhile
+      // another route took the screen (the request aborted: _setRouteOnScreen); a request cut off by a reload, the
+      // server out of reach, or not ready (5xx: 503 while the plugin starts) keeps it, as the status lookup does
+      // (_jobOnError).
+      const superseded = err.name === 'AbortError';
+      if (computed && ((err.status && err.status < 500) || superseded)) _forgetComputing(id);
+      if (superseded) return;
       console.error('Failed to load route:', err);
       const st = document.getElementById('status');
       if (st) st.textContent = 'Could not load route: ' + err.message;
@@ -569,10 +577,7 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
 
 /** Take the route off the map and the page, as after Reset: its legs, guide, fronts, pins, strip, name and ensemble. */
 function _clearDisplayedRoute() {
-  // A route still being opened would come back over the cleared screen.
-  abortChannel(ROUTE_OPEN_CHANNEL);
-  _currentRouteJobId = null;
-  _currentRouteName = '';
+  _setRouteOnScreen(null, '');
   routeSource.clear();
   _routePoints = [];
   skeletonSource.clear();
@@ -1590,8 +1595,7 @@ function _clearRoute() {
   document.getElementById('modalItinerary').innerHTML = '';
   /** @type {HTMLInputElement} */ (document.getElementById('routeNameInput')).value = '';
   document.getElementById('routeNameStatus').textContent = '';
-  _currentRouteJobId = null;
-  _currentRouteName = '';
+  _setRouteOnScreen(null, '');
   _lastRouteProps = null;
   _ensGone(false);
   // No route is shown: the Meteogram button finds none to open (PR #50 review: it opened the cleared one).
@@ -1930,8 +1934,6 @@ function showModal() {
   _routeStale = false;
   _winRouteGone();
   _routeComputing = true;
-  // A route still being opened would come back over the one computing.
-  abortChannel(ROUTE_OPEN_CHANNEL);
   // A new request: the route on the map goes with its strip and name (the owner, 2026-10-12); a request that fails
   // leaves the map without a route and shows the error. The markers and waypoints stay.
   setSelectedRouteFeature(null);
@@ -1943,8 +1945,7 @@ function showModal() {
   _itineraryFeatures = [];
   skeletonSource.clear();
   frontSource.clear();
-  _currentRouteJobId = null;
-  _currentRouteName = '';
+  _setRouteOnScreen(null, '');
   // The meteogram described the route that is gone (PR #50 review); the new one opens it again from the itinerary.
   closeMeteogram();
   _clearRouteTime();
@@ -2980,8 +2981,7 @@ function _computeUiIdle(keep = false) {
 let _jobBeforeAttach = null;
 function _backToEarlierRoute() {
   const shown = _jobBeforeAttach && routeSource.getFeatures().length;
-  _currentRouteJobId = shown ? _jobBeforeAttach.id : null;
-  _currentRouteName = shown ? _jobBeforeAttach.name : '';
+  _setRouteOnScreen(shown ? _jobBeforeAttach.id : null, shown ? _jobBeforeAttach.name : '');
   _jobBeforeAttach = null;
 }
 // Counts the attachments: an answer meant for an earlier one, even of the same job, is dropped (_jobOnError).
@@ -3005,8 +3005,7 @@ function attachToJob(id, jobRow) {
   // showModal clears the route on the map with its job id and name: this job's are set after it (PR #39 review: set
   // before, they were cleared, so a new route's Publish, Delete, name and points of sail had no job).
   showModal();
-  _currentRouteJobId = id;
-  _currentRouteName = jobRow && jobRow.request ? (jobRow.request.name || '') : ((/** @type {HTMLInputElement} */ (document.getElementById('routeName')).value || '').trim());
+  _setRouteOnScreen(id, jobRow && jobRow.request ? (jobRow.request.name || '') : ((/** @type {HTMLInputElement} */ (document.getElementById('routeName')).value || '').trim()));
   _ensForRoute(id);
   appendLog('job ' + id);
   // The search's boat comes with the first stage (_jobOnFrontier): the start as drawn can be on land, which the router
@@ -3129,9 +3128,6 @@ function _jobOnDone(job, d) {
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
       _forgetComputing(id);
-      // An answer for a job no longer current (a newer request started while this body was still being read: the
-      // route-open channel, ROUTE_OPEN_CHANNEL, cancels only the request, not the body read; PR #40 review) is dropped.
-      if (_currentRouteJobId !== id) return;
       displayRoute(geojson);
       _displayedJobId = id;
       _meteoRouteChanged();
@@ -3144,9 +3140,11 @@ function _jobOnDone(job, d) {
       showTab('itinerarySection');
     })
     .catch(err => {
-      // Forgotten on a 4xx or when another route was opened; kept on a 5xx or no answer (as in _loadRouteJob).
-      if ((err.status && err.status < 500) || _currentRouteJobId !== id) _forgetComputing(id);
-      if (_currentRouteJobId !== id) return;   // a job no longer current: the route shown is another's
+      // Forgotten on a 4xx or when another route took the screen (aborted: _setRouteOnScreen); kept on a 5xx or no
+      // answer (as in _loadRouteJob).
+      const superseded = err.name === 'AbortError';
+      if ((err.status && err.status < 500) || superseded) _forgetComputing(id);
+      if (superseded) return;
       // No route is shown after all (PR #39 review): the hint and the stale check must not act on one.
       routeActive = false;
       updatePlanHint();
@@ -5443,7 +5441,7 @@ function _meteoRouteChanged() {
 
   // Put an accepted re-plan on the map in place of the route being followed.
   function applyRoute(geojson, jobId) {
-    if (jobId) { _currentRouteJobId = jobId; }
+    if (jobId) _setRouteOnScreen(jobId, _currentRouteName);
     // The route being followed stays as a faint line (pastRouteSource).
     if (_routePoints.length >= 2) {
       pastRouteSource.addFeature(new ol.Feature(new ol.geom.LineString(unwrapLonLats(_routePoints.map(p => p.lonLat)).map(c => ol.proj.fromLonLat(c)))));

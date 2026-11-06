@@ -192,7 +192,9 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
     const job = id ? this.jobs.full(id) : undefined;
     if (!id || !job) return null;
     if (job.status !== 'done') return { job_id: id, status: job.status };
-    return { job_id: id, status: job.status, metrics: departureMetrics(job) };
+    // Its route could not be read back (reported by JobManager.full): no metrics.
+    const metrics = departureMetrics(job);
+    return metrics ? { job_id: id, status: job.status, metrics } : { job_id: id, status: job.status };
   }
 
   protected items(s: EnsembleSet): SeriesItem[] {

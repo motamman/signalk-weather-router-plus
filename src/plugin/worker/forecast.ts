@@ -105,13 +105,17 @@ export function newestDecodedRun(st: WorkerState, cfg: ResolvedConfig): DecodedR
   return null;
 }
 
-/** The forecast's decoded runs and GRIB cache on disk, measured now; folders that cannot be read are reported, and the last measure stays. */
+/** The forecast's decoded runs and GRIB cache on disk, measured now; a folder that cannot be read is reported and shows as not measured. */
 export function refreshDiskBytes(st: WorkerState): void {
-  try {
-    st.diskBytes = { decoded: dirBytes(decodedRoot(st)), grib: st.client ? dirBytes(st.client.cacheDir) : 0 };
-  } catch (err) {
-    st.log('error', `forecast: disk use not measured (${(err as Error).message}); the last measure is shown`);
-  }
+  const measure = (what: string, dir: string): number | null => {
+    try {
+      return dirBytes(dir);
+    } catch (err) {
+      st.log('error', `forecast: ${what} disk use not measured (${(err as Error).message})`);
+      return null;
+    }
+  };
+  st.diskBytes = { decoded: measure('decoded runs', decodedRoot(st)), grib: st.client ? measure('GRIB cache', st.client.cacheDir) : null };
 }
 
 /** Make `r` the run in use and tell the main thread (which relays it to the route worker). */

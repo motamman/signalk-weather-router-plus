@@ -29,6 +29,13 @@ export const ECMWF_MIRRORS = {
 } as const;
 export type EcmwfMirror = keyof typeof ECMWF_MIRRORS;
 
+/** Each mirror's name for people (the configuration panel shows these). */
+export const ECMWF_MIRROR_LABELS: Record<EcmwfMirror, string> = {
+  ecmwf: 'ECMWF (data.ecmwf.int)',
+  aws: 'Amazon (AWS Open Data)',
+  google: 'Google Cloud',
+};
+
 /** True when `name` is a mirror's name (ECMWF_MIRRORS). */
 export function isEcmwfMirror(name: string): name is EcmwfMirror {
   return Object.hasOwn(ECMWF_MIRRORS, name);
