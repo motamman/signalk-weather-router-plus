@@ -1084,6 +1084,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     );
   });
 
+  /** Run `fn` on set `:id`: 503 before the plugin has started, 404 for a set not found. */
   const withSet = (req: Request, res: Response, fn: (sets: EnsembleSetManager, id: string) => void): void => {
     const sets = setsOr503(res);
     if (!sets) return;

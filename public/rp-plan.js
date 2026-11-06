@@ -4,10 +4,10 @@
 // result strip, itinerary, route library, waypoint and conditions popups,
 // Live mode with the Signal K vessel.
 
-import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
+import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { prefs } from './rp-prefs.js';
-import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats } from './rp-layers.js';
+import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats, watchEnsembleLegend } from './rp-layers.js';
 
 // ─────────── Route state (markers, replan stream, route history) ───────────
 // The limit inputs and the quantity of each (used by _limitSI, below). Declared
@@ -43,6 +43,9 @@ let _winStale = false;  // the markers moved since the window on screen was star
 // poll. Declared here for the same reason: renderResultStrip and the clears reach it.
 let _ens = null;
 let _ensTimer = null;
+// Which screen the set requests belong to: each time a set leaves the screen (_ensGone) it moves on, and an answer
+// asked for before that (a poll in flight, a set being started, a route's set being looked up) is dropped.
+let _ensGen = 0;
 
 let _activeReplanES = null;
 function closeReplanStream() { if (_activeReplanES) { try { _activeReplanES.close(); } catch (_) {} _activeReplanES = null; } }
@@ -189,7 +192,8 @@ function _placeRoutePins(pts, snapProps) {
 
 // Leg colouring: each point learns its outgoing course and the next leg's
 // conditions; a sailing leg is coloured by tack (TACK_COLOR), a motoring
-// leg black, a leg past the forecast's last step dashed. Dateline legs
+// leg amber (MOTOR_COLOR), a leg past the forecast's last step dashed. Each leg
+// carries what it is (kind 'leg', `leg`, `beyond`) for the route legend. Dateline legs
 // are split at ±180 so they render the short way.
 // Longitude difference b − a in (−180, 180]: the short way, across the antimeridian.
 function _dLon(a, b) { return ((b - a + 540) % 360) - 180; }
@@ -214,14 +218,10 @@ function _drawRouteLegs(pts) {
     const currMode = curr.get('mode');
     const currCog = curr.get('cog_deg');
     const currWind = curr.get('wind_dir_deg');
-    let segColor;
-    if (currMode !== 'sailing') {
-      segColor = '#000000';
-    } else {
-      // Leg departing prev is coloured by the arriving waypoint's cog
-      // and wind (forward-looking); starboard when either is missing.
-      segColor = TACK_COLOR[tackSide(currCog, currWind) || 'starboard'];
-    }
+    // Leg departing prev is coloured by the arriving waypoint's cog and wind
+    // (forward-looking); starboard when either is missing.
+    const legKind = currMode !== 'sailing' ? 'motoring' : tackSide(currCog, currWind) || 'starboard';
+    const segColor = legKind === 'motoring' ? MOTOR_COLOR : TACK_COLOR[legKind];
     prev.set('next_mode', currMode);
     prev.set('next_sail_plan', curr.get('sail_plan'));
     prev.set('next_cog', currCog);
@@ -259,7 +259,10 @@ function _drawRouteLegs(pts) {
     }
     for (const _sp of _segPairs) {
       const segLine = new ol.Feature({
-        geometry: new ol.geom.LineString([_sp[0], _sp[1]])
+        geometry: new ol.geom.LineString([_sp[0], _sp[1]]),
+        kind: 'leg',
+        leg: legKind,
+        beyond,
       });
       segLine.setStyle(new ol.style.Style({
         stroke: new ol.style.Stroke({ color: segColor, width: 3, lineDash: beyond ? [10, 7] : undefined })
@@ -305,6 +308,7 @@ function _drawSnapConnectors(p) {
       ])
     });
     f.setStyle(_dashedStyle);
+    f.set('kind', 'snap');
     routeSource.addFeature(f);
   }
   if (p.end_original && p.end_anchor && p.end_snap_distance_m > 0) {
@@ -315,6 +319,7 @@ function _drawSnapConnectors(p) {
       ])
     });
     f.setStyle(_dashedStyle);
+    f.set('kind', 'snap');
     routeSource.addFeature(f);
   }
   // Drawn waypoints that were on land and were moved to the nearest water
@@ -325,6 +330,7 @@ function _drawSnapConnectors(p) {
     if (s.index === 0 || s.index === _lastStop || !s.original || !s.anchor) continue;
     const f = new ol.Feature({ geometry: new ol.geom.LineString([ol.proj.fromLonLat(s.original), ol.proj.fromLonLat(s.anchor)]) });
     f.setStyle(_dashedStyle);
+    f.set('kind', 'snap');
     routeSource.addFeature(f);
   }
 
@@ -2532,6 +2538,7 @@ window.addEventListener('rp:units', _initLimitInputs);
 const ENSEMBLE_MIN_MEMBERS = 5;   // request_schema.ts ENSEMBLE_MEMBERS_RANGE
 let _ensembleStatus = [];         // status `ensembles`, as the server sends them
 let _ensembles = [];              // those on disk: [{ model, name, cycle, members (how many) }]
+/** The ensemble picked in the Ensemble list, as on disk ({ model, name, cycle, members }), or null. */
 function _ensembleChosen() {
   const sel = /** @type {HTMLSelectElement} */ (document.getElementById('ensembleModel'));
   return sel ? _ensembles.find(e => e.model === sel.value) || null : null;
@@ -2547,6 +2554,7 @@ function _ensembleStateText() {
     return x.name + ': ' + have + doing + (x.error ? '; ' + unitText(x.error) : '');
   }).join(' · ');
 }
+/** The members slider's label (how many of those on disk) and the hint under the row (what each ensemble has and is doing). */
 function _ensembleLabel() {
   const slider = /** @type {HTMLInputElement} */ (document.getElementById('ensembleMembers'));
   if (!slider) return;
@@ -2555,6 +2563,10 @@ function _ensembleLabel() {
   document.getElementById('ensembleMembersLabel').textContent = e ? slider.value + ' of ' + e.members : '—';
   document.getElementById('ensembleRowHint').textContent = e ? state : 'Not ready: ' + state;
 }
+/**
+ * The Ensemble row from the status: hidden while ensembles are off, disabled until one is on disk, the choices
+ * remembered (prefs) applied within what is on disk now.
+ */
 function _ensembleRender() {
   const row = document.getElementById('ensembleRow');
   const sel = /** @type {HTMLSelectElement} */ (document.getElementById('ensembleModel'));
@@ -2613,61 +2625,94 @@ window.addEventListener('rp:status', (/** @type {CustomEvent} */ e) => {
 
 // ── The route on each member (POST /api/ensemble-sets; plugin/ensembles.ts) ──
 // Started by Find Route beside the main route: each member gets its own route search on its forecast, one after the
-// other on the server, polled every 3 s while it runs. The members' routes are drawn as thin grey lines under the main
-// one, the result strip says how far it is and the spread of arrivals, the Itinerary lists the members, and a row
+// other on the server, polled every 3 s while it runs. The routes are drawn on the map (the styles below),
+// the result strip says how far it is and the spread of arrivals, the Itinerary lists the members, and a row
 // opens that member's route (as Best departure opens a departure's).
 // Under the route layer (rp-layers.js routeLayer, zIndex 15), which draws the route opened in full: here every route of
 // the set as one line, and a highlight under the one opened. Not opened: the main forecast's thin and solid, the
 // members' thicker, dotted and brighter.
 const _ensSource = new ol.source.Vector();
 const _ENS_STYLE = {
-  open: new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(255, 214, 0, 0.6)', width: 11 }) }),
+  // The route opened: a white band with a dark edge, under its legs (no route colour is white: a yellow band hid the
+  // amber motoring legs).
+  open: [
+    new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(0, 0, 0, 0.45)', width: 13 }) }),
+    new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(255, 255, 255, 0.9)', width: 11 }) }),
+  ],
   main: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#1f6b8d', width: 2 }) }),
   member: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#00b8d4', width: 3.5, lineDash: [1, 7], lineCap: 'round' }) }),
+  // The corridor (_ensCorridor): the members' colour, faint, under every line of the set.
+  corridor: new ol.style.Style({
+    fill: new ol.style.Fill({ color: 'rgba(0, 184, 212, 0.12)' }),
+    stroke: new ol.style.Stroke({ color: 'rgba(0, 184, 212, 0.5)', width: 1 }),
+    zIndex: -1,
+  }),
 };
 map.addLayer(new ol.layer.Vector({
   source: _ensSource,
   zIndex: 4,
-  style: f => (f.get('job') === _currentRouteJobId ? _ENS_STYLE.open : f.get('main') ? _ENS_STYLE.main : _ENS_STYLE.member),
+  /** The corridor; the route opened highlighted; otherwise the main forecast's style or a member's. */
+  style: f =>
+    f.get('corridor') ? _ENS_STYLE.corridor
+      : f.get('job') === _currentRouteJobId ? _ENS_STYLE.open : f.get('main') ? _ENS_STYLE.main : _ENS_STYLE.member,
 }));
+// The route legend (rp-layers.js) names what of the set is on the map, as the layer changes.
+watchEnsembleLegend(_ensSource, () => {
+  const fs = _ensSource.getFeatures();
+  return {
+    main: fs.some(f => f.get('main')),
+    members: fs.some(f => f.get('job') && !f.get('main')),
+    open: fs.some(f => f.get('job') && f.get('job') === _currentRouteJobId),
+    corridor: fs.some(f => f.get('corridor')),
+  };
+});
 const _ensDrawn = new Set();   // member jobs whose line is on the map
+const _ensLines = new Map();   // job id → { coords (map coordinates), main }: each line drawn, for the corridor
 function _ensStart(route, want, mainJobId) {
   const req = { route: { ...route }, model: want.model, members: want.members, main_job_id: mainJobId };
   delete req.route.publish;
+  const gen = _ensGen;
   authFetch(API + '/ensemble-sets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) }, null)
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
-    .then(d => { appendLog('Ensemble: ' + d.members + ' member routes started', 'done'); _ensPoll(d.id); })
+    .then(d => {
+      appendLog('Ensemble: ' + d.members + ' member routes started', 'done');
+      // Its route was cleared or replaced meanwhile: the set stays on the server (listed with that route), not shown.
+      if (gen === _ensGen) _ensPoll(d.id, gen);
+    })
     .catch(err => appendLog('Ensemble routes not started: ' + err.message, 'error'));
 }
-function _ensPoll(id) {
+/** Follow set `id` on the screen of generation `gen` (_ensGen); an answer for a screen gone is dropped. */
+function _ensPoll(id, gen) {
   clearTimeout(_ensTimer);
   authFetch(API + '/ensemble-sets/' + encodeURIComponent(id), { cache: 'no-store' }, 'ensemble-set')
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status })))))
     .then(set => {
-      if (_ens && _ens.id !== id && _ens.status === 'running') return;   // another set took the screen meanwhile
+      if (gen !== _ensGen) return;   // the set left the screen meanwhile (Find Route, Clear, another route)
       _ens = set;
       _ensDraw();
       _ensRender();
       if (set.status === 'running' || set.members.some(m => m.status === 'running' || m.status === 'queued'))
-        _ensTimer = setTimeout(() => _ensPoll(id), 3000);
+        _ensTimer = setTimeout(() => _ensPoll(id, gen), 3000);
     })
     .catch(err => {
-      if (err.name === 'AbortError') return;
-      if (err.status === 404) { if (_ens && _ens.id === id) _ensGone(false); return; }
-      _ensTimer = setTimeout(() => _ensPoll(id), 10000);
+      if (err.name === 'AbortError' || gen !== _ensGen) return;
+      if (err.status === 404) { _ensGone(false); return; }
+      _ensTimer = setTimeout(() => _ensPoll(id, gen), 10000);
     });
 }
 /** The set leaves the screen; `cancel`: a set still computing is cancelled on the server too. */
 function _ensGone(cancel) {
+  _ensGen++;
   clearTimeout(_ensTimer);
   if (cancel && _ens && _ens.status === 'running')
     authFetch(API + '/ensemble-sets/' + encodeURIComponent(_ens.id) + '/cancel', { method: 'POST' }, null).catch(() => {});
   _ens = null;
   _ensSource.clear();
   _ensDrawn.clear();
+  _ensLines.clear();
   _ensRender();
 }
-// Each finished member's route line, fetched once.
+/** Each finished route of the set on screen (the main forecast's and the members'): its line fetched once and drawn. */
 function _ensDraw() {
   const set = _ens;
   const routes = set.main && set.main.status === 'done' ? [{ ...set.main, main: true }, ...set.members] : set.members;
@@ -2680,16 +2725,100 @@ function _ensDraw() {
         if (!geo || !_ens || _ens.id !== set.id) return;   // the set left the screen meanwhile
         const pts = (geo.features || []).filter(f => f.geometry && f.geometry.type === 'Point').map(f => f.geometry.coordinates);
         if (pts.length < 2) return;
-        const line = new ol.Feature(new ol.geom.LineString(unwrapLonLats(pts).map(c => ol.proj.fromLonLat(c))));
+        const coords = unwrapLonLats(pts).map(c => ol.proj.fromLonLat(c));
+        const line = new ol.Feature(new ol.geom.LineString(coords));
         line.set('job', m.job_id);
         line.set('main', !!m.main);
         _ensSource.addFeature(line);
+        _ensLines.set(m.job_id, { coords, main: !!m.main });
+        _ensCorridor();
       })
       .catch(() => { _ensDrawn.delete(m.job_id); });
   }
 }
+// ── The corridor: the envelope of the set's routes, display only ──
+// Every line drawn (the main forecast's and each finished member's) is placed against a spine (the main forecast's
+// route, else the first member's drawn): how far along it each point is, and how far to its left or right. The spine
+// is cut into ENS_CORRIDOR_SLICES slices; in each, the corridor reaches the farthest point to either side (the spine
+// itself counts as 0), so it is the area between the outermost routes, joined at the start and the destination where
+// every route begins and ends. In map coordinates (EPSG:3857): a picture, not a measurement. Water is not checked:
+// two members either side of an island put the island in the corridor.
+const ENS_CORRIDOR_SLICES = 200;   // display resolution along the spine
+/** The point of polyline `line` nearest `p`: its distance along the line (`cum`: the length to each vertex) and its signed offset (left +). */
+function _ensProject(line, cum, p) {
+  let best = { s: 0, d: 0, dd: Infinity };
+  for (let i = 1; i < line.length; i++) {
+    const a = line[i - 1], b = line[i];
+    const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx * dx + dy * dy;
+    if (!len2) continue;
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2));
+    const qx = a[0] + t * dx, qy = a[1] + t * dy, dd = (p[0] - qx) ** 2 + (p[1] - qy) ** 2;
+    if (dd < best.dd) {
+      const len = Math.sqrt(len2);
+      best = { s: cum[i - 1] + t * len, d: (dx * (p[1] - a[1]) - dy * (p[0] - a[0])) / len, dd };
+    }
+  }
+  return best;
+}
+/** The point of polyline `line` at distance `s` along it, and the unit normal to its left there. */
+function _ensAlong(line, cum, s) {
+  let i = 1;
+  while (i < line.length - 1 && cum[i] < s) i++;
+  const a = line[i - 1], b = line[i], len = cum[i] - cum[i - 1] || 1;
+  const t = Math.max(0, Math.min(1, (s - cum[i - 1]) / len));
+  return { p: [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])], n: [-(b[1] - a[1]) / len, (b[0] - a[0]) / len] };
+}
+/** Draw the corridor again from every line drawn so far; none until there are two. */
+function _ensCorridor() {
+  const old = _ensSource.getFeatureById('corridor');
+  if (old) _ensSource.removeFeature(old);
+  const routes = [..._ensLines.values()];
+  if (routes.length < 2) return;
+  const spine = (routes.find(r => r.main) || routes[0]).coords;
+  const cum = [0];
+  for (let i = 1; i < spine.length; i++) cum.push(cum[i - 1] + Math.hypot(spine[i][0] - spine[i - 1][0], spine[i][1] - spine[i - 1][1]));
+  const total = cum[cum.length - 1];
+  if (!(total > 0)) return;
+  const n = ENS_CORRIDOR_SLICES, step = total / n;
+  const left = new Array(n + 1).fill(0), right = new Array(n + 1).fill(0);
+  const reach = (k, d) => { if (d > left[k]) left[k] = d; if (d < right[k]) right[k] = d; };
+  for (const r of routes) {
+    // Each leg cut to the slice length, so a long leg reaches every slice it passes.
+    const pts = [];
+    for (let i = 1; i < r.coords.length; i++) {
+      const a = r.coords[i - 1], b = r.coords[i];
+      const parts = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
+      for (let j = 0; j < parts; j++) pts.push([a[0] + (b[0] - a[0]) * j / parts, a[1] + (b[1] - a[1]) * j / parts]);
+    }
+    pts.push(r.coords[r.coords.length - 1]);
+    // Between two points in a row, every slice they span (a leg crossing a slice between them still widens it).
+    let prev = null;
+    for (const p of pts) {
+      const q = _ensProject(spine, cum, p);
+      const k = Math.round(q.s / step);
+      if (prev) {
+        const k0 = prev.k, k1 = k, span = k1 - k0;
+        for (let x = Math.min(k0, k1); x <= Math.max(k0, k1); x++) reach(x, span ? prev.d + (q.d - prev.d) * (x - k0) / span : q.d);
+      } else reach(k, q.d);
+      prev = { k, d: q.d };
+    }
+  }
+  const leftEdge = [], rightEdge = [];
+  for (let k = 0; k <= n; k++) {
+    const { p, n: nrm } = _ensAlong(spine, cum, k * step);
+    leftEdge.push([p[0] + nrm[0] * left[k], p[1] + nrm[1] * left[k]]);
+    rightEdge.push([p[0] + nrm[0] * right[k], p[1] + nrm[1] * right[k]]);
+  }
+  const ring = leftEdge.concat(rightEdge.reverse());
+  ring.push(ring[0]);
+  const f = new ol.Feature(new ol.geom.Polygon([ring]));
+  f.setId('corridor');
+  f.set('corridor', true);
+  _ensSource.addFeature(f);
+}
+/** A member's name in the table: "control" for member 0, else "member N". */
 function _ensWho(m) { return m.member === 0 ? 'control' : 'member ' + m.member; }
-// The result strip's line: how far the set is, and the arrivals of the members' routes.
+/** The result strip's line: how far the set is, and the arrivals of the members' routes. */
 function _ensLine() {
   const set = _ens;
   if (!set) return '';
@@ -2703,7 +2832,7 @@ function _ensLine() {
   if (failed) parts.push(failed + ' failed');
   return '<div class="rs-notes" style="color:var(--text-2);">' + escapeHtml(set.name) + ' (' + _shortUtc(set.cycle) + '): ' + escapeHtml(parts.join(' · ')) + '</div>';
 }
-// The Itinerary tab's table: one row per member, numbers in the cells and the units in the header (as Best departure's).
+/** The Itinerary tab's table: one row per member, numbers in the cells and the units in the header (as Best departure's). */
 function _ensRender() {
   if (_lastRouteProps) renderResultStrip(_lastRouteProps, _lastNavWarns);
   _ensSource.changed();   // the highlight follows the route opened
@@ -2714,6 +2843,7 @@ function _ensRender() {
   const was = el.querySelector('details');
   const open = was ? /** @type {HTMLDetailsElement} */ (was).open : true;
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
+  /** A value in the user's unit, or — when there is none or the unit is not known. */
   const num = (v, ud) => (v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p));
   const STATUS = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled' };
   // The main forecast's route first, so it can be opened again after a member's.
@@ -2735,7 +2865,7 @@ function _ensRender() {
     + '<div class="ens-scroll"><table><thead><tr><th>Member</th><th>Arrives</th><th>Passage</th><th>Motor</th>'
     + '<th title="Strongest wind on any leg">Wind<br>' + escapeHtml(speedU.u) + '</th><th title="Highest significant waves on any leg">Waves<br>' + escapeHtml(waveU.u) + '</th></tr></thead><tbody>'
     + rows.join('') + '</tbody></table></div>'
-    + '<div class="ctl-hint">Each member\'s own route search on that member\'s forecast (wind and waves; no regional wind), with this route\'s start, destination, waypoints, boat and options. On the map: the main forecast\'s route thin and solid, the members\' dotted, the one opened highlighted. Click a row to open that route.</div>'
+    + '<div class="ctl-hint">Each member\'s own route search on that member\'s forecast (wind and waves; no regional wind), with this route\'s start, destination, waypoints, boat and options. On the map: the main forecast\'s route thin and solid, the members\' dotted, the one opened highlighted, and the corridor they all lie in shaded under them. Click a row to open that route.</div>'
     + '</details>';
   /** @type {NodeListOf<HTMLElement>} */ (el.querySelectorAll('tr[data-job]')).forEach(tr => { tr.onclick = () => _ensOpen(tr.dataset.job); });
 }
@@ -2747,15 +2877,18 @@ function _ensOpen(jobId) {
     .catch(err => appendLog('Could not open the member route: ' + err.message, 'error'));
 }
 window.addEventListener('rp:units', _ensRender);
-// The set of a route: its main forecast's route names it (request.main_job_id). Looked up whenever that route is
-// opened or followed (a saved route, a reload while it computes), so the set comes and goes with its route.
+/**
+ * The set of a route: its main forecast's route names it (request.main_job_id). Looked up whenever that route is
+ * opened or followed (a saved route, a reload while it computes), so the set comes and goes with its route.
+ */
 function _ensForRoute(id) {
   if (_ens && ((_ens.main && _ens.main.job_id === id) || _ens.members.some(m => m.job_id === id))) return;
+  const gen = _ensGen;
   authFetch(API + '/ensemble-sets?limit=12', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : []))
     .then(list => {
       const set = Array.isArray(list) ? list.find(x => x.request && x.request.main_job_id === id) : null;
-      if (set && _currentRouteJobId === id) _ensPoll(set.id);
+      if (set && gen === _ensGen && _currentRouteJobId === id) _ensPoll(set.id, gen);
     })
     .catch(() => { /* none: the route has no set */ });
 }

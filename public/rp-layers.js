@@ -3,7 +3,7 @@
 // drawn on canvas, or the plugin's PNG tiles), streamlines, pressure, the
 // layer toggles and the legends box. rp-plan.js imports what it uses.
 
-import { _apiError, _apiErrorText, _fmt, API, authFetch, AuthGate, fmtPressure, fmtWhen, forecastWaiting, fromClockInput, KT_MS, TACK_COLOR, tackSide, UNIT_MISSING, unitDesc } from './rp-core.js';
+import { _apiError, _apiErrorText, _fmt, API, authFetch, AuthGate, fmtPressure, fmtWhen, forecastWaiting, fromClockInput, KT_MS, MOTOR_COLOR, TACK_COLOR, tackSide, UNIT_MISSING, unitDesc } from './rp-core.js';
 
 // --- Marker features and route sources (drawn by the layers below, placed by rp-plan.js) ---
 // --- Marker features ---
@@ -105,14 +105,14 @@ export const routeLayer = new ol.layer.Vector({
       const nextWind = feature.get('next_wind');
       // Colors match the itinerary-card accents:
       //   sailing/starboard = #2E7D32, sailing/port = #D32F2F,
-      //   motoring = #fc4 (amber), arrival (last waypoint) = #88f (blue).
+      //   motoring = MOTOR_COLOR (amber, as its leg), arrival (last waypoint) = #88f (blue).
       let color;
       if (nextMode != null) {
         if (nextMode === 'sailing') {
           // Starboard when cog or wind is missing.
           color = TACK_COLOR[tackSide(nextCog, nextWind) || 'starboard'];
         } else {
-          color = '#fc4';   // motoring
+          color = MOTOR_COLOR;
         }
       } else {
         // Last waypoint (arrival) — blue.
@@ -2170,12 +2170,78 @@ function _seasGlyphKey() {
     + cell(_seasGlyphSvg('none', colour), 'little current')
     + '</div><div class="lg-note">Each arrow points the way the waves travel; larger where the current steepens them.</div>';
 }
+// ── The route's row: what of a route is on the map now, each item drawn as the map draws it ──
+let _ensLegendInfo = null;   // rp-plan.js: () => what of an ensemble set is drawn ({ main, members, open, corridor })
+let _routeLegendTimer = null;
+/** Rebuild the legends soon: route sources change many times a second while a route computes. */
+function _routeLegendSoon() {
+  if (_routeLegendTimer) return;
+  _routeLegendTimer = setTimeout(() => {
+    _routeLegendTimer = null;
+    updateLegends();
+  }, 250);
+}
+/** rp-plan.js: the ensemble set's layer source, and what of the set is drawn; the legend follows the source. */
+export function watchEnsembleLegend(source, info) {
+  _ensLegendInfo = info;
+  source.on('change', _routeLegendSoon);
+}
+const _sym = inner => '<svg width="30" height="14" viewBox="0 0 30 14" style="vertical-align:middle;margin-right:4px;">' + inner + '</svg>';
+const _lineSym = (color, width, dash, cap) =>
+  _sym('<line x1="2" y1="7" x2="28" y2="7" stroke="' + color + '" stroke-width="' + width + '"'
+    + (dash ? ' stroke-dasharray="' + dash.join(' ') + '"' : '') + (cap ? ' stroke-linecap="' + cap + '"' : '') + '/>');
+const _ringSym = color => _sym('<circle cx="15" cy="7" r="5.5" fill="none" stroke="' + color + '" stroke-width="2"/>');
+function _routeLegendRow() {
+  const items = [];
+  const item = (sym, label) => items.push('<div>' + sym + label + '</div>');
+  const legs = new Set();
+  let beyond = false, snap = false, forecastEnd = false, marks = false, arrival = false, wind = false;
+  for (const f of routeSource.getFeatures()) {
+    const kind = f.get('kind');
+    if (kind === 'leg') { legs.add(f.get('leg')); if (f.get('beyond')) beyond = true; }
+    else if (kind === 'snap') snap = true;
+    else if (kind === 'forecast_end') forecastEnd = true;
+    else if (f.getGeometry() && f.getGeometry().getType() === 'Point') {
+      if (f.get('next_mode') == null) arrival = true; else marks = true;
+      if (f.get('wind_dir_deg') != null) wind = true;
+    }
+  }
+  if (legs.has('starboard')) item(_lineSym(TACK_COLOR.starboard, 3), 'starboard tack');
+  if (legs.has('port')) item(_lineSym(TACK_COLOR.port, 3), 'port tack');
+  if (legs.has('motoring')) item(_lineSym(MOTOR_COLOR, 3), 'motoring');
+  if (beyond) item(_lineSym('#555', 3, [6, 4]), 'past the forecast');
+  if (forecastEnd) item(_sym('<rect x="11" y="3" width="8" height="8" transform="rotate(45 15 7)" fill="#f9a825" stroke="#fff" stroke-width="1.5"/>'), 'forecast ends');
+  if (marks) item(_ringSym(TACK_COLOR.starboard), 'waypoint, in its next leg\'s colour; the arrow is the heading');
+  if (arrival) item(_ringSym('#88f'), 'arrival');
+  if (wind) item(_sym('<path d="M4,7 H22 M22,7 L16,3 M22,7 L16,11" stroke="#1565C0" stroke-width="2.5" fill="none"/>'), 'wind, pointing where it blows');
+  if (snap) item(_lineSym('#7F0000', 2, [4, 4]), 'moved to the nearest water');
+  if (ringSource.getFeatures().length) item(_sym('<circle cx="15" cy="7" r="5.5" fill="rgba(255,152,0,0.10)" stroke="rgba(255,152,0,0.95)" stroke-width="2" stroke-dasharray="3 2"/>'), 'arrival circle (approximate waypoint)');
+  const ens = _ensLegendInfo ? _ensLegendInfo() : null;
+  if (ens && ens.corridor) item(_sym('<rect x="2" y="2" width="26" height="10" fill="rgba(0,184,212,0.12)" stroke="rgba(0,184,212,0.5)"/>'), 'ensemble corridor: where all the routes lie');
+  if (ens && ens.main) item(_lineSym('#1f6b8d', 2), 'ensemble: main forecast\'s route');
+  if (ens && ens.members) item(_lineSym('#00b8d4', 3.5, [1, 7], 'round'), 'ensemble: a member\'s route');
+  if (ens && ens.open) item(_sym('<line x1="2" y1="7" x2="28" y2="7" stroke="rgba(0,0,0,0.45)" stroke-width="13"/><line x1="2" y1="7" x2="28" y2="7" stroke="rgba(255,255,255,0.9)" stroke-width="11"/>'), 'ensemble: the route opened');
+  if (frontLayer.getVisible()) {
+    const fs = frontSource.getFeatures();
+    if (fs.some(f => f.get('kind') === 'front'))
+      item(_sym('<line x1="2" y1="7" x2="15" y2="7" stroke="' + _frontColor(0, 0.85) + '" stroke-width="2"/><line x1="15" y1="7" x2="28" y2="7" stroke="' + _frontColor(1, 0.85) + '" stroke-width="2"/>'), 'search fronts, early to late');
+    if (fs.some(f => f.get('kind') === 'best')) item(_lineSym('rgba(120,40,160,0.9)', 2.5, [6, 6]), 'best path so far');
+    if (skeletonSource.getFeatures().length) item(_lineSym('#2060cc', 2, [8, 4]), 'coarse A* guide');
+  }
+  if (proposedRouteSource.getFeatures().length) item(_lineSym('rgba(142,36,170,0.75)', 4, [10, 6]), 'proposed re-plan');
+  if (trackSource.getFeatures().length) item(_lineSym('rgba(0,150,170,0.9)', 3), 'track sailed');
+  if (pastRouteSource.getFeatures().length) item(_lineSym('rgba(120,120,120,0.55)', 2, [6, 6]), 'earlier routes');
+  return items.length ? '<div class="lg-row"><div class="lg-title">Route</div><div class="lg-route">' + items.join('') + '</div></div>' : '';
+}
 function updateLegends() {
   const box = document.getElementById('legendBox');
   if (!box) return;
   if (_LEGENDS == null) _loadLegends();
   const rows = [];
   const G = _LEGENDS || {};
+  // The route first: what is drawn of it (empty without one).
+  const routeRow = _routeLegendRow();
+  if (routeRow) rows.push(routeRow);
   // Barb glyph per class: the class's lower bound drawn as the map draws
   // it (calm circle, half feather, full feathers) in the class colour.
   if (_on('windToggle')) rows.push(_classesRow('Wind barbs', WIND_BARB_CLASSES, (lo, c) => _windBarbSvg(lo, c)) + _noteRow('windToggle'));
@@ -2212,23 +2278,27 @@ function updateLegends() {
   box.innerHTML = rows.join('');
   _foldLegend(box, rows.length);
 }
+// Folded or not, per screen size: a small screen starts folded, a wider one open (as before it could fold).
 let _legendFolded = true;
+let _legendFoldedWide = false;
 try {
   _legendFolded = localStorage.getItem('rp:legend') !== 'open';
+  _legendFoldedWide = localStorage.getItem('rp:legend:wide') === 'folded';
 } catch (_) {}
 /**
- * On a small screen the legend folds to one line naming its rows, so the map shows between it and the sheet; a tap
- * opens it, and the choice is remembered in this browser. A desktop shows the rows as before. The state lives here;
- * storage only remembers it (a browser that blocks storage still toggles). 2026-10-27.
+ * The legend folds to one line naming its rows, and a tap opens it again: on a small screen so the map shows between it
+ * and the sheet (2026-10-27), on a wider one when the user folds it. Each remembers its own choice in this browser. The
+ * state lives here; storage only remembers it (a browser that blocks storage still toggles).
  * @param {HTMLElement} box
  * @param {number} n
  */
 function _foldLegend(box, n) {
-  if (!n || !_smallScreen()) {
+  if (!n) {
     box.classList.remove('folded');
     return;
   }
-  const folded = _legendFolded;
+  const small = _smallScreen();
+  const folded = small ? _legendFolded : _legendFoldedWide;
   const names = [...box.querySelectorAll('.lg-row .lg-title')]
     .map(t => (t.firstChild && t.firstChild.nodeType === 3 ? t.firstChild.textContent : t.textContent).trim())
     .filter(Boolean);
@@ -2239,9 +2309,10 @@ function _foldLegend(box, n) {
   btn.title = folded ? 'Open the legend' : 'Fold the legend to one line';
   btn.textContent = (folded ? '\u25B8 ' : '\u25BE ') + (names.length ? names.join(' \u00B7 ') : 'Legend');
   btn.addEventListener('click', () => {
-    _legendFolded = !folded;
+    if (small) _legendFolded = !folded;
+    else _legendFoldedWide = !folded;
     try {
-      localStorage.setItem('rp:legend', _legendFolded ? 'folded' : 'open');
+      localStorage.setItem(small ? 'rp:legend' : 'rp:legend:wide', !folded ? 'folded' : 'open');
     } catch (_) {}
     updateLegends();
   });
@@ -2249,6 +2320,8 @@ function _foldLegend(box, n) {
   box.classList.toggle('folded', folded);
 }
 window.addEventListener('rp:layout', () => updateLegends());
+// The route row follows what is drawn of the route, the search and the track.
+for (const src of [routeSource, ringSource, frontSource, skeletonSource, proposedRouteSource, trackSource, pastRouteSource]) src.on('change', _routeLegendSoon);
 // Any layer toggle change (user click, or the saved-state restore that
 // dispatches bubbling change events) refreshes the box.
 const _layersSec = document.getElementById('layersSection');

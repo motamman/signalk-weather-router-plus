@@ -19,8 +19,12 @@ uses [Semantic Versioning](https://semver.org/).
   Find Route computes the route on the main forecast and an ensemble set
   computes the same request as its own route search on each member's
   forecast (`POST /api/ensemble-sets`; `forecast_member` on a route
-  request). The members' routes show grey on the map, with the arrival
-  spread in the result strip and a members table in the Itinerary.
+  request). The members' routes show dotted cyan on the map and the main
+  forecast's thin and solid, with the **corridor** they all lie in shaded
+  under them (the area between the outermost routes along the main
+  route; display only, water not checked) and the route opened on a white
+  band; the arrival spread is in the result strip and a members table in
+  the Itinerary.
   Measured on the test box at 72 h: about 70 MB to download and 519 MB
   on disk per IFS ENS member.
 - **Polar sets from Polar Management (polar-format 2).** A `polarSet`
@@ -59,6 +63,21 @@ uses [Semantic Versioning](https://semver.org/).
   still counts as complete, so an update never makes a boat that is
   offline throw away the forecast it has, and a message that cannot be
   fetched or decoded is skipped, never failing the step.
+- **A Route row in the map legend**: what of the route is drawn, each
+  item with its map symbol (tack and motoring legs, past the forecast,
+  forecast ends, waypoint marks, wind arrows, points moved to water,
+  arrival circles, an ensemble set's corridor and lines, the decision
+  lines and A* guide while shown, a re-plan, the track and earlier
+  routes). Only what is on the map is listed.
+- **The legend folds on any screen**, not only on a phone: tap its first
+  line. A wider screen starts open and remembers its own choice.
+
+### Changed
+
+- **Motoring legs are amber**, as their waypoint marks already were; they
+  were black.
+- **An ensemble set's opened route sits on a white band** with a dark
+  edge instead of a yellow one, which hid amber motoring legs.
 
 ### Fixed
 

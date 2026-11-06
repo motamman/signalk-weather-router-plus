@@ -141,19 +141,6 @@ const st: WorkerState = {
 if (role === 'data') setNetworkObserver((state, reason) => noteNetwork(st, state, reason));
 
 /**
- * Refresh RTOFS (both roles) and, in the data worker, the forecast and
- * CMEMS SMOC. The route worker never decodes a forecast or loads the SMOC
- * resident area itself: it reads the data worker's decoded run from disk
- * (location relayed by the main thread) and adopts its SMOC memory. Once a
- * request of this round finds no connection, the sources after it are not
- * asked (each uses what it has and reports "could not check" with the reason).
- * `user`: the owner asked (Refresh, a route): the round downloads whatever
- * the internet state. Any other round looks at the state (internet.ts, sent
- * as 'internet-hold') before each source: while it holds, the sources
- * answer from what is on disk, and it starting to hold stops the forecast
- * decode under way.
- */
-/**
  * The ensemble pass (worker/forecast.ts refreshEnsembles), started by a refresh round after the forecast and not waited
  * for: a pass downloads and decodes for many minutes, and the round's own status (forecast, SMOC, tides, regional) and
  * the next round must not wait behind it. One pass at a time; a round that finds one running leaves it, and the next
@@ -173,6 +160,19 @@ function startEnsembles(st: WorkerState, offline: string | null, held: () => str
     });
 }
 
+/**
+ * Refresh RTOFS (both roles) and, in the data worker, the forecast and
+ * CMEMS SMOC. The route worker never decodes a forecast or loads the SMOC
+ * resident area itself: it reads the data worker's decoded run from disk
+ * (location relayed by the main thread) and adopts its SMOC memory. Once a
+ * request of this round finds no connection, the sources after it are not
+ * asked (each uses what it has and reports "could not check" with the reason).
+ * `user`: the owner asked (Refresh, a route): the round downloads whatever
+ * the internet state. Any other round looks at the state (internet.ts, sent
+ * as 'internet-hold') before each source: while it holds, the sources
+ * answer from what is on disk, and it starting to hold stops the forecast
+ * decode under way.
+ */
 export async function refresh(st: WorkerState, force: boolean, user = false): Promise<void> {
   const networkAllowed = st.role === 'data';
   const t0 = Date.now();

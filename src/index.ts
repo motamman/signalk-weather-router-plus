@@ -1072,8 +1072,9 @@ export = function plugin(app: SkApp): SignalKPlugin {
         }
         const job = jobs?.get(msg.id);
         if (job) {
-          // A departure window's routes: one notification for the window when it is done (notifyWindow).
-          if (!job.windowId)
+          // A departure window's routes: one notification for the window when it is done (notifyWindow). An ensemble
+          // set's member routes: none (the page follows the set itself).
+          if (!job.windowId && !job.ensembleSetId)
             notify(
               job,
               'normal',
@@ -1089,7 +1090,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       case 'error': {
         jobs?.onError(msg.id, msg.message, msg.cancelled);
         const job = jobs?.get(msg.id);
-        if (job && !msg.cancelled && !job.windowId) notify(job, 'alert', `route failed: ${siText(msg.message)}`);
+        if (job && !msg.cancelled && !job.windowId && !job.ensembleSetId) notify(job, 'alert', `route failed: ${siText(msg.message)}`);
         updateStatus();
         return;
       }
@@ -1358,6 +1359,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       dataDir,
       {
         cancelRunning: cancelRunningJob,
+        /** From the data worker's last status: the ensemble's cycle in use and its members on disk, or null. */
         onDisk: model => {
           const e = (dataStatus?.ensembles ?? []).find(x => x.model === model);
           return e && e.cycle && e.members.length ? { cycle: e.cycle, members: [...e.members] } : null;
@@ -1451,6 +1453,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         if (!jobs) throw new NotStartedError(notStartedReason());
         return jobs;
       },
+      /** The ensemble sets, once the plugin has started (a NotStartedError before). */
       get ensembleSets(): EnsembleSetManager {
         if (!ensembleSets) throw new NotStartedError(notStartedReason());
         return ensembleSets;
@@ -1584,6 +1587,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       query,
       tiles: () => tiles,
       regionalRuns: () => (dataStatus?.regional ?? []).map(r => ({ name: r.source, cycle: r.cycle })),
+      /** From the data worker's last status: each ensemble with a cycle in use, and its members on disk. */
       ensembles: () =>
         (dataStatus?.ensembles ?? [])
           .filter(e => e.cycle && e.members.length)

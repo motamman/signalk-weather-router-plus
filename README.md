@@ -180,8 +180,13 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   forecast, one after the other on the server, so a route asked for
   meanwhile waits behind one member at most. A member's route reads only
   that member's wind and waves (no regional wind); every member of a set
-  is of the same ensemble cycle. The members' routes show as grey lines
-  on the map, the result strip gives how far the set is and the earliest,
+  is of the same ensemble cycle. On the map the members' routes are
+  dotted cyan and the main forecast's thin and solid, with the
+  **corridor** they all lie in shaded under them: the area between the
+  outermost routes, slice by slice along the main route, joined at the
+  start and the destination (display only; water is not checked, so two
+  members either side of an island put the island in it). The route
+  opened sits on a white band. The result strip gives how far the set is and the earliest,
   median and latest arrival, and the Itinerary tab lists each member's
   arrival, passage, motoring, strongest wind and highest waves; a row
   opens that member's route. Over the API: `POST /api/ensemble-sets`,
@@ -467,9 +472,11 @@ computed with what that request says, not with the user's saved Setup.
   the sheet is half open and the others are open. The sideways test comes
   first and reads the screen, not the window, so the on-screen keyboard,
   which shrinks the window to a wide, short box, does not turn the sheet
-  into the drawer; the other two read the window's width. On a phone,
-  upright or sideways, the legend folds to one line naming its rows (tap
-  to open; remembered), and the map credits fold to their button with the
+  into the drawer; the other two read the window's width. The legend
+  folds to one line naming its rows on any screen (tap to open or fold;
+  remembered, separately for a phone and a wider screen; a phone starts
+  folded, a wider screen open). On a phone, upright or sideways, the map
+  credits fold to their button with the
   OpenStreetMap credit beside it. Upright, both sit just above the sheet.
 - **Planning.** Click the map for the menu: set or move the start, set or
   move the destination, **Add waypoint here** (the clicked point becomes
@@ -780,6 +787,17 @@ computed with what that request says, not with the user's saved Setup.
   search (water too shallow on the finished route) leaves it where the
   search ended. With the decision lines on, the path is theirs (dashed)
   and the boat sits at its end.
+- **The map legend's Route row**: while a route is on the map, the
+  legend (bottom left) starts with what of it is drawn, each item with
+  its symbol as the map draws it: starboard tack (green), port tack
+  (red) and motoring (amber) legs, a leg past the forecast (dashed), the
+  "forecast ends" diamond, the waypoint rings and heading arrows (in
+  their next leg's colour; blue at the arrival), the wind arrows, a point
+  moved to the nearest water (maroon dashed), approximate waypoints'
+  arrival circles, an ensemble set's corridor, main forecast and members
+  and the route opened, the decision lines and the coarse A* guide while
+  they show, a proposed re-plan, the track sailed and earlier routes.
+  Only what is drawn is listed.
 - **Defaults tab**: the web-app settings below (what every route starts from, shared by every client), in the selected units. Numbers are sliders with the value beside the label; max wind and max wave height have a "no limit" box.
 - **While the server gets its forecast** (a first start, or after the
   forecast settings changed, when the forecast is decoded again): a notice

@@ -13,6 +13,7 @@ import { availableSteps, type Cycle, cycleFor, EcmwfClient, ENSEMBLES, type Ense
 import {
   ENSEMBLE_DECODED_DIR,
   ENSEMBLE_FIELDS,
+  ENSEMBLE_GRIB_DIR,
   ensembleMembers,
   ensembleSteps,
   memberComplete,
@@ -348,6 +349,31 @@ function ensembleKeep(
   return keep;
 }
 
+/** An ensemble's decoded runs and GRIB cache, in bytes: a walk of every file in its folders. */
+function ensembleDirBytes(st: WorkerState, model: EnsembleModelId): number {
+  return dirBytes(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR, model)) + dirBytes(path.join(st.cacheRoot, ENSEMBLE_GRIB_DIR, model));
+}
+
+/** Each chosen ensemble's bytes on disk, measured now (st.ensembleBytes): after a pass or prune changed them. */
+function measureEnsembles(st: WorkerState, models: EnsembleModelId[]): void {
+  const out: Partial<Record<EnsembleModelId, number>> = {};
+  for (const m of models) out[m] = ensembleDirBytes(st, m);
+  st.ensembleBytes = out;
+}
+
+/**
+ * An ensemble's bytes on disk for the status (query.ts dataStatus): as last measured, or measured once now when it has
+ * not been (before the first pass, a model just chosen). Never a walk of its folders per status: the status follows
+ * every map query.
+ */
+export function ensembleBytesOf(st: WorkerState, model: EnsembleModelId): number {
+  const known = st.ensembleBytes?.[model];
+  if (known !== undefined) return known;
+  const b = ensembleDirBytes(st, model);
+  st.ensembleBytes = { ...st.ensembleBytes, [model]: b };
+  return b;
+}
+
 /**
  * Data worker, after the forecast (refresh): the chosen ensembles' members for the cycle of the run in use, downloaded
  * and decoded in a child process (forecastdecodetask.ts runEnsembleDecodeTask) when any is missing. Never touches the
@@ -368,8 +394,10 @@ export async function refreshEnsembles(
       if (removed.length) st.log('info', `ensembles: off; removed ${removed.join(', ')}`);
     }
     st.ensembles = {};
+    st.ensembleBytes = {};
     return;
   }
+  measureEnsembles(st, e.models);
   if (!st.run) return;
   const cycle = cycleName(st.run.cycleTime);
   const horizonHours = cfg.forecast.horizonS / HOUR_S;
@@ -378,12 +406,13 @@ export async function refreshEnsembles(
   );
   const pending = Object.fromEntries(missing.map(m => [m, cycle])) as Partial<Record<EnsembleModelId, string>>;
   const note = (m: EnsembleModelId, s: Partial<NonNullable<WorkerState['ensembles'][EnsembleModelId]>>): void => {
-    st.ensembles[m] = { loading: null, error: null, checkedAt: new Date().toISOString(), ...st.ensembles[m], ...s };
+    // checkedAt last: this note's time, never the entry's earlier one.
+    st.ensembles[m] = { loading: null, error: null, ...st.ensembles[m], ...s, checkedAt: new Date().toISOString() };
     changed();
   };
   for (const m of e.models) if (!missing.includes(m)) note(m, { loading: null, error: null });
   if (!missing.length) {
-    pruneEnsembles(st.cacheRoot, ensembleKeep(st, cfg, {}));
+    if (pruneEnsembles(st.cacheRoot, ensembleKeep(st, cfg, {})).length) measureEnsembles(st, e.models);
     return;
   }
   const why = offline ?? held();
@@ -427,8 +456,9 @@ export async function refreshEnsembles(
       null,
       st.ensembleAbort.signal,
       ev => {
-        if (ev.event === 'decode-step')
-          for (const m of missing) note(m, { loading: { cycle: st.run!.cycleTime.toISOString(), done: ev.done, total: ev.total } });
+        // Each step is one model's: the child decodes the models one after the other.
+        if (ev.event === 'decode-step' && ev.model)
+          note(ev.model, { loading: { cycle: st.run!.cycleTime.toISOString(), done: ev.done, total: ev.total } });
         else if (ev.event === 'decode-log') st.log('info', `ensembles: ${ev.message}`);
       }
     );
@@ -447,6 +477,8 @@ export async function refreshEnsembles(
   }
   const removed = pruneEnsembles(st.cacheRoot, ensembleKeep(st, cfg, pending));
   if (removed.length) st.log('debug', `ensembles: removed ${removed.join(', ')}`);
+  measureEnsembles(st, e.models);
+  changed();
 }
 
 export function keepCycles(current: Cycle, n: number): Cycle[] {

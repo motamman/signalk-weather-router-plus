@@ -9,9 +9,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ForecastStore } from '../../data/forecast';
-import { dirBytes, type DecodedRun, type WindowOptions } from '../../data/decoded';
+import { type DecodedRun, type WindowOptions } from '../../data/decoded';
 import { ENSEMBLES } from '../../data/ecmwf';
-import { ENSEMBLE_DECODED_DIR, ENSEMBLE_GRIB_DIR, readEnsembleCurrent } from '../../data/ensemble';
+import { readEnsembleCurrent } from '../../data/ensemble';
 import { LAYER_PARAMS } from '../layers';
 import { bboxFromLonLat, type BBox } from '../../geo/geodesy';
 import { REGIONAL_DIR } from '../../data/regionaldecode';
@@ -31,7 +31,7 @@ import {
 import { POINT_FORECAST_PARAMS, pointForecasts } from '../weather';
 import { type DataStamp, type DataStatus, type QueryArgs, type TrackConditions, type TrackConditionsRow } from '../protocol';
 import { encodeTile, tileGroup, tileQuery, type TileId } from '../tiles';
-import { readWindow, releaseWindow } from './forecast';
+import { ensembleBytesOf, readWindow, releaseWindow } from './forecast';
 import { regionalRunsFor, type RegionalRun } from './regionalwind';
 import { currentsStatus, prepareSmocForQuery } from './currents';
 import { conditionsTide, prepareTidesForQuery, tideSeriesQuery } from './tides';
@@ -506,7 +506,7 @@ export function dataStatus(st: WorkerState): DataStatus {
         name: ENSEMBLES[m].name,
         cycle: cur ? new Date(cur.cycleTimeMs).toISOString() : null,
         members: cur ? [...cur.members] : [],
-        bytes: dirBytes(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR, m)) + dirBytes(path.join(st.cacheRoot, ENSEMBLE_GRIB_DIR, m)),
+        bytes: ensembleBytesOf(st, m),
         loading: s?.loading ?? null,
         error: s?.error ?? null,
         checkedAt: s?.checkedAt ?? null,

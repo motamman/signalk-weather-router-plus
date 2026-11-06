@@ -30,10 +30,15 @@ export const ENSEMBLE_SET_LIMITS = {
   maxRunning: 2,
 };
 
+// The set's route request: a route request's fields but forecast_member, which the set gives each member (a request
+// with one is refused: validateEnsembleSetRequest).
+const { forecast_member: _perMember, ...SET_ROUTE_PROPERTIES } = RouteRequestSchema.properties;
+
 /** The set request (POST /api/ensemble-sets): the type and the OpenAPI schema. */
 export const EnsembleSetRequestSchema = Type.Object({
-  route: Type.Object(RouteRequestSchema.properties, {
-    description: 'The route request, as POST /api/routes takes it; forecast_member and publish are set per member',
+  route: Type.Object(SET_ROUTE_PROPERTIES, {
+    description:
+      'The route request, as POST /api/routes takes it, without forecast_member (set per member); publish is false for every member',
   }),
   model: Type.Enum(ENSEMBLE_MODELS, { type: 'string', description: 'The ensemble (downloaded: plugin config Ensemble downloads)' }),
   members: Type.Integer({
@@ -249,6 +254,10 @@ export class EnsembleSetManager {
     return true;
   }
 
+  /**
+   * A member's route job moved on: running, or done (its metrics taken) or failed or cancelled, then the next member
+   * is submitted while the set runs. Events of jobs that are not a set member are ignored.
+   */
   private onJobEvent(jobId: string, ev: JobEvent): void {
     const at = this.byJob.get(jobId);
     if (!at) return;
@@ -322,6 +331,7 @@ export class EnsembleSetManager {
     fs.renameSync(tmp, path.join(this.dir, `${s.id}.json`));
   }
 
+  /** Finished sets beyond ENSEMBLE_SET_LIMITS.keep, oldest first, deleted with their route jobs. */
   private trim(): void {
     const finished = [...this.sets.values()]
       .filter(s => s.status !== 'running')

@@ -38,7 +38,9 @@ export interface ForecastDecodeResult {
   decodeMs: number;
 }
 
-export type ForecastDecodeEvent = { event: 'decode-step'; done: number; total: number } | { event: 'decode-log'; message: string };
+/** `model`: the ensemble a step of an ensemble decode is of (absent for the forecast's own decode). */
+export type ForecastDecodeEvent =
+  { event: 'decode-step'; done: number; total: number; model?: EnsembleModelId } | { event: 'decode-log'; message: string };
 
 /** The ensembles of one cycle downloaded and decoded (childtask.ts task 'ensemble-decode', data/ensemble.ts), in a child for the same reasons. */
 export interface EnsembleDecodeTask {
@@ -52,6 +54,10 @@ export interface EnsembleDecodeTask {
   members: number;
 }
 
+/**
+ * The child's ensemble pass (data/ensemble.ts runEnsembleCycle) for the main forecast's cycle in use, its log lines
+ * and progress steps sent as events; the answer is each model's result.
+ */
 export async function runEnsembleDecodeTask(
   t: EnsembleDecodeTask,
   emit: (e: ForecastDecodeEvent) => void,
@@ -68,7 +74,7 @@ export async function runEnsembleDecodeTask(
     models: t.models,
     members: t.members,
     log: message => emit({ event: 'decode-log', message }),
-    onProgress: (done, total) => emit({ event: 'decode-step', done, total }),
+    onProgress: (done, total, model) => emit({ event: 'decode-step', done, total, model }),
   });
 }
 

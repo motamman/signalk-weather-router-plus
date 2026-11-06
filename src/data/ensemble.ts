@@ -23,6 +23,7 @@ import { HOUR_S } from '../geo/units';
 import { cycleName, DecodedRunWriter, dirBytes, openDecodedRun, pruneDecodedRuns } from './decoded';
 import {
   type Cycle,
+  cycleFor,
   type EcmwfClient,
   ENSEMBLE_PARAMS,
   ENSEMBLES,
@@ -54,7 +55,9 @@ export function ensembleMembers(model: EnsembleModel, n: number): number[] {
 
 /**
  * The steps of a model's cycle up to the horizon: every `model.stepHours` to 144 h, every 6 h after it, and never past
- * the cycle's last step. A step the server does not have ends the ladder there (downloadModel).
+ * the cycle's last step. Each ensemble publishes every one of them: IFS ENS to 144 h at 06/18Z and to 360 h at 00/12Z,
+ * AIFS ENS to 360 h at every cycle (data.ecmwf.int listings of 2026-11-04 and 2026-11-05), never short of the main
+ * forecast's last step (ecmwf.ts cycleFor). A step missing from the server is one not published yet (downloadModel).
  */
 export function ensembleSteps(model: EnsembleModel, cycle: Pick<Cycle, 'maxStep'>, horizonHours: number): number[] {
   const out: number[] = [];
@@ -116,14 +119,22 @@ function cached(p: string): boolean {
   }
 }
 
-/** The decoded run of a member for a cycle, when it is complete and made for this horizon. */
+/** Where member `member`'s decoded run of `cycle` is (written or not). */
 export function memberRunDir(cacheRoot: string, model: EnsembleModelId, member: number, cycle: string): string {
   return path.join(cacheRoot, ENSEMBLE_DECODED_DIR, model, memberDir(member), cycle);
 }
 
+/**
+ * Member `member`'s run of `cycle` is on disk and complete: made for this horizon, with every field and every step
+ * of the cycle's ladder (ensembleSteps).
+ */
 export function memberComplete(cacheRoot: string, model: EnsembleModelId, member: number, cycle: string, horizonHours: number): boolean {
   const { run } = openDecodedRun(memberRunDir(cacheRoot, model, member, cycle));
-  return !!run && run.index.request.horizonHours === horizonHours && ENSEMBLE_FIELDS.every(p => run.has(p));
+  if (!run || run.index.request.horizonHours !== horizonHours || !ENSEMBLE_FIELDS.every(p => run.has(p))) return false;
+  // Every step of the cycle's ladder: a run without them all is not complete, and is decoded again.
+  const ladder = ensembleSteps(ENSEMBLES[model], cycleFor(new Date(run.index.cycleTimeMs)), horizonHours);
+  const have = run.index.stepHours;
+  return have.length === ladder.length && ladder.every((s, i) => have[i] === s);
 }
 
 export interface EnsembleModelResult {
@@ -133,7 +144,7 @@ export interface EnsembleModelResult {
   members: number[];
   /** Members that could not be had this pass, and why. */
   failed: { member: number; error: string }[];
-  /** The steps decoded (the ladder, cut where the server's ended). */
+  /** The steps decoded: the cycle's whole ladder, or none (a step not published yet stops the model's pass). */
   steps: number[];
   downloaded: number;
   downloadedBytes: number;
@@ -158,6 +169,7 @@ export interface EnsembleCurrent {
 
 const CURRENT_FILE = 'current.json';
 
+/** A model's ensemble in use (current.json in its folder), or null: none yet, unreadable, or not that model's. */
 export function readEnsembleCurrent(cacheRoot: string, model: EnsembleModelId): EnsembleCurrent | null {
   try {
     const c = JSON.parse(fs.readFileSync(path.join(cacheRoot, ENSEMBLE_DECODED_DIR, model, CURRENT_FILE), 'utf8')) as EnsembleCurrent;
@@ -183,8 +195,8 @@ export interface EnsembleCycleOptions {
   /** Members 1 to this of each model (and the control where there is one). */
   members: number;
   log?: (message: string) => void;
-  /** After each step downloaded or member decoded: done of total, for the status. */
-  onProgress?: (done: number, total: number) => void;
+  /** After each step downloaded or member decoded: done of total for that model, for the status. */
+  onProgress?: (done: number, total: number, model: EnsembleModelId) => void;
 }
 
 /**
@@ -214,7 +226,7 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
     if (todo.length) {
       try {
         const ladder = ensembleSteps(model, o.cycle, horizonHours);
-        const dl = await downloadModel(client, o, model, name, todo, ladder, log);
+        const dl = await downloadModel(client, o, model, name, todo, ladder);
         r.steps = dl.steps;
         r.downloaded = dl.downloaded;
         r.downloadedBytes = dl.bytes;
@@ -227,7 +239,7 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
             log(`${model.name} ${memberDir(m)}: not decoded (${(err as Error).message})`);
           }
           // After the steps downloaded (downloadModel counts those), each member decoded.
-          o.onProgress?.(dl.steps.length + k + 1, ladder.length + todo.length);
+          o.onProgress?.(dl.steps.length + k + 1, ladder.length + todo.length, id);
         }
         r.decodeMs = Date.now() - t;
       } catch (err) {
@@ -257,7 +269,8 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
 
 /**
  * Every field of `members` for the ladder into the cache, step by step. A step whose index the server does not have
- * ends the ladder there (the cycle's last step, or a step not published yet); the first step missing is an error.
+ * is not published yet (ensembleSteps): the model's pass stops with an error, what is cached stays for the next round,
+ * and nothing is decoded short.
  */
 async function downloadModel(
   client: EcmwfClient,
@@ -265,15 +278,13 @@ async function downloadModel(
   model: EnsembleModel,
   name: string,
   members: number[],
-  ladder: number[],
-  log: (m: string) => void
+  ladder: number[]
 ): Promise<{ steps: number[]; downloaded: number; bytes: number }> {
   const steps: number[] = [];
   let downloaded = 0;
   let bytes = 0;
   let done = 0;
   for (const step of ladder) {
-    let missing = false;
     for (const [stream, params] of Object.entries(ENSEMBLE_PARAMS)) {
       for (const file of model.files) {
         const inFile = members.filter(m => (m === 0) === file.control);
@@ -281,12 +292,12 @@ async function downloadModel(
         const paths = inFile.flatMap(m => params.map(p => ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, p)));
         if (paths.every(cached)) continue;
         const idx = await client.fetchEnsembleIndex(o.cycle, model, stream, file.kind, step);
-        if (!idx) {
-          if (step === ladder[0]) throw new Error(`${model.name} ${name}: the first step (+${step} h) is not published`);
-          log(`${model.name} ${name}: no +${step} h ${stream} file on the server; the ensemble ends at +${steps[steps.length - 1]} h`);
-          missing = true;
-          break;
-        }
+        if (!idx)
+          throw new Error(
+            step === ladder[0]
+              ? `${model.name} ${name}: the first step (+${step} h) is not published`
+              : `${model.name} ${name}: +${step} h ${stream} is not published yet (to +${steps[steps.length - 1]} h so far); retried next round`
+          );
         for (const m of inFile) {
           const recs = memberRecords(idx, m, file.control, params);
           for (const rec of recs) {
@@ -298,11 +309,9 @@ async function downloadModel(
           }
         }
       }
-      if (missing) break;
     }
-    if (missing) break;
     steps.push(step);
-    o.onProgress?.(++done, ladder.length + members.length);
+    o.onProgress?.(++done, ladder.length + members.length, model.id);
   }
   return { steps, downloaded, bytes };
 }
@@ -371,6 +380,7 @@ export function pruneEnsembles(
     fs.rmSync(p, { recursive: true, force: true });
     removed.push(label);
   };
+  /** A folder's entries; none when it is missing. */
   const list = (p: string): string[] => {
     try {
       return fs.readdirSync(p);

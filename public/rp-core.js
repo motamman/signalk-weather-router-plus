@@ -276,6 +276,8 @@ export function tackSide(cogDeg, windFromDeg) {
   return rel <= 180 ? 'starboard' : 'port';
 }
 export const TACK_COLOR = { starboard: '#2E7D32', port: '#D32F2F' };
+// A motoring leg and the marks at its start (rp-plan.js _drawRouteLegs, rp-layers.js routeLayer and the route legend).
+export const MOTOR_COLOR = '#fc4';
 
 // ─── Exclusive heatmap layer group ───────────────────────────────────
 // Only one full-map heatmap may be visible at a time. Wind barbs,

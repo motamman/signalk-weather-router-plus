@@ -197,7 +197,7 @@
   .layer-group.active { display: block; }
   .route-group { display: none; }
   .route-group.active { display: block; }
-  /* Legend box: one row per active water/weather overlay. */
+  /* Legend box: what of the route is drawn (rp-layers.js _routeLegendRow), then one row per active water/weather overlay. */
   #legendBox {
     position: absolute; left: 10px; bottom: 28px; z-index: 90;
     background: rgba(255, 255, 255, 0.93); color: var(--text);
@@ -221,6 +221,9 @@
   .lg-glyph { display: block; height: 22px; margin-bottom: 1px; }
   .lg-glyph svg { width: 14px; height: 22px; display: block; margin: 0 auto; }
   .lg-note { color: var(--text-2); }
+  /* The route's row: one item per line, its symbol (as the map draws it) before what it means. */
+  .lg-route div { display: flex; align-items: center; color: var(--text-2); line-height: 1.45; }
+  .lg-route svg { flex: none; }
   /* Glyph keys (current against the waves): a large symbol over its meaning, one cell each. */
   .lg-cells { display: flex; gap: var(--s-2); margin: 2px 0 3px; }
   .lg-cells > div { flex: 1; text-align: center; color: var(--text); line-height: 1.25; }
@@ -257,7 +260,7 @@
   .note-card input[type="text"], .note-card textarea, .note-card input[type="number"] { width: 100%; box-sizing: border-box; font: inherit; }
   .note-card .note-avoid-row { display: flex; align-items: center; gap: 6px; font-size: var(--f-xs); }
   .note-card .note-avoid-row input[type="number"] { width: 80px; }
-  /* Folded to one line naming its rows on a small screen (rp-layers.js _foldLegend); tap to open. */
+  /* The legend's fold: one line naming its rows (rp-layers.js _foldLegend), on any screen; tap to open or fold. */
   .lg-toggle {
     display: block; width: 100%; border: 0; background: transparent; text-align: left;
     font: inherit; font-size: var(--f-xs); font-weight: 600; color: var(--text); padding: 2px 0; cursor: pointer;
@@ -982,7 +985,7 @@
   <!-- Ensemble routes (rp-plan.js, Ensemble): shown while ensembles are on in the Signal K plugin configuration
        (Ensemble downloads), usable once one is on disk: on or off, which ensemble, how many of its members. -->
   <div id="ensembleRow" hidden>
-    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Find Route computes the route on the main forecast as always, and then a route of its own on each chosen ensemble member's forecast (one after the other on the server): where each goes and when it arrives. They show grey on the map and in a table on the Itinerary tab."><input type="checkbox" id="ensembleOn">Route each ensemble member too</label>
+    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Find Route computes the route on the main forecast as always, and then a route of its own on each chosen ensemble member's forecast (one after the other on the server): where each goes and when it arrives. On the map they show dotted, with the corridor they all lie in shaded under them; on the Itinerary tab, in a table."><input type="checkbox" id="ensembleOn">Route each ensemble member too</label>
     <div style="display:flex;gap:var(--s-2);align-items:flex-end;">
       <div style="flex:1;"><label for="ensembleModel">Ensemble</label><select id="ensembleModel" aria-label="Ensemble"></select></div>
       <div style="flex:1;"><label for="ensembleMembers">Members: <span id="ensembleMembersLabel">—</span></label><input type="range" id="ensembleMembers" min="5" max="5" step="1" value="5" aria-label="Ensemble members"></div>

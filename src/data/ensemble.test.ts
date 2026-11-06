@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ENSEMBLES, type IndexRecord } from './ecmwf';
+import { cycleFor, type EcmwfClient, ENSEMBLE_PARAMS, ENSEMBLES, type IndexRecord } from './ecmwf';
 import {
   ENSEMBLE_DECODED_DIR,
   ENSEMBLE_GRIB_DIR,
@@ -17,6 +17,8 @@ import {
   memberDir,
   memberRecords,
   pruneEnsembles,
+  readEnsembleCurrent,
+  runEnsembleCycle,
 } from './ensemble';
 
 test('members: the control first where the model publishes one (AIFS ENS), then 1 to n', () => {
@@ -99,6 +101,50 @@ test('prune: keeps the members wanted in the cycles kept and the pending GRIB ca
     pruneEnsembles(root, {});
     assert.ok(!has(ENSEMBLE_DECODED_DIR, 'ifs-ens'));
     assert.ok(!has(ENSEMBLE_GRIB_DIR, 'ifs-ens'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a step not published yet stops the model: nothing decoded short, no cycle in use, the cache kept for the next round', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
+  try {
+    // IFS ENS, 6 h: steps 0, 3, 6; the server has +0 h only.
+    const indexed: number[] = [];
+    const client = {
+      fetchEnsembleIndex: async (_c: unknown, _m: unknown, stream: string, _k: string, step: number) => {
+        indexed.push(step);
+        if (step !== 0) return null;
+        return ENSEMBLE_PARAMS[stream as keyof typeof ENSEMBLE_PARAMS].map((param, i) => ({
+          param,
+          step: '0',
+          levtype: 'sfc',
+          number: '1',
+          _offset: i * 10,
+          _length: 10,
+        }));
+      },
+      fetchEnsembleField: async (_c: unknown, _m: unknown, _s: string, _k: string, _st: number, _r: unknown, p: string) => {
+        const msg = new Uint8Array(Buffer.from('GRIB------'));
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, msg);
+        return msg;
+      },
+    } as unknown as EcmwfClient;
+    const [r] = await runEnsembleCycle(client, {
+      cacheRoot: root,
+      cycle: cycleFor(new Date('2026-11-05T00:00:00Z')),
+      horizonS: 6 * 3600,
+      models: ['ifs-ens'],
+      members: 1,
+    });
+    assert.match(r.error ?? '', /\+3 h enfo is not published yet \(to \+0 h so far\); retried next round/);
+    assert.deepEqual(r.members, []);
+    assert.deepEqual(r.steps, []);
+    assert.deepEqual(indexed, [0, 0, 3], 'stopped at the first step missing');
+    assert.equal(readEnsembleCurrent(root, 'ifs-ens'), null, 'no cycle in use');
+    assert.ok(!fs.existsSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01')), 'no member decoded');
+    assert.ok(fs.existsSync(path.join(root, ENSEMBLE_GRIB_DIR, 'ifs-ens', '2026110500', 'm01')), 'the +0 h messages stay cached');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
