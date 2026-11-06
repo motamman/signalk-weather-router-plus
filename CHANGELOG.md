@@ -25,7 +25,14 @@ uses [Semantic Versioning](https://semver.org/).
   hull of all the routes there, so every route lies inside it; display
   only, water not checked) and the route opened on a white
   band; the arrival spread is in the result strip and a members table in
-  the Itinerary.
+  the Itinerary. Before fetching, every step's index is read (the last
+  step's first) and the free disk is checked against the size of every
+  message still to fetch plus the decoded runs, keeping the forecast's
+  reserve free. The data worker alone records each ensemble's cycle in
+  use (`current.json`), from the members complete on disk; a record it
+  cannot read is reported in the log. A set whose file cannot be saved
+  carries `save_error` (as a departure window does, below), and
+  `forecast_member` is refused with `no_forecast`.
   On the test box (Pi 5), 72 h: 5 IFS ENS members downloaded
   350,757,112 B (2026-11-05; arithmetic: about 70 MB a member), and a
   decoded IFS ENS member takes 519,126,603 B on disk (`du -sb`,
@@ -81,6 +88,9 @@ uses [Semantic Versioning](https://semver.org/).
   were black.
 - **An ensemble set's opened route sits on a white band** with a dark
   edge instead of a yellow one, which hid amber motoring legs.
+- **A list's `limit` that is not a whole number from 1 is refused**
+  (`400`) on `GET /api/routes` and `GET /api/windows`; it was read as
+  the default. A larger one is still held to what the list can hold.
 
 ### Fixed
 
@@ -89,6 +99,13 @@ uses [Semantic Versioning](https://semver.org/).
   wind-limit, wave-limit and wave-correction warnings go and the
   detour's own come in at its place. Before, the replaced segment's
   warnings stayed and the detour's were lost.
+- **A departure window whose file cannot be saved says so.** A full or
+  read-only disk made the save throw into the job event, the request or
+  the start-up. The window now runs on from memory with `save_error`
+  (why its file is behind), the failure goes to the Signal K log, and
+  the next change saves it again and clears it. A window file that
+  cannot be read at start-up, or does not hold a window, and a delete
+  that fails, are reported in the log instead of passing silently.
 
 ## [0.2.1] - 2026-11-02
 

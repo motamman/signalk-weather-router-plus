@@ -21,11 +21,18 @@ import { fetchWithRetry, isOffline, sleep } from './http';
 import { MINUTE_MS, HOUR_MS, HOUR_S } from '../geo/units';
 import * as path from 'node:path';
 
-export const ECMWF_MIRRORS: Record<string, string> = {
+/** The open-data mirrors, by the name the configuration chooses one with: the one list of them. */
+export const ECMWF_MIRRORS = {
   ecmwf: 'https://data.ecmwf.int/forecasts',
   aws: 'https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com',
   google: 'https://storage.googleapis.com/ecmwf-open-data',
-};
+} as const;
+export type EcmwfMirror = keyof typeof ECMWF_MIRRORS;
+
+/** True when `name` is a mirror's name (ECMWF_MIRRORS). */
+export function isEcmwfMirror(name: string): name is EcmwfMirror {
+  return Object.hasOwn(ECMWF_MIRRORS, name);
+}
 
 /** Parameters the router needs, by stream: a cycle or a decoded run without one of these is incomplete. */
 export const ATM_PARAMS = ['10u', '10v', 'msl'] as const;

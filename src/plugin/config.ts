@@ -20,7 +20,15 @@ import { makeVessel, type VesselParams } from '../vessel/vessel';
 import type { RouterKind } from '../engine/router';
 import { DEFAULT_MESH_CATALOG_URL } from './meshes';
 import { HOUR_S } from '../geo/units';
-import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
+import {
+  ECMWF_MIRRORS,
+  ENSEMBLE_MEMBER_CHOICES,
+  ENSEMBLE_MODELS,
+  ENSEMBLES,
+  type EcmwfMirror,
+  type EnsembleModelId,
+  isEcmwfMirror,
+} from '../data/ecmwf';
 import type { AppSettings } from './settings';
 import type { RouteRequest } from './protocol';
 
@@ -44,7 +52,7 @@ export interface PluginConfig {
   polarFile?: string;
   polarsDir?: string;
   forecast?: {
-    mirror?: 'ecmwf' | 'aws' | 'google';
+    mirror?: EcmwfMirror;
     /** Ensemble downloads (data/ecmwf.ts ENSEMBLES): off unless enabled. */
     ensemble?: {
       enabled?: boolean;
@@ -127,7 +135,7 @@ export interface ResolvedConfig {
     horizonS: number;
     /** Forecast refresh interval, seconds. */
     refreshIntervalS: number;
-    mirror: 'ecmwf' | 'aws' | 'google';
+    mirror: EcmwfMirror;
     keepCycles: number;
     /** Also fetch 2t, tprate, skt, 2d, ptype, tcc, 10fg (temperature, precipitation, SST, humidity, precip type, cloud cover, gust). */
     extraFields: boolean;
@@ -226,7 +234,7 @@ export const OVERLAY_CACHE_DEFAULTS = {
   followView: true,
 } as const;
 
-export const MIRRORS = ['ecmwf', 'aws', 'google'] as const;
+export const MIRRORS = Object.keys(ECMWF_MIRRORS) as EcmwfMirror[];
 
 export const CONFIG_SCHEMA = {
   type: 'object',
@@ -452,8 +460,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
     .map(s => s.trim())
     .filter(Boolean);
   const mirror = c.forecast?.mirror ?? 'ecmwf';
-  if (!(MIRRORS as readonly string[]).includes(mirror))
-    throw new Error(`config forecast.mirror: ${String(mirror)} is not one of ${MIRRORS.join(', ')}`);
+  if (!isEcmwfMirror(mirror)) throw new Error(`config forecast.mirror: ${String(mirror)} is not one of ${MIRRORS.join(', ')}`);
   if (c.polarSource !== undefined && c.polarSource !== 'auto' && c.polarSource !== 'files' && c.polarSource !== 'signalk')
     throw new Error('config polarSource: expected auto, files or signalk');
   const harmonicDir = c.currents?.harmonicDir;

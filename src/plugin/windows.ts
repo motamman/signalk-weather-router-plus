@@ -334,8 +334,10 @@ export class WindowManager {
     this.windows.delete(id);
     try {
       fs.unlinkSync(path.join(this.dir, `${id}.json`));
-    } catch {
-      // not persisted
+    } catch (err) {
+      // Never saved: nothing to remove. Any other failure leaves its file: the window comes back after a restart.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
+        this.deps.log(`departure window ${id}: its file could not be deleted (${(err as Error).message}); it comes back after a restart`);
     }
     return true;
   }
@@ -354,11 +356,8 @@ export class WindowManager {
     const job = this.jobs.get(jobId);
     if (ev.event === 'done' && job) {
       d.status = 'done';
-      try {
-        d.metrics = departureMetrics(job);
-      } catch (err) {
-        d.error = (err as Error).message;
-      }
+      // A done job always carries its summary (JobManager.onDone sets it first): departureMetrics cannot throw.
+      d.metrics = departureMetrics(job);
     } else {
       d.status = ev.data.status === 'cancelled' ? 'cancelled' : 'failed';
       d.error = String(ev.data.message ?? job?.error ?? 'failed');
@@ -416,10 +415,10 @@ export class WindowManager {
   }
 
   /**
-   * Save the departure window's file. The file is how the departure window outlives a restart; the departure window itself runs from memory. A save that
-   * fails (a full or read-only disk) is the departure window's to carry, not its caller's: `save_error` says why its file is behind
-   * (the API shows it), the failure is reported, and the next change saves it again, clearing it. It never throws into
-   * a job event, a request or the start-up.
+   * Save the departure window's file, how it outlives a restart (it runs from memory). A save that fails (a full
+   * or read-only disk) is the window's to carry, not its caller's: `save_error` says why its file is behind (the API
+   * shows it), the failure is reported, and the next change saves it again, clearing it. It never throws into a job
+   * event, a request or the start-up.
    */
   private persist(w: DepartureWindow): void {
     const file = path.join(this.dir, `${w.id}.json`);
@@ -452,17 +451,22 @@ export class WindowManager {
     let files: string[] = [];
     try {
       files = fs.readdirSync(this.dir).filter(f => f.endsWith('.json'));
-    } catch {
-      /* none */
+    } catch (err) {
+      // The folder was made at start (constructor): one that cannot be read is reported, and nothing is restored.
+      this.deps.log(`departure windows: ${this.dir} cannot be read (${(err as Error).message}); none restored`);
     }
     for (const f of files) {
       let w: DepartureWindow;
       try {
         w = JSON.parse(fs.readFileSync(path.join(this.dir, f), 'utf8')) as DepartureWindow;
-      } catch {
-        continue; // ignore a corrupt file
+      } catch (err) {
+        this.deps.log(`departure window file ${f} cannot be read (${(err as Error).message}); left as it is, not restored`);
+        continue;
       }
-      if (!w || !w.id || !Array.isArray(w.departures)) continue;
+      if (!w || !w.id || !Array.isArray(w.departures)) {
+        this.deps.log(`departure window file ${f} does not hold a departure window; left as it is, not restored`);
+        continue;
+      }
       this.windows.set(w.id, w);
       w.departures.forEach((d, k) => {
         if (!d.job_id) return;

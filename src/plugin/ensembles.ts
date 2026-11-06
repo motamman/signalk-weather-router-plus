@@ -218,7 +218,8 @@ export class EnsembleSetManager {
     const job = id ? this.jobs.full(id) : undefined;
     if (!id || !job) return null;
     if (job.status !== 'done') return { job_id: id, status: job.status };
-    // A done job always carries its summary (JobManager.onDone sets it before the job is saved): departureMetrics cannot throw here.
+    // A done job always carries its summary (JobManager.onDone sets it before the job is saved): departureMetrics
+    // cannot throw here.
     return { job_id: id, status: job.status, metrics: departureMetrics(job) };
   }
 
@@ -256,8 +257,10 @@ export class EnsembleSetManager {
     this.sets.delete(id);
     try {
       fs.unlinkSync(path.join(this.dir, `${id}.json`));
-    } catch {
-      // not persisted
+    } catch (err) {
+      // Never saved: nothing to remove. Any other failure leaves its file: the set comes back after a restart.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
+        this.deps.log(`ensemble set ${id}: its file could not be deleted (${(err as Error).message}); it comes back after a restart`);
     }
     return true;
   }
@@ -280,11 +283,8 @@ export class EnsembleSetManager {
     const job = this.jobs.get(jobId);
     if (ev.event === 'done' && job) {
       m.status = 'done';
-      try {
-        m.metrics = departureMetrics(job);
-      } catch (err) {
-        m.error = (err as Error).message;
-      }
+      // A done job always carries its summary (JobManager.onDone sets it first): departureMetrics cannot throw.
+      m.metrics = departureMetrics(job);
     } else {
       m.status = ev.data.status === 'cancelled' ? 'cancelled' : 'failed';
       m.error = String(ev.data.message ?? job?.error ?? 'failed');
@@ -334,10 +334,10 @@ export class EnsembleSetManager {
   }
 
   /**
-   * Save the ensemble set's file. The file is how the ensemble set outlives a restart; the ensemble set itself runs from memory. A save that
-   * fails (a full or read-only disk) is the ensemble set's to carry, not its caller's: `save_error` says why its file is behind
-   * (the API shows it), the failure is reported, and the next change saves it again, clearing it. It never throws into
-   * a job event, a request or the start-up.
+   * Save the ensemble set's file, how it outlives a restart (it runs from memory). A save that fails (a full or
+   * read-only disk) is the ensemble set's to carry, not its caller's: `save_error` says why its file is behind (the API
+   * shows it), the failure is reported, and the next change saves it again, clearing it. It never throws into a job
+   * event, a request or the start-up.
    */
   private persist(s: EnsembleSet): void {
     const file = path.join(this.dir, `${s.id}.json`);
@@ -370,17 +370,22 @@ export class EnsembleSetManager {
     let files: string[] = [];
     try {
       files = fs.readdirSync(this.dir).filter(f => f.endsWith('.json'));
-    } catch {
-      /* none */
+    } catch (err) {
+      // The folder was made at start (constructor): one that cannot be read is reported, and nothing is restored.
+      this.deps.log(`ensemble sets: ${this.dir} cannot be read (${(err as Error).message}); none restored`);
     }
     for (const f of files) {
       let s: EnsembleSet;
       try {
         s = JSON.parse(fs.readFileSync(path.join(this.dir, f), 'utf8')) as EnsembleSet;
-      } catch {
-        continue; // ignore a corrupt file
+      } catch (err) {
+        this.deps.log(`ensemble set file ${f} cannot be read (${(err as Error).message}); left as it is, not restored`);
+        continue;
       }
-      if (!s || !s.id || !Array.isArray(s.members)) continue;
+      if (!s || !s.id || !Array.isArray(s.members)) {
+        this.deps.log(`ensemble set file ${f} does not hold an ensemble set; left as it is, not restored`);
+        continue;
+      }
       this.sets.set(s.id, s);
       s.members.forEach((m, k) => {
         if (!m.job_id) return;

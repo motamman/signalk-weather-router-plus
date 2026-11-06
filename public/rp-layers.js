@@ -2172,14 +2172,17 @@ function _seasGlyphKey() {
 }
 // ── The route's row: what of a route is on the map now, each item drawn as the map draws it ──
 let _ensLegendInfo = null;   // rp-plan.js: () => what of an ensemble set is drawn ({ main, members, open, corridor })
-let _routeLegendTimer = null;
-/** Rebuild the legends soon: route sources change many times a second while a route computes. */
+let _routeLegendFrame = 0;
+/**
+ * Rebuild the legends at the next frame, once however many times the route sources changed since (many times a second
+ * while a route computes).
+ */
 function _routeLegendSoon() {
-  if (_routeLegendTimer) return;
-  _routeLegendTimer = setTimeout(() => {
-    _routeLegendTimer = null;
+  if (_routeLegendFrame) return;
+  _routeLegendFrame = requestAnimationFrame(() => {
+    _routeLegendFrame = 0;
     updateLegends();
-  }, 250);
+  });
 }
 /** rp-plan.js: the ensemble set's layer source, and what of the set is drawn; the legend follows the source. */
 export function watchEnsembleLegend(source, info) {

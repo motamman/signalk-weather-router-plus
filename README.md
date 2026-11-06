@@ -168,8 +168,12 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   message is checked to be the member it is filed as (GRIB2 product
   template 4.1). A cycle is used only once every member chosen is on
   disk; until then the one before stays. The download holds off while
-  offline or held, as the forecast's does, and checks the free disk
-  first.
+  offline or held, as the forecast's does. Before fetching, it reads
+  every step's index (the last step's first, so a cycle not finished
+  yet costs one index) and checks the free disk against the size of
+  every message still to fetch plus the members' decoded runs, keeping
+  the forecast's reserve free; when that does not fit, the cycle is not
+  fetched and the status says how much is needed and free.
 
   A route can then be **routed on each member**: with *Route each
   ensemble member too* ticked (Route → Plan, above Find Route, with the
@@ -2074,8 +2078,8 @@ the SSE endpoint replays.
 | POST | `/api/windows/{id}/cancel` | readwrite | cancel the departures not computed yet |
 | DELETE | `/api/windows/{id}` | readwrite | delete a finished window and its route jobs |
 | POST | `/api/ensemble-sets` | readwrite | ensemble set `{route, model, members}`: the route on each member on disk, one route job each |
-| GET | `/api/ensemble-sets` | readonly | list ensemble sets |
-| GET | `/api/ensemble-sets/{id}` | readonly | a set's members, their status, route job and metrics |
+| GET | `/api/ensemble-sets` | readonly | list ensemble sets; `limit` as for windows (20, a whole number from 1, at most 12) |
+| GET | `/api/ensemble-sets/{id}` | readonly | a set's members, their status, route job and metrics; `save_error` as for windows |
 | POST | `/api/ensemble-sets/{id}/cancel` | readwrite | cancel the members not computed yet |
 | DELETE | `/api/ensemble-sets/{id}` | readwrite | delete a finished set and its route jobs |
 
@@ -2132,7 +2136,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `no_currents` | boolean | | false | ignore every current source |
 | `wind_model` | string | | `auto` | `auto`: regional wind from signalk-grib-downloader where finer and covering, ECMWF elsewhere; `ecmwf`: ECMWF only |
 | `avoid_areas` | boolean | | true | treat the areas marked on Signal K notes (`properties.avoid.radius_m` around the note's position) as land |
-| `forecast_member` | `{model, member, cycle?}` | | none | route on one ensemble member's forecast instead of the main one (no regional wind): `model` `"ifs-ens"` or `"aifs-ens"` (downloaded, else `400`), `member` 0..50 on disk (0 = the control), `cycle` (yyyymmddHH) refused when it is no longer the ensemble's cycle in use. Ensemble sets send it per member; `summary.forecast_member` names it |
+| `forecast_member` | `{model, member, cycle?}` | | none | route on one ensemble member's forecast instead of the main one (no regional wind): `model` `"ifs-ens"` or `"aifs-ens"` (downloaded, else `400`), `member` 0..50 on disk (0 = the control), `cycle` (yyyymmddHH) refused when it is no longer the ensemble's cycle in use. Refused (`400`) with `no_forecast`, and an ensemble set refuses a route with `no_forecast`. Ensemble sets send it per member; `summary.forecast_member` names it |
 | `vessel` | object | | the vessel settings | per-route overrides; absent keys use the settings ([Configuration](#configuration)) |
 | `vessel.name` | string | | | ignored (accepted so older clients still validate); the vessel name is Signal K's `vessels.self.name` |
 | `vessel.motor_speed_ms` | number | m/s | setting (3.087) | 0.01..50 |
@@ -2194,7 +2198,7 @@ List jobs, newest first (by creation time). Access: readonly.
 
 | Query | Type | Default | Limits |
 |---|---|---|---|
-| `limit` | integer | 50 | clamped to 1..500 |
+| `limit` | integer | 50 | a whole number from 1, else `400`; above 500, 500 are listed |
 
 `200`: an array of job status objects (next section).
 
@@ -2531,6 +2535,7 @@ Access: readonly. `200`:
 | `created_at`, `finished_at`, `error` | string | |
 | `request` | object | as posted, with `step_s` |
 | `progress` | string or null | the last progress line of the departure computing |
+| `save_error` | string | only while the window's file could not be saved (a full or read-only disk): why. The window runs on from memory but would not survive a restart as it is now; the failure is in the Signal K log, and the next change saves it again and clears this |
 | `departures` | array | one per departure (below) |
 
 | Departure field | Unit | Notes |
@@ -2550,7 +2555,11 @@ Access: readonly. `200`:
 | `metrics.warnings` | count | the route's warnings |
 
 `GET /api/windows?limit=` lists the windows newest first in the same
-form. `POST /api/windows/{id}/cancel` → `202 {id, status}`: the
+form: `limit` 20 by default, a whole number from 1 (else `400`), at most
+12 listed (the 10 kept and 2 computing). A window file that cannot be
+read at start-up, or that does not hold a window, is left as it is,
+not restored, and named in the Signal K log; so is one whose delete
+fails (it comes back after a restart). `POST /api/windows/{id}/cancel` → `202 {id, status}`: the
 departures not started are cancelled, and the one computing is asked to
 stop; it stops when the route worker next checks, a moment later.
 `DELETE /api/windows/{id}` → `204`, or `409` while it is running, and

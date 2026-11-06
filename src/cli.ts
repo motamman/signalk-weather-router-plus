@@ -29,7 +29,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { NM_M, KTS_TO_MS, HOUR_S } from './geo/units';
 import { loadForecastForBBox, resolveCycle } from './data/loader';
-import { EcmwfClient, ECMWF_MIRRORS } from './data/ecmwf';
+import { EcmwfClient, ECMWF_MIRRORS, isEcmwfMirror } from './data/ecmwf';
 import { bboxFromLonLat } from './geo/geodesy';
 import { LandMask } from './geo/landmask';
 import { CoastTiles } from './geo/coasttiles';
@@ -155,11 +155,13 @@ async function main(): Promise<void> {
 
   const polar = polarPath ? PolarDiagram.load(polarPath) : null;
   const vessel = makeVessel({ motorSpeedMs: motorKts * KTS_TO_MS });
+  // --mirror: a mirror's name (ECMWF_MIRRORS), or a base URL of its own.
+  const mirror = arg('mirror');
   const client = flag('no-forecast')
     ? null
     : new EcmwfClient({
         cacheDir,
-        baseUrl: arg('mirror') ? (ECMWF_MIRRORS[arg('mirror')!] ?? arg('mirror')) : undefined,
+        baseUrl: mirror ? (isEcmwfMirror(mirror) ? ECMWF_MIRRORS[mirror] : mirror) : undefined,
         log: m => log(`  ecmwf: ${m}`),
       });
   const cycle = client ? (await resolveCycle(client, hours * HOUR_S, { log: m => log(`  forecast: ${m}`) })).cycle : null;

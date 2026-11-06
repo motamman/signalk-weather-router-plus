@@ -60,7 +60,13 @@ import * as zlib from 'node:zlib';
 import type { IRouter, Request, Response } from 'express';
 import { type JobManager, type Job } from './jobs';
 import { validateWindowRequest, WINDOW_LIMITS, type WindowManager, type WindowRequest } from './windows';
-import { ENSEMBLE_SET_LIMITS, validateEnsembleSetRequest, type EnsembleSetManager, type EnsembleSetRequest } from './ensembles';
+import {
+  ENSEMBLE_SET_LIMITS,
+  validateEnsembleSetRequest,
+  type EnsembleSet,
+  type EnsembleSetManager,
+  type EnsembleSetRequest,
+} from './ensembles';
 import type { QueryArgs, QueryKind, RouteRequest, TrackConditions } from './protocol';
 import { meteogramRows, METEOGRAM_STEP_S, routePoints, sampleStep, trackSamples, type Meteogram } from './meteogram';
 import { openApiDocument } from './openapi';
@@ -137,7 +143,7 @@ export interface ApiDeps {
   /** True when Signal K runs with security off (no users, no application data). */
   securityOff: () => boolean;
   /** The ensembles a route can run on now: each downloaded model and its member numbers on disk (empty when off). */
-  ensembles?: () => { model: string; name: string; members: number[] }[];
+  ensembles: () => { model: string; name: string; members: number[] }[];
   /** Validate, persist and apply a partial settings update. */
   updateSettings: (partial: unknown) => {
     values: AppSettings;
@@ -764,7 +770,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     if (badPolar(res, body.vessel?.polar, 'vessel.polar')) return;
     if (body.forecast_member) {
       const fm = body.forecast_member;
-      const have = (deps.ensembles?.() ?? []).find(e => e.model === fm.model);
+      const have = deps.ensembles().find(e => e.model === fm.model);
       if (!have) {
         json(res, 400, { error: `forecast_member: ${fm.model} is not downloaded (plugin config: Ensemble downloads)` });
         return;
@@ -783,10 +789,26 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     json(res, 202, { id: job.id, status: job.status, links: jobs.links(job.id) });
   });
 
+  /**
+   * A list's `limit` query: absent, the list's default; a whole number from 1, held to `max` (a list holds no more);
+   * anything else is refused (400) rather than read as the default. Null when refused (the answer is sent).
+   */
+  const listLimit = (req: Request, res: Response, def: number, max: number): number | null => {
+    const raw = req.query.limit;
+    if (raw === undefined) return def;
+    const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+    if (!Number.isInteger(n) || n < 1) {
+      json(res, 400, { error: `limit must be a whole number from 1 (at most ${max} are listed)` });
+      return null;
+    }
+    return Math.min(n, max);
+  };
+
   ro.get('/api/routes', (req: Request, res: Response) => {
     const jobs = jobsOr503(res);
     if (!jobs) return;
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 50) || 50));
+    const limit = listLimit(req, res, 50, 500);
+    if (limit === null) return;
     json(
       res,
       200,
@@ -1003,7 +1025,8 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   ro.get('/api/windows', (req: Request, res: Response) => {
     const windows = windowsOr503(res);
     if (!windows) return;
-    const limit = Math.min(WINDOW_LIMITS.keep + WINDOW_LIMITS.maxRunning, Math.max(1, Number(req.query.limit ?? 20) || 20));
+    const limit = listLimit(req, res, 20, WINDOW_LIMITS.keep + WINDOW_LIMITS.maxRunning);
+    if (limit === null) return;
     json(
       res,
       200,
@@ -1076,7 +1099,8 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   ro.get('/api/ensemble-sets', (req: Request, res: Response) => {
     const sets = setsOr503(res);
     if (!sets) return;
-    const limit = Math.min(ENSEMBLE_SET_LIMITS.keep + ENSEMBLE_SET_LIMITS.maxRunning, Math.max(1, Number(req.query.limit ?? 20) || 20));
+    const limit = listLimit(req, res, 20, ENSEMBLE_SET_LIMITS.keep + ENSEMBLE_SET_LIMITS.maxRunning);
+    if (limit === null) return;
     json(
       res,
       200,
@@ -1085,32 +1109,32 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   });
 
   /** Run `fn` on set `:id`: 503 before the plugin has started, 404 for a set not found. */
-  const withSet = (req: Request, res: Response, fn: (sets: EnsembleSetManager, id: string) => void): void => {
+  const withSet = (req: Request, res: Response, fn: (sets: EnsembleSetManager, s: EnsembleSet) => void): void => {
     const sets = setsOr503(res);
     if (!sets) return;
-    const id = String(req.params.id);
-    if (!sets.get(id)) {
+    const s = sets.get(String(req.params.id));
+    if (!s) {
       json(res, 404, { error: 'ensemble set not found' });
       return;
     }
-    fn(sets, id);
+    fn(sets, s);
   };
 
   ro.get('/api/ensemble-sets/:id', (req: Request, res: Response) => {
-    withSet(req, res, (sets, id) => json(res, 200, sets.toPublic(sets.get(id)!)));
+    withSet(req, res, (sets, s) => json(res, 200, sets.toPublic(s)));
   });
 
   rw.post('/api/ensemble-sets/:id/cancel', (req: Request, res: Response) => {
-    withSet(req, res, (sets, id) => {
-      sets.cancel(id);
-      json(res, 202, { id, status: sets.get(id)!.status });
+    withSet(req, res, (sets, s) => {
+      sets.cancel(s.id);
+      json(res, 202, { id: s.id, status: s.status });
     });
   });
 
   rw.delete('/api/ensemble-sets/:id', (req: Request, res: Response) => {
-    withSet(req, res, (sets, id) => {
-      if (!sets.delete(id)) {
-        const running = sets.get(id)!.status === 'running';
+    withSet(req, res, (sets, s) => {
+      if (!sets.delete(s.id)) {
+        const running = s.status === 'running';
         json(res, 409, {
           error: running ? 'cancel the set before deleting it' : 'a cancelled member is still stopping; try again in a moment',
         });

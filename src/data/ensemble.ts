@@ -1,6 +1,6 @@
 /**
- * ECMWF ensemble members (ecmwf.ts ENSEMBLES) downloaded and decoded to disk, for checking a route against each
- * member's weather (engine/ensemble.ts).
+ * ECMWF ensemble members (ecmwf.ts ENSEMBLES) downloaded and decoded to disk, so a route can be computed on each
+ * member's forecast (plugin/ensembles.ts sets, worker/route.ts memberRun).
  *
  * Each member is a decoded run of its own, in the main forecast's format (decoded.ts), so every reader, completeness
  * check and prune works on it unchanged:
@@ -10,17 +10,18 @@
  *
  * mNN is the member: m00 the control (where a model publishes one), m01–m50 the perturbed members.
  *
- * A step's file holds every member, so the download goes step by step (each index read once, every chosen member's
- * fields fetched from it into the cache), and the decode member by member from the cache alone. An interrupted
- * download resumes from the cache; a member that fails to decode is left out and reported, the others go on. Only the
- * routing fields are kept (ENSEMBLE_PARAMS), at the main forecast's horizon.
+ * A step's file holds every member: each index is read once (the last step's first, so a cycle not finished yet costs
+ * little), every chosen member's fields are fetched from the step files into the cache, and the decode goes member by
+ * member from the cache alone. An interrupted download resumes from the cache; a member that fails to decode is left
+ * out and reported, the others go on. Only the routing fields are kept (ENSEMBLE_PARAMS), at the main forecast's
+ * horizon. The data worker records the cycle in use from what is on disk (recordEnsembleCycle).
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseGrib2Message, type DecodeScratch } from '../grib/grib2';
 import { HOUR_S } from '../geo/units';
-import { cycleName, DecodedRunWriter, dirBytes, openDecodedRun, pruneDecodedRuns } from './decoded';
+import { cycleName, DecodedRunWriter, openDecodedRun, pruneDecodedRuns } from './decoded';
 import {
   type Cycle,
   cycleFor,
@@ -156,14 +157,36 @@ export interface EnsembleCurrent {
 
 const CURRENT_FILE = 'current.json';
 
-/** A model's ensemble in use (current.json in its folder), or null: none yet, unreadable, or not that model's. */
-export function readEnsembleCurrent(cacheRoot: string, model: EnsembleModelId): EnsembleCurrent | null {
+/**
+ * A model's record of its ensemble in use (current.json in its folder): the record, or null with no problem when there
+ * is none yet, or null with the problem when the file is there but cannot be read or is not that model's record (the
+ * data worker reports it each round until it records the cycle again: worker/forecast.ts refreshEnsembles).
+ */
+export function ensembleCurrentFile(
+  cacheRoot: string,
+  model: EnsembleModelId
+): { current: EnsembleCurrent | null; problem: string | null } {
+  let text: string;
   try {
-    const c = JSON.parse(fs.readFileSync(path.join(cacheRoot, ENSEMBLE_DECODED_DIR, model, CURRENT_FILE), 'utf8')) as EnsembleCurrent;
-    return c.model === model && Array.isArray(c.members) ? c : null;
-  } catch {
-    return null;
+    text = fs.readFileSync(path.join(cacheRoot, ENSEMBLE_DECODED_DIR, model, CURRENT_FILE), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { current: null, problem: null };
+    return { current: null, problem: `${CURRENT_FILE} cannot be read: ${(err as Error).message}` };
   }
+  let c: EnsembleCurrent;
+  try {
+    c = JSON.parse(text) as EnsembleCurrent;
+  } catch (err) {
+    return { current: null, problem: `${CURRENT_FILE} is not JSON: ${(err as Error).message}` };
+  }
+  if (!c || c.model !== model || typeof c.cycle !== 'string' || !Array.isArray(c.members))
+    return { current: null, problem: `${CURRENT_FILE} is not a record of ${model}'s cycle in use` };
+  return { current: c, problem: null };
+}
+
+/** A model's ensemble in use, or null when there is none to use (no record, or one that cannot be read: ensembleCurrentFile). */
+export function readEnsembleCurrent(cacheRoot: string, model: EnsembleModelId): EnsembleCurrent | null {
+  return ensembleCurrentFile(cacheRoot, model).current;
 }
 
 /**
@@ -208,14 +231,14 @@ export interface EnsembleCycleOptions {
   models: EnsembleModelId[];
   /** Members 1 to this of each model (and the control where there is one). */
   members: number;
-  log?: (message: string) => void;
+  log: (message: string) => void;
   /** After each step downloaded or member decoded: done of total for that model, for the status. */
   onProgress?: (done: number, total: number, model: EnsembleModelId) => void;
   /**
    * Before a model's download: given the bytes its pass will write (its GRIB messages not cached yet, by the indexes'
    * own lengths, and the decoded runs of its members to decode), why the disk cannot take it, or null.
    */
-  diskCheck?: (bytes: number) => string | null;
+  diskCheck: (bytes: number) => string | null;
 }
 
 /**
@@ -224,7 +247,7 @@ export interface EnsembleCycleOptions {
  * reported and the others go on.
  */
 export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOptions): Promise<EnsembleModelResult[]> {
-  const log = o.log ?? (() => undefined);
+  const log = o.log;
   const name = cycleName(o.cycle.time);
   const horizonHours = o.horizonS / HOUR_S;
   const out: EnsembleModelResult[] = [];
@@ -281,9 +304,9 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
  * Every field of `members` for the ladder into the cache. The last step's indexes are read first, then every step's: a
  * step the server does not have is not published yet (ensembleSteps), and the model's pass stops with an error before
  * anything is fetched (what is cached stays for the next round; nothing is decoded short). A cycle not finished yet
- * costs one index request per stream and file each round, not the whole ladder's. The indexes give the exact length of every message
- * still to fetch: with the members' decoded runs, that is what the disk check (o.diskCheck) is asked about. Then the
- * messages are fetched step by step.
+ * costs one index request per stream and file each round, not the whole ladder's. The indexes give the exact length
+ * of every message still to fetch: with the members' decoded runs, that is what the disk check (o.diskCheck) is asked
+ * about. Then the messages are fetched step by step.
  */
 async function downloadModel(
   client: EcmwfClient,
@@ -348,9 +371,9 @@ async function downloadModel(
       }
     }
   }
-  // What the pass writes: the messages to fetch, and each member's decoded run (one global float32 field per field and step).
+  // What the pass writes: the messages to fetch, and each member's decoded run (a global float32 per field and step).
   const decoded = members.length * ENSEMBLE_FIELDS.length * ladder.length * GLOBAL_CELLS * 4;
-  const short = o.diskCheck ? o.diskCheck(toFetch + decoded) : null;
+  const short = o.diskCheck(toFetch + decoded);
   if (short) throw new Error(`${model.name} ${name}: not downloaded: ${short}`);
   let downloaded = 0;
   let bytes = 0;
@@ -433,12 +456,13 @@ export function pruneEnsembles(
     fs.rmSync(p, { recursive: true, force: true });
     removed.push(label);
   };
-  /** A folder's entries; none when it is missing. */
+  /** A folder's entries; none when it is missing (any other failure is the caller's to report). */
   const list = (p: string): string[] => {
     try {
       return fs.readdirSync(p);
-    } catch {
-      return [];
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
     }
   };
   const decodedRoot = path.join(cacheRoot, ENSEMBLE_DECODED_DIR);
@@ -466,9 +490,4 @@ export function pruneEnsembles(
     for (const c of list(path.join(gribRoot, model))) if (c !== k.pending) rm(path.join(gribRoot, model, c), `${model} GRIB ${c}`);
   }
   return removed;
-}
-
-/** Bytes of the ensembles on disk (decoded runs and GRIB cache). */
-export function ensembleDiskBytes(cacheRoot: string): number {
-  return dirBytes(path.join(cacheRoot, ENSEMBLE_DECODED_DIR)) + dirBytes(path.join(cacheRoot, ENSEMBLE_GRIB_DIR));
 }

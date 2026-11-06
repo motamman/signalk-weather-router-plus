@@ -209,7 +209,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
       st.config = msg.config;
       st.cacheRoot = msg.cacheDir;
       st.client = new EcmwfClient({
-        baseUrl: ECMWF_MIRRORS[st.config.forecast.mirror] ?? ECMWF_MIRRORS.ecmwf,
+        baseUrl: ECMWF_MIRRORS[st.config.forecast.mirror],
         cacheDir: path.join(msg.cacheDir, 'ecmwf'),
         log: m => st.log('debug', `ecmwf: ${m}`),
       });

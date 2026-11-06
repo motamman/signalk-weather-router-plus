@@ -194,3 +194,39 @@ test('a set found running at start-up that cannot be saved still loads, failed, 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a set file that cannot be read at start-up is reported and left as it is; a set whose file cannot be deleted says so', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
+  const store = path.join(dir, 'ensemble-sets');
+  try {
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 'broken.json'), '{"id": "broken", "memb');
+    fs.writeFileSync(path.join(store, 'other.json'), JSON.stringify({ hello: 'world' }));
+    const logged: string[] = [];
+    const jobs = new JobManager(dir, 50, '/p');
+    const sets = new EnsembleSetManager(
+      jobs,
+      dir,
+      { cancelRunning: () => undefined, onDisk: () => ({ cycle: CYCLE, members: [0, 1, 2, 3, 4, 5] }), log: m => logged.push(m) },
+      '/p'
+    );
+    assert.ok(logged.some(m => /^ensemble set file broken\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
+    assert.ok(logged.includes('ensemble set file other.json does not hold an ensemble set; left as it is, not restored'));
+    assert.ok(fs.existsSync(path.join(store, 'broken.json')), 'left as it is');
+    // A finished set whose folder became read-only: deleted from the list, its file stays, and that is said.
+    const s = sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 });
+    sets.cancel(s.id);
+    // The member computing stops when its route worker answers (here at once).
+    const stopping = jobs.runningId;
+    if (stopping) jobs.onError(stopping, 'cancelled', true);
+    fs.chmodSync(store, 0o500);
+    assert.equal(sets.delete(s.id), true);
+    assert.equal(sets.get(s.id), undefined);
+    assert.ok(
+      logged.some(m => m.startsWith(`ensemble set ${s.id}: its file could not be deleted (`) && m.endsWith('it comes back after a restart'))
+    );
+  } finally {
+    fs.chmodSync(store, 0o700);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -220,3 +220,23 @@ test("after a pass, the members it completed are recorded by the worker from the
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a record of the cycle in use that cannot be read is reported each round, and written again once the cycle is complete', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ensref-'));
+  try {
+    for (const n of [1, 2, 3, 4, 5]) decodedMember(root, n);
+    fs.writeFileSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json'), 'not json');
+    const logged: string[] = [];
+    const st = state(root, ['ifs-ens']);
+    (st as unknown as { log: (level: string, m: string) => void }).log = (level, m) => logged.push(`${level}: ${m}`);
+    await refreshEnsembles(st, null, () => null, undefined, neverRun);
+    assert.ok(
+      logged.some(m =>
+        /^error: ensembles: ECMWF IFS ENS: current\.json is not JSON: .*; written again once the cycle's members are complete$/.test(m)
+      )
+    );
+    assert.equal(readEnsembleCurrent(root, 'ifs-ens')?.cycle, CYCLE_NAME, 'complete: written again this round');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

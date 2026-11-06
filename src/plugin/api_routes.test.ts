@@ -276,3 +276,18 @@ test('POST routes and departure windows accept managed tokens before dispatch wi
   assert.equal(submitted.length, 4, 'invalid local tokens never queue');
   assert.equal(created.length, 4);
 });
+
+test('a list limit that is not a whole number from 1 is refused, not read as the default; above the most a list holds it is held there', async () => {
+  const asked: number[] = [];
+  const jobs = { list: (n: number) => (asked.push(n), []), toPublic: (j: unknown) => j };
+  const call = api(jobs, os.tmpdir());
+  for (const limit of ['abc', '0', '-3', '2.5', '', ' ']) {
+    const r = await call('GET /api/routes', { query: { limit } });
+    assert.equal(r.status, 400, JSON.stringify(limit));
+    assert.match(String(r.body.error), /^limit must be a whole number from 1 \(at most 500 are listed\)/);
+  }
+  assert.equal((await call('GET /api/routes', {})).status, 200, 'none: the default');
+  assert.equal((await call('GET /api/routes', { query: { limit: '9999' } })).status, 200);
+  assert.equal((await call('GET /api/routes', { query: { limit: '7' } })).status, 200);
+  assert.deepEqual(asked, [50, 500, 7]);
+});

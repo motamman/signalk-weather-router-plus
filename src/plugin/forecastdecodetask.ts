@@ -14,7 +14,7 @@
  */
 
 import * as path from 'node:path';
-import { cycleFor, ECMWF_MIRRORS, EcmwfClient, type EnsembleModelId } from '../data/ecmwf';
+import { cycleFor, type EcmwfMirror, ECMWF_MIRRORS, EcmwfClient, type EnsembleModelId } from '../data/ecmwf';
 import { cycleName, DECODED_DIR, DecodedRunWriter } from '../data/decoded';
 import { runEnsembleCycle, type EnsembleModelResult } from '../data/ensemble';
 import { availableDisk, DISK_RESERVE_BYTES } from './memguard';
@@ -24,7 +24,7 @@ export interface ForecastDecodeTask {
   task: 'forecast-decode';
   /** Plugin data directory: the GRIB cache is `ecmwf/`, the decoded runs `forecast/` below it. */
   cacheRoot: string;
-  mirror: string;
+  mirror: EcmwfMirror;
   /** Cycle time, ISO. */
   cycle: string;
   horizonS: number;
@@ -47,7 +47,7 @@ export type ForecastDecodeEvent =
 export interface EnsembleDecodeTask {
   task: 'ensemble-decode';
   cacheRoot: string;
-  mirror: string;
+  mirror: EcmwfMirror;
   /** Cycle time, ISO: the main forecast's run in use. */
   cycle: string;
   horizonS: number;
@@ -56,9 +56,9 @@ export interface EnsembleDecodeTask {
 }
 
 /** The GRIB client a decode task downloads with: the configured mirror, the GRIB cache under the data directory, its log as events. */
-function taskClient(cacheRoot: string, mirror: string, emit: (e: ForecastDecodeEvent) => void): EcmwfClient {
+function taskClient(cacheRoot: string, mirror: EcmwfMirror, emit: (e: ForecastDecodeEvent) => void): EcmwfClient {
   return new EcmwfClient({
-    baseUrl: ECMWF_MIRRORS[mirror] ?? ECMWF_MIRRORS.ecmwf,
+    baseUrl: ECMWF_MIRRORS[mirror],
     cacheDir: path.join(cacheRoot, 'ecmwf'),
     log: message => emit({ event: 'decode-log', message: `ecmwf: ${message}` }),
   });

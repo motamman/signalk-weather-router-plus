@@ -13,6 +13,7 @@ import { availableSteps, type Cycle, cycleFor, EcmwfClient, ENSEMBLES, type Ense
 import {
   ENSEMBLE_DECODED_DIR,
   ENSEMBLE_GRIB_DIR,
+  ensembleCurrentFile,
   ensembleMembers,
   memberComplete,
   pruneEnsembles,
@@ -399,6 +400,12 @@ export async function refreshEnsembles(
     return;
   }
   measureEnsembles(st, e.models);
+  // A record of the cycle in use that cannot be read counts as none (routes and the status see no ensemble, the prune
+  // keeps no cycle for it): reported each round until the cycle's members are complete and it is written again.
+  for (const m of e.models) {
+    const { problem } = ensembleCurrentFile(st.cacheRoot, m);
+    if (problem) st.log('error', `ensembles: ${ENSEMBLES[m].name}: ${problem}; written again once the cycle's members are complete`);
+  }
   if (!st.run) return;
   // The forecast's cycle as this round found it (a new run may be adopted while the child works).
   const cycleTime = st.run.cycleTime;
