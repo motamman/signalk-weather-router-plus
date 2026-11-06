@@ -19,8 +19,8 @@ import { AIR_DRAFT_M_RANGE, DRAUGHT_M_RANGE, OVERHEAD_M_RANGE, UKC_M_RANGE } fro
 import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS } from '../data/ecmwf';
 
 /**
- * The fewest and most members a route can be checked against: the most is the most members downloaded plus a control
- * (AIFS ENS has one, IFS ENS none). The members on disk bound it further (api.ts).
+ * The fewest and most members an ensemble set routes (ensembles.ts): the most is the most members downloaded plus a
+ * control (AIFS ENS has one, IFS ENS none). The members on disk bound it further (api.ts).
  */
 export const ENSEMBLE_MEMBERS_RANGE = [
   ENSEMBLE_MEMBER_CHOICES[0],
@@ -247,19 +247,25 @@ export const RouteRequestSchema = Type.Object({
   vessel: Type.Optional(
     Type.Object(VESSEL_FIELDS, { description: 'Per-route overrides of the vessel settings (SI); absent keys use the settings.' })
   ),
-  ensemble: Type.Optional(
+  forecast_member: Type.Optional(
     Type.Object(
       {
         model: Type.Enum(ENSEMBLE_MODELS, { type: 'string', description: 'The ensemble (downloaded: plugin config Ensemble downloads)' }),
-        members: Type.Integer({
-          minimum: ENSEMBLE_MEMBERS_RANGE[0],
-          maximum: ENSEMBLE_MEMBERS_RANGE[1],
-          description: 'How many of its members on disk (the control first where there is one): at most those downloaded',
+        member: Type.Integer({
+          minimum: 0,
+          maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+          description: 'The member (0 = the control, where the ensemble has one), on disk in its cycle in use',
         }),
+        cycle: Type.Optional(
+          Type.String({
+            pattern: '^[0-9]{10}$',
+            description: 'The ensemble cycle (yyyymmddHH) the member must be of; refused when that is no longer the one in use',
+          })
+        ),
       },
       {
         description:
-          "After the route is found on the main forecast, sail it in each of these members' weather: arrival spread, time over the limits (GET .../ensemble). Absent = no ensemble check.",
+          "Route on this ensemble member's forecast instead of the main one (no regional wind). Ensemble sets (POST /api/ensemble-sets) send one route per member with it. Absent = the main forecast.",
       }
     )
   ),
@@ -341,14 +347,16 @@ export function validateRouteRequest(b: RouteRequest): string | null {
     const e = fieldError(name, v, schema);
     if (e) return e;
   }
-  if (b.ensemble !== undefined) {
-    const e = b.ensemble as unknown as Record<string, unknown> | null;
-    if (!e || typeof e !== 'object') return 'ensemble must be {model, members}';
+  if (b.forecast_member !== undefined) {
+    const e = b.forecast_member as unknown as Record<string, unknown> | null;
+    if (!e || typeof e !== 'object') return 'forecast_member must be {model, member}';
     if (!(ENSEMBLE_MODELS as readonly string[]).includes(e.model as string))
-      return `ensemble.model must be ${ENSEMBLE_MODELS.join(' or ')}`;
-    const n = e.members;
-    if (typeof n !== 'number' || !Number.isInteger(n) || n < ENSEMBLE_MEMBERS_RANGE[0] || n > ENSEMBLE_MEMBERS_RANGE[1])
-      return `ensemble.members must be a whole number ${ENSEMBLE_MEMBERS_RANGE[0]}..${ENSEMBLE_MEMBERS_RANGE[1]}`;
+      return `forecast_member.model must be ${ENSEMBLE_MODELS.join(' or ')}`;
+    const n = e.member;
+    const max = ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > max) return `forecast_member.member must be a whole number 0..${max}`;
+    if (e.cycle !== undefined && (typeof e.cycle !== 'string' || !/^[0-9]{10}$/.test(e.cycle)))
+      return 'forecast_member.cycle must be yyyymmddHH';
   }
   if (b.vessel !== undefined) {
     if (b.vessel === null || typeof b.vessel !== 'object') return 'vessel must be an object';

@@ -29,24 +29,31 @@ test('route request: ranges come from the settings they override, and the OpenAP
     'waypoints',
     ...Object.keys(ROUTE_REQUEST_FIELDS),
     'vessel',
-    'ensemble',
+    'forecast_member',
   ]);
 });
 
-test('route request: an ensemble check names a known ensemble and 5 to 51 members (50 and a control)', () => {
-  assert.equal(validateRouteRequest({ ...ok, ensemble: { model: 'ifs-ens', members: 5 } }), null);
-  assert.equal(validateRouteRequest({ ...ok, ensemble: { model: 'aifs-ens', members: 51 } }), null);
+test('route request: forecast_member names a known ensemble, a member 0..50 and optionally its cycle', () => {
+  assert.equal(validateRouteRequest({ ...ok, forecast_member: { model: 'ifs-ens', member: 1 } }), null);
+  assert.equal(validateRouteRequest({ ...ok, forecast_member: { model: 'aifs-ens', member: 0, cycle: '2026110512' } }), null);
   assert.equal(
-    validateRouteRequest({ ...ok, ensemble: { model: 'gefs', members: 5 } as unknown as RouteRequest['ensemble'] }),
-    'ensemble.model must be ifs-ens or aifs-ens'
+    validateRouteRequest({ ...ok, forecast_member: { model: 'gefs', member: 1 } as unknown as RouteRequest['forecast_member'] }),
+    'forecast_member.model must be ifs-ens or aifs-ens'
   );
-  for (const members of [4, 52, 5.5, '10'])
+  for (const member of [-1, 51, 1.5, '1'])
     assert.equal(
-      validateRouteRequest({ ...ok, ensemble: { model: 'ifs-ens', members } as unknown as RouteRequest['ensemble'] }),
-      'ensemble.members must be a whole number 5..51',
-      String(members)
+      validateRouteRequest({ ...ok, forecast_member: { model: 'ifs-ens', member } as unknown as RouteRequest['forecast_member'] }),
+      'forecast_member.member must be a whole number 0..50',
+      String(member)
     );
-  assert.equal(validateRouteRequest({ ...ok, ensemble: null as unknown as RouteRequest['ensemble'] }), 'ensemble must be {model, members}');
+  assert.equal(
+    validateRouteRequest({ ...ok, forecast_member: { model: 'ifs-ens', member: 1, cycle: '2026-11-05' } }),
+    'forecast_member.cycle must be yyyymmddHH'
+  );
+  assert.equal(
+    validateRouteRequest({ ...ok, forecast_member: null as unknown as RouteRequest['forecast_member'] }),
+    'forecast_member must be {model, member}'
+  );
 });
 
 test('route request: valid bodies pass, each bad field names itself', () => {

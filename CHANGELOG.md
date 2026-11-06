@@ -8,23 +8,21 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Ensembles: check a route against ECMWF IFS ENS and AIFS ENS.**
+- **Ensembles: route each member of ECMWF IFS ENS and AIFS ENS.**
   Optional and off by default (plugin configuration, *Download
   ensembles*: which ensembles, at least one, and 5 to 50 members). Each
   cycle, after the forecast, the routing fields (`10u`, `10v`, `swh`,
   `mwp`, `mwd`) of the chosen members are downloaded to the forecast's
   horizon and decoded to disk, one run per member, each message checked
-  to be its member (GRIB2 template 4.1, now read). A route asked with
-  `ensemble: {model, members}` is found on the main forecast as before,
-  then sailed in each member's weather: per member the arrival, time over
-  the limits, strongest wind and highest waves, or where it could not be
-  sailed; in all the 10/50/90 % arrival and the counts
-  (`summary.ensemble`, `GET /api/routes/{id}/ensemble`, `/api/status`
-  `ensembles`). Webapp: on Route → Plan, above Find Route, the toggle,
-  the ensemble and the members; a line in the result strip and
-  a members table in the Itinerary. Measured on the test box at 72 h:
-  about 70 MB to download and 519 MB on disk per IFS ENS member.
-
+  to be its member (GRIB2 template 4.1, now read). With *Route each
+  ensemble member too* (Route → Plan, with the ensemble and the members),
+  Find Route computes the route on the main forecast and an ensemble set
+  computes the same request as its own route search on each member's
+  forecast (`POST /api/ensemble-sets`; `forecast_member` on a route
+  request). The members' routes show grey on the map, with the arrival
+  spread in the result strip and a members table in the Itinerary.
+  Measured on the test box at 72 h: about 70 MB to download and 519 MB
+  on disk per IFS ENS member.
 - **Polar sets from Polar Management (polar-format 2).** A `polarSet`
   2.0.0 active in Polar Management is routed on its `best` table; a v1
   `polarTable` routes as before. A null cell (no sailing solution) has no

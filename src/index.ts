@@ -36,6 +36,7 @@ import { checkDecodeResources } from './plugin/memguard';
 import { siText } from './plugin/unittext';
 import { JobManager, type Job } from './plugin/jobs';
 import { windowNotification, WindowManager, type DepartureWindow } from './plugin/windows';
+import { EnsembleSetManager } from './plugin/ensembles';
 import { registerApi } from './plugin/api';
 import { NotStartedError } from './plugin/errors';
 import { TileService, TileStore, tileGenerationKeys, tileGroup } from './plugin/tiles';
@@ -146,6 +147,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
   let jobs: JobManager | null = null;
   /** Departure windows (windows.ts): created with the job manager. */
   let windows: WindowManager | null = null;
+  /** Ensemble sets (ensembles.ts): created with the job manager. */
+  let ensembleSets: EnsembleSetManager | null = null;
   /** The decoded run in use (where it is on disk and its index), relayed to the route worker. */
   let forecastRun: ForecastRunInfo | null = null;
   /** Forecast memory the route worker holds (its corridor store while a route runs). */
@@ -1062,7 +1065,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         jobs?.onFrontier(msg.id, { leg: msg.leg, stage: msg.stage, total: msg.total, points: msg.points, best: msg.best });
         return;
       case 'done': {
-        jobs?.onDone(msg.id, msg.geojson, msg.skRoute, msg.summary, msg.skeleton, msg.fronts ?? null, msg.ensemble);
+        jobs?.onDone(msg.id, msg.geojson, msg.skRoute, msg.summary, msg.skeleton, msg.fronts ?? null);
         if (msg.summary.corridor_fallback) {
           corridorFallbacks++;
           log(`route ${msg.id}: corridor search failed, coarse-skeleton fallback used (${corridorFallbacks} since load)`);
@@ -1350,6 +1353,18 @@ export = function plugin(app: SkApp): SignalKPlugin {
       },
       BASE_PATH
     );
+    ensembleSets = new EnsembleSetManager(
+      jobs,
+      dataDir,
+      {
+        cancelRunning: cancelRunningJob,
+        onDisk: model => {
+          const e = (dataStatus?.ensembles ?? []).find(x => x.model === model);
+          return e && e.cycle && e.members.length ? { cycle: e.cycle, members: [...e.members] } : null;
+        },
+      },
+      BASE_PATH
+    );
     for (const role of ['data', 'route'] as MainRole[]) {
       pool.start(role);
       pool.post(role, { type: 'init', role, config, cacheDir: dataDir });
@@ -1374,6 +1389,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
     // The windows first: failing the running job must not start a window's next departure.
     windows?.close();
     windows = null;
+    ensembleSets?.close();
+    ensembleSets = null;
     jobs?.failRunning(why);
     waitingForForecast = null;
     routeAtWorker = null;
@@ -1433,6 +1450,10 @@ export = function plugin(app: SkApp): SignalKPlugin {
       get jobs(): JobManager {
         if (!jobs) throw new NotStartedError(notStartedReason());
         return jobs;
+      },
+      get ensembleSets(): EnsembleSetManager {
+        if (!ensembleSets) throw new NotStartedError(notStartedReason());
+        return ensembleSets;
       },
       get windows(): WindowManager {
         if (!windows) throw new NotStartedError(notStartedReason());
@@ -1529,6 +1550,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         regional: regionalStatus(),
         jobs: jobs ? { running: jobs.runningId, queued: jobs.queueLength, total: jobs.list(500).length } : null,
         windows: windows ? { running: windows.running } : null,
+        ensemble_sets: ensembleSets ? { running: ensembleSets.running } : null,
         // The name, draught and air draft are Signal K's (vessels.self.name, design.*), not plugin settings.
         vessel: config?.vessel ? { ...config.vessel, ...selfDesign(), name: selfName() } : undefined,
         polar_source: config?.polarSource,
@@ -1565,7 +1587,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       ensembles: () =>
         (dataStatus?.ensembles ?? [])
           .filter(e => e.cycle && e.members.length)
-          .map(e => ({ model: e.model, name: e.name, members: e.members.length })),
+          .map(e => ({ model: e.model, name: e.name, members: [...e.members] })),
       chartGroups: () => charts.groups(),
       chartRows: () => charts.chartRows(),
       downloadCoastline: () => coast.requestDownload(),

@@ -168,26 +168,28 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   offline or held, as the forecast's does, and checks the free disk
   first.
 
-  A route can then be **checked against an ensemble**: it is found on
-  the main forecast as always, then sailed leg by leg from its departure
-  in each member's wind and waves (with the route's currents, boat and
-  limits; nothing is searched again). Per member: the arrival, the time
-  over the wind and the wave limit (counted, not stopped at), the
-  strongest wind and highest waves met, or where it could not be sailed;
-  in all: the 10th, 50th and 90th percentile arrival over the members
-  that arrive, and how many go over each limit or cannot sail it. In the
-  webapp: Route → Plan, above Find Route: *Check the route against an
-  ensemble*, the ensemble, and the number of members (5 to those on
-  disk); the result strip carries the summary and the
-  Itinerary tab a table of the members. Over the API: the request's
-  `ensemble`, and `GET /api/routes/{id}/ensemble`.
+  A route can then be **routed on each member**: with *Route each
+  ensemble member too* ticked (Route → Plan, above Find Route, with the
+  ensemble and the number of members, 5 to those on disk), Find Route
+  computes the route on the main forecast as always, and an ensemble set
+  computes the same request (start, destination, waypoints, boat, polar,
+  limits, options) as a route search of its own on each member's
+  forecast, one after the other on the server, so a route asked for
+  meanwhile waits behind one member at most. A member's route reads only
+  that member's wind and waves (no regional wind); every member of a set
+  is of the same ensemble cycle. The members' routes show as grey lines
+  on the map, the result strip gives how far the set is and the earliest,
+  median and latest arrival, and the Itinerary tab lists each member's
+  arrival, passage, motoring, strongest wind and highest waves; a row
+  opens that member's route. Over the API: `POST /api/ensemble-sets`,
+  and `forecast_member` on a route request.
 
   *Measured on the test box (Pi 5), 2026-11-05, 72 h:* IFS ENS, 5
   members: 625 fields, 350,757,112 B downloaded (arithmetic: about
   70 MB per member), decoded in 121.8 s, 519 MB on disk per member
   (5 fields × 25 steps × 4.15 MB). AIFS ENS, the control and 5 members:
   390 fields, 206,788,659 B, 75.3 s, 270 MB per member (13 steps).
-  Sailing a route in one member's weather took 10–50 ms.
+  The time of one member's route is not measured yet.
 - **Land:** GSHHG shorelines as shapefiles (`GSHHS_f_L1.shp` for full
   resolution, automatically including L2–L4 siblings; add `GSHHS_f_L6.shp` for Antarctica) or the OSM
   land-polygons export. At start the plugin cuts the coastline into
@@ -2038,7 +2040,6 @@ the SSE endpoint replays.
 | GET | `/api/routes/{id}/fronts` | readonly | every search stage's front and best path, compact (display only) |
 | GET | `/api/routes/{id}/signalk` | readonly | Signal K Resources API route record |
 | GET | `/api/routes/{id}/meteogram` | readonly | conditions where the boat is at each step of the passage |
-| GET | `/api/routes/{id}/ensemble` | readonly | the route sailed in each ensemble member's weather (a request with `ensemble`); 404 without one, 409 before it is done |
 | POST | `/api/routes/{id}/cancel` | readwrite | cancel a queued or running job |
 | POST | `/api/routes/{id}/publish` | readwrite | save the route to the Resources API |
 | DELETE | `/api/routes/{id}` | readwrite | delete a job |
@@ -2047,6 +2048,11 @@ the SSE endpoint replays.
 | GET | `/api/windows/{id}` | readonly | a window's departures, their status and metrics |
 | POST | `/api/windows/{id}/cancel` | readwrite | cancel the departures not computed yet |
 | DELETE | `/api/windows/{id}` | readwrite | delete a finished window and its route jobs |
+| POST | `/api/ensemble-sets` | readwrite | ensemble set `{route, model, members}`: the route on each member on disk, one route job each |
+| GET | `/api/ensemble-sets` | readonly | list ensemble sets |
+| GET | `/api/ensemble-sets/{id}` | readonly | a set's members, their status, route job and metrics |
+| POST | `/api/ensemble-sets/{id}/cancel` | readwrite | cancel the members not computed yet |
+| DELETE | `/api/ensemble-sets/{id}` | readwrite | delete a finished set and its route jobs |
 
 #### Job lifecycle
 
@@ -2101,7 +2107,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `no_currents` | boolean | | false | ignore every current source |
 | `wind_model` | string | | `auto` | `auto`: regional wind from signalk-grib-downloader where finer and covering, ECMWF elsewhere; `ecmwf`: ECMWF only |
 | `avoid_areas` | boolean | | true | treat the areas marked on Signal K notes (`properties.avoid.radius_m` around the note's position) as land |
-| `ensemble` | `{model, members}` | | none | check the finished route against an ensemble on disk: `model` `"ifs-ens"` or `"aifs-ens"` (one downloaded, else `400`), `members` 5..51 and at most those on disk (`/api/status` `ensembles`; the control first where there is one). The route is the one found on the main forecast; it is sailed in each member's weather after the search. `summary.ensemble` carries the percentiles and counts, `GET /api/routes/{id}/ensemble` each member |
+| `forecast_member` | `{model, member, cycle?}` | | none | route on one ensemble member's forecast instead of the main one (no regional wind): `model` `"ifs-ens"` or `"aifs-ens"` (downloaded, else `400`), `member` 0..50 on disk (0 = the control), `cycle` (yyyymmddHH) refused when it is no longer the ensemble's cycle in use. Ensemble sets send it per member; `summary.forecast_member` names it |
 | `vessel` | object | | the vessel settings | per-route overrides; absent keys use the settings ([Configuration](#configuration)) |
 | `vessel.name` | string | | | ignored (accepted so older clients still validate); the vessel name is Signal K's `vessels.self.name` |
 | `vessel.motor_speed_ms` | number | m/s | setting (3.087) | 0.01..50 |

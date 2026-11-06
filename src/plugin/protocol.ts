@@ -21,7 +21,6 @@ import type { ResolvedConfig, SelfDesign } from './config';
 import type { BBox } from '../geo/geodesy';
 import type { DecodedIndex } from '../data/decoded';
 import type { EnsembleModelId } from '../data/ecmwf';
-import type { EnsembleMemberResult, EnsembleSummary } from '../engine/ensemble';
 import type { SerializedSmoc, SmocStatus } from '../currents/smoc';
 import type { SerializedRtofsSet } from '../currents/rtofs';
 import type { SerializedHarmonic } from '../currents/harmonic';
@@ -268,16 +267,6 @@ export interface DataStatus {
   ensembles: EnsembleStatus[];
 }
 
-/** A route's ensemble check (GET /api/routes/{id}/ensemble): the model, its cycle, each member and the summary. */
-export interface EnsembleCheck {
-  model: EnsembleModelId;
-  name: string;
-  /** The ensemble's cycle (ISO). */
-  cycle: string;
-  members: EnsembleMemberResult[];
-  summary: EnsembleSummary;
-}
-
 /** One ensemble: the members in use for a route, and what its last pass did. */
 export interface EnsembleStatus {
   model: EnsembleModelId;
@@ -412,8 +401,6 @@ export type WorkerToMain =
       /** Every stage's front and best path (see route.ts StageFront), compact: points [lon, lat, timeMs, viaCount]. */
       fronts?: { leg: number; stage: number; total: number; points: number[][]; best: number[][] }[] | null;
       summary: RouteSummary;
-      /** The route sailed in each ensemble member's weather, when the request asked for it. */
-      ensemble?: EnsembleCheck;
     }
   | { type: 'error'; id: string; message: string; cancelled?: boolean }
   /** `complete`: false when an on-demand current / tide load missed its deadline or failed (do not cache). */

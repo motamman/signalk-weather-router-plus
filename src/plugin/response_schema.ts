@@ -96,24 +96,15 @@ export const RouteSummarySchema = Type.Object({
   drawbridges_rule: Type.Optional(Type.Enum(DRAWBRIDGE_CHOICES, { type: 'string' })),
   router: Type.Optional(Type.Enum(ROUTER_KINDS, { type: 'string', description: 'The open-water router that ran.' })),
   search: Type.Optional(Type.Enum(SEARCH_PRESETS, { type: 'string', description: 'The search method the route ran with.' })),
-  ensemble: Type.Optional(
+  forecast_member: Type.Optional(
     Type.Object(
       {
         model: Type.Enum(ENSEMBLE_MODELS, { type: 'string' }),
         name: Type.String(),
         cycle: Type.String({ description: "The ensemble's cycle (ISO 8601)" }),
-        members: Type.Number(),
-        arrival_p10: nullable(Type.String()),
-        arrival_p50: nullable(Type.String()),
-        arrival_p90: nullable(Type.String()),
-        over_wind: Type.Number({ description: 'Members over the wind limit somewhere on the route' }),
-        over_waves: Type.Number({ description: 'Members over the wave limit somewhere on the route' }),
-        stuck: Type.Number({ description: 'Members in whose weather a leg could not be sailed' }),
+        member: Type.Number({ description: '0 = the control' }),
       },
-      {
-        description:
-          "The route sailed in each of the ensemble's members' weather, when the request asked for it: the arrival percentiles over the members that arrive (ISO 8601), and how many members go over a limit or get stuck. Each member: GET .../ensemble.",
-      }
+      { description: 'The ensemble member whose forecast the route ran on (request.forecast_member); absent: the main forecast.' }
     )
   ),
 });
@@ -129,7 +120,6 @@ export const JobLinksSchema = Type.Object({
   cancel: Type.String(),
   publish: Type.String(),
   meteogram: Type.String(),
-  ensemble: Type.String(),
 });
 export type JobLinks = Static<typeof JobLinksSchema>;
 
@@ -147,6 +137,7 @@ export const JobPublicSchema = Type.Object({
   resource_id: Type.Optional(Type.String()),
   publish_error: Type.Optional(Type.String({ description: 'Why publishing to the Resources API failed, when it did' })),
   window_id: Type.Optional(Type.String({ description: 'The departure window this job is one departure of (/api/windows)' })),
+  ensemble_set_id: Type.Optional(Type.String({ description: "The ensemble set this job is one member's route of (/api/ensemble-sets)" })),
   links: JobLinksSchema,
 });
 export type JobPublic = Static<typeof JobPublicSchema>;

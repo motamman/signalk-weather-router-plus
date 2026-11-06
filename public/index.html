@@ -369,8 +369,8 @@
   #itinEnsemble th { text-align: right; vertical-align: bottom; font-weight: 600; color: var(--text-2); padding: 2px 3px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   #itinEnsemble td { text-align: right; padding: 2px 3px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   #itinEnsemble th:first-child, #itinEnsemble td:first-child { text-align: left; }
-  #itinEnsemble tr.ens-stuck td { color: var(--danger); }
-  #itinEnsemble td.ens-over { color: var(--warn); font-weight: 600; }
+  #itinEnsemble tr[data-job]:hover { background: var(--surface-3); }
+  #itinEnsemble tr.win-open td:first-child { box-shadow: inset 3px 0 0 var(--go); }
   /* Meteogram: the route's conditions along the passage, across the map beside the panel (rp-plan.js). */
   #meteogram {
     position: absolute; left: 10px; right: calc(var(--panel-w-desktop) + 20px);
@@ -979,10 +979,10 @@
   <input type="range" id="sailThresh" min="0" max="5.2" step="0.1" value="2.6" aria-label="Minimum sailing speed">
   </div>
 
-  <!-- Ensemble check (rp-plan.js, Ensemble): shown while ensembles are on in the Signal K plugin configuration
+  <!-- Ensemble routes (rp-plan.js, Ensemble): shown while ensembles are on in the Signal K plugin configuration
        (Ensemble downloads), usable once one is on disk: on or off, which ensemble, how many of its members. -->
   <div id="ensembleRow" hidden>
-    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="The route is found on the main forecast as always, then sailed leg by leg in each ensemble member's wind and waves: when it would arrive in each, and how many go over the wind or wave limit."><input type="checkbox" id="ensembleOn">Check the route against an ensemble</label>
+    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Find Route computes the route on the main forecast as always, and then a route of its own on each chosen ensemble member's forecast (one after the other on the server): where each goes and when it arrives. They show grey on the map and in a table on the Itinerary tab."><input type="checkbox" id="ensembleOn">Route each ensemble member too</label>
     <div style="display:flex;gap:var(--s-2);align-items:flex-end;">
       <div style="flex:1;"><label for="ensembleModel">Ensemble</label><select id="ensembleModel" aria-label="Ensemble"></select></div>
       <div style="flex:1;"><label for="ensembleMembers">Members: <span id="ensembleMembersLabel">—</span></label><input type="range" id="ensembleMembers" min="5" max="5" step="1" value="5" aria-label="Ensemble members"></div>
@@ -1243,7 +1243,7 @@
       <span class="recompute-actions"><button type="button" id="recomputeYes">Recompute</button><button type="button" id="recomputeNo">Keep as saved</button></span>
     </div>
     <div id="itinSummary"></div>
-    <!-- The route sailed in each ensemble member's weather (GET /api/routes/:id/ensemble; rp-plan.js). -->
+    <!-- The route on each ensemble member (GET /api/ensemble-sets/:id; rp-plan.js). -->
     <div id="itinEnsemble"></div>
     <div id="modalItinerary"></div>
   </div>

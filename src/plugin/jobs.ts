@@ -10,7 +10,6 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { JobProgress, JobStatus, RouteRequest, RouteSummary } from './protocol';
 import type { JobLinks, JobPublic } from './response_schema';
-import type { EnsembleCheck } from './protocol';
 
 export interface JobEvent {
   id: number;
@@ -33,12 +32,12 @@ export interface Job {
   skeleton?: Record<string, unknown> | null;
   /** Every search stage's front and best path, compact (display only). */
   fronts?: unknown[] | null;
-  /** The route sailed in each ensemble member's weather, when the request asked for it (engine/ensemble.ts). */
-  ensemble?: EnsembleCheck;
   /** Resources API id when published. */
   resourceId?: string;
   /** The departure window this job is one departure of (windows.ts); such jobs are listed and trimmed with their window. */
   windowId?: string;
+  /** The ensemble set this job is one member's route of (ensembles.ts); listed and trimmed with its set, as windows' are. */
+  ensembleSetId?: string;
   publishError?: string;
   events: JobEvent[];
   nextEventId: number;
@@ -48,7 +47,7 @@ export interface Job {
 export type { JobPublic };
 
 /** What a finished departure-window job keeps only in its file (see release). */
-const RESULT_KEYS = ['geojson', 'skRoute', 'skeleton', 'fronts', 'ensemble', 'events', 'progress'] as const;
+const RESULT_KEYS = ['geojson', 'skRoute', 'skeleton', 'fronts', 'events', 'progress'] as const;
 
 export class JobManager extends EventEmitter {
   private jobs = new Map<string, Job>();
@@ -86,7 +85,7 @@ export class JobManager extends EventEmitter {
         j.events = j.events ?? [];
         j.nextEventId = j.nextEventId ?? j.events.length + 1;
         this.jobs.set(j.id, j);
-        if (j.windowId) this.release(j);
+        if (j.windowId || j.ensembleSetId) this.release(j);
       } catch {
         // ignore corrupt file
       }
@@ -116,7 +115,6 @@ export class JobManager extends EventEmitter {
     delete job.skRoute;
     delete job.skeleton;
     delete job.fronts;
-    delete job.ensemble;
     job.events = [];
     job.progress = [];
     this.released.add(job.id);
@@ -148,7 +146,7 @@ export class JobManager extends EventEmitter {
 
   private trim(): void {
     const finished = [...this.jobs.values()]
-      .filter(j => j.status !== 'queued' && j.status !== 'running' && !j.windowId)
+      .filter(j => j.status !== 'queued' && j.status !== 'running' && !j.windowId && !j.ensembleSetId)
       .sort((a, b) => (b.finishedAt ?? b.createdAt).localeCompare(a.finishedAt ?? a.createdAt));
     for (const j of finished.slice(this.keepJobs)) this.delete(j.id);
   }
@@ -179,7 +177,6 @@ export class JobManager extends EventEmitter {
       cancel: `${b}/cancel`,
       publish: `${b}/publish`,
       meteogram: `${b}/meteogram`,
-      ensemble: `${b}/ensemble`,
     };
   }
 
@@ -197,6 +194,7 @@ export class JobManager extends EventEmitter {
       resource_id: job.resourceId,
       publish_error: job.publishError,
       window_id: job.windowId,
+      ensemble_set_id: job.ensembleSetId,
       links: this.links(job.id),
     };
   }
@@ -205,10 +203,10 @@ export class JobManager extends EventEmitter {
     return this.jobs.get(id);
   }
 
-  /** The newest jobs; a departure window's jobs only with `withWindows`. */
+  /** The newest jobs; a departure window's or an ensemble set's jobs only with `withWindows`. */
   list(limit = 50, withWindows = false): Job[] {
     return [...this.jobs.values()]
-      .filter(j => withWindows || !j.windowId)
+      .filter(j => withWindows || (!j.windowId && !j.ensembleSetId))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, limit);
   }
@@ -221,7 +219,7 @@ export class JobManager extends EventEmitter {
     return this.running;
   }
 
-  submit(request: RouteRequest, windowId?: string): Job {
+  submit(request: RouteRequest, windowId?: string, ensembleSetId?: string): Job {
     const job: Job = {
       id: randomUUID(),
       status: 'queued',
@@ -232,6 +230,7 @@ export class JobManager extends EventEmitter {
       nextEventId: 1,
     };
     if (windowId) job.windowId = windowId;
+    if (ensembleSetId) job.ensembleSetId = ensembleSetId;
     this.jobs.set(job.id, job);
     this.queue.push(job.id);
     this.emitEvent(job, 'status', { status: 'queued', position: this.queue.length });
@@ -277,8 +276,7 @@ export class JobManager extends EventEmitter {
     skRoute: Record<string, unknown>,
     summary: RouteSummary,
     skeleton: Record<string, unknown> | null = null,
-    fronts: unknown[] | null = null,
-    ensemble?: EnsembleCheck
+    fronts: unknown[] | null = null
   ): void {
     const job = this.jobs.get(id);
     if (!job) return;
@@ -288,7 +286,6 @@ export class JobManager extends EventEmitter {
     job.skRoute = skRoute;
     job.skeleton = skeleton;
     job.fronts = fronts;
-    if (ensemble) job.ensemble = ensemble;
     job.summary = summary;
     this.emitEvent(job, 'route', geojson);
     this.emitEvent(job, 'done', { status: 'done', summary });
@@ -317,7 +314,7 @@ export class JobManager extends EventEmitter {
   private finish(job: Job): void {
     if (this.running === job.id) this.running = null;
     this.persist(job);
-    if (job.windowId) this.release(job);
+    if (job.windowId || job.ensembleSetId) this.release(job);
     this.trim();
     this.pump();
   }
