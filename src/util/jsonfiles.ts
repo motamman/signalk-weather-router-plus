@@ -58,11 +58,12 @@ export interface LoadedRecords<T> {
 }
 
 /**
- * The records saved in `dir` (its .json files), each as `holds` recognises it. A folder that cannot be read, a file
- * that cannot be read or parsed, and one that does not hold such a record are reported through `log` and left as
- * they are, and the answer names them: what belongs to a record left as it is must be kept too.
+ * The records saved in `dir` (its .json files, each named by its record's id), each as `holds` recognises it. A folder
+ * that cannot be read, a file that cannot be read or parsed, one that does not hold such a record, and one that holds
+ * a record of another id (a copy: restoring it would write over that id's files) are reported through `log` and left
+ * as they are, and the answer names them: what belongs to a record left as it is must be kept too.
  */
-export function loadJsonFiles<T>(
+export function loadJsonFiles<T extends { id: string }>(
   dir: string,
   noun: RecordNoun,
   holds: (v: unknown) => v is T,
@@ -86,9 +87,15 @@ export function loadJsonFiles<T>(
       leftAsIs.push(f.slice(0, -'.json'.length));
       continue;
     }
+    const name = f.slice(0, -'.json'.length);
     if (!holds(v)) {
       log(`${noun.one} file ${f} does not hold ${noun.a}; left as it is, not restored`);
-      leftAsIs.push(f.slice(0, -'.json'.length));
+      leftAsIs.push(name);
+      continue;
+    }
+    if (v.id !== name) {
+      log(`${noun.one} file ${f} holds ${noun.a} of another id (${v.id}); left as it is, not restored`);
+      leftAsIs.push(name);
       continue;
     }
     records.push(v);

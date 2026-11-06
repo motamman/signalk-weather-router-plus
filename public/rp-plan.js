@@ -4,7 +4,7 @@
 // result strip, itinerary, route library, waypoint and conditions popups,
 // Live mode with the Signal K vessel.
 
-import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, abortChannel, ROUTE_OPEN_CHANNEL, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
+import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, abortRouteRequests, ROUTE_OPEN_CHANNEL, ROUTE_SKELETON_CHANNEL, ROUTE_FRONTS_CHANNEL, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { prefs } from './rp-prefs.js';
 import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats, watchEnsembleLegend } from './rp-layers.js';
@@ -363,10 +363,9 @@ function _drawSnapConnectors(p) {
 // was opened (a job attached, Find Route) is dropped: the channel cancels the request only when another skeleton is
 // asked for.
 function loadSkeleton(id) {
-  authFetch(API + '/routes/' + encodeURIComponent(id) + '/skeleton', { cache: 'no-store' }, 'skeleton-load')
+  authFetch(API + '/routes/' + encodeURIComponent(id) + '/skeleton', { cache: 'no-store' }, ROUTE_SKELETON_CHANNEL)
     .then(r => r.ok ? r.json() : null)
     .then(geojson => {
-      if (_currentRouteJobId !== id) return;
       skeletonSource.clear();
       if (!geojson) return;
       const features = new ol.format.GeoJSON().readFeatures(geojson, { featureProjection: 'EPSG:3857' });
@@ -380,7 +379,8 @@ function loadSkeleton(id) {
       }
       skeletonSource.addFeatures(features);
     })
-    .catch(() => { if (_currentRouteJobId === id) skeletonSource.clear(); });
+    // Superseded (the screen's route changed, or a newer request): nothing of this one is drawn.
+    .catch(err => { if (err.name !== 'AbortError') skeletonSource.clear(); });
 }
 
 // ─────────── Route library: recent jobs (GET /api/routes) ───────────
@@ -389,11 +389,12 @@ function loadSkeleton(id) {
 let _currentRouteJobId = null;
 /**
  * The route on screen becomes job `id` (null: none) named `name`. Every change of the screen goes through here, and
- * each one supersedes a route still being opened (a request on ROUTE_OPEN_CHANNEL): it is aborted, its body read with
- * it, so no answer from before the change is ever drawn, a Clear with nothing on screen included.
+ * each one supersedes every request still in flight for the route before (its route, skeleton and fronts:
+ * abortRouteRequests): aborted, a body read with it, so no answer from before the change is ever drawn, a Clear with
+ * nothing on screen included.
  */
 function _setRouteOnScreen(id, name) {
-  abortChannel(ROUTE_OPEN_CHANNEL);
+  abortRouteRequests();
   _currentRouteJobId = id;
   _currentRouteName = name;
 }
@@ -2934,9 +2935,9 @@ function _ensForRoute(id) {
 
 // The finished job's stage fronts (faint) replace the live ones; dropped once another route is open (loadSkeleton).
 function _loadFronts(id) {
-  authFetch(API + '/routes/' + encodeURIComponent(id) + '/fronts', { cache: 'no-store' }, 'fronts-load')
+  authFetch(API + '/routes/' + encodeURIComponent(id) + '/fronts', { cache: 'no-store' }, ROUTE_FRONTS_CHANNEL)
     .then(r => r.ok ? r.json() : null)
-    .then(fronts => { if (fronts && _currentRouteJobId === id) drawFronts(fronts); })
+    .then(fronts => { if (fronts) drawFronts(fronts); })
     .catch(() => {});
 }
 

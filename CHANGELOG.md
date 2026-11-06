@@ -138,9 +138,10 @@ uses [Semantic Versioning](https://semver.org/).
 - **A route being opened is dropped when the route on screen changes.**
   Every change of the route on the map (another one opened from Saved,
   a departure or a member, Find Route, Clear, Reset) goes through one
-  place, which aborts a route still being fetched for the one before. A
-  departure window's route answered after the route was cleared or
-  another opened could be drawn over it.
+  place, which aborts every request still in flight for the one before:
+  its route, its skeleton and its fronts. A departure window's route
+  answered after the route was cleared or another opened could be drawn
+  over it.
 - **A route job whose file cannot be saved says so, and the queue goes
   on.** A full or read-only disk made the job's save throw when it
   finished, before the next job was started, so the queue stopped. The
@@ -162,7 +163,11 @@ uses [Semantic Versioning](https://semver.org/).
   finished with. A departure window's or ensemble set's jobs are deleted
   at start-up only when the window or set has no file at all; one whose
   file is refused keeps its jobs, and a jobs folder that cannot be
-  listed keeps every job. Jobs, departure windows and ensemble sets
+  listed keeps every job. The same for a job's route results: a results
+  file whose job has no file at all is removed at start-up, one whose
+  job file is there but refused stays. A record file is its record's:
+  one holding a job, window or set of another id (a copy) is refused,
+  since restoring it would write over that id's files. Jobs, departure windows and ensemble sets
   save their files one way (`src/plugin/jsonfiles.ts`): a save that
   fails also says when its partial copy could not be removed.
 

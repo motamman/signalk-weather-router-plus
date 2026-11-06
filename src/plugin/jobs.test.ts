@@ -325,3 +325,50 @@ test('a done job saved without its summary, or results that hold no route, are r
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a job file without when it was created, or holding another job (a copy), is refused where it is loaded; the other job is untouched', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
+  const store = path.join(dir, 'jobs');
+  try {
+    const logged: string[] = [];
+    const jobs = new JobManager(dir, 50, '/p', m => logged.push(m));
+    const j = jobs.submit(ROUTE);
+    jobs.onDone(j.id, GEOJSON, {}, SUMMARY);
+    const own = fs.readFileSync(path.join(store, `${j.id}.json`), 'utf8');
+    const results = fs.readFileSync(path.join(store, 'results', `${j.id}.json`), 'utf8');
+    // A copy of the job's file under another name, in the old layout (results inside): restored, it would be moved to
+    // the original's paths.
+    fs.writeFileSync(path.join(store, 'copy.json'), JSON.stringify({ ...JSON.parse(own), ...JSON.parse(results) }));
+    // A file without createdAt.
+    const { createdAt: _c, ...noCreated } = JSON.parse(own) as Record<string, unknown>;
+    fs.writeFileSync(path.join(store, 'nocreated.json'), JSON.stringify({ ...noCreated, id: 'nocreated' }));
+    const again = new JobManager(dir, 50, '/p', m => logged.push(m));
+    assert.ok(logged.includes(`route job file copy.json holds a route job of another id (${j.id}); left as it is, not restored`));
+    assert.ok(logged.includes('route job file nocreated.json does not hold a route job; left as it is, not restored'));
+    assert.equal(fs.readFileSync(path.join(store, `${j.id}.json`), 'utf8'), own, "the original's file is as it was");
+    assert.equal(fs.readFileSync(path.join(store, 'results', `${j.id}.json`), 'utf8'), results);
+    assert.deepEqual(again.get(j.id)?.geojson, GEOJSON);
+    assert.equal(again.get('nocreated'), undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a results file whose job has no file at all is removed at start-up; one whose job file is refused stays with it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
+  const store = path.join(dir, 'jobs');
+  try {
+    fs.mkdirSync(path.join(store, 'results'), { recursive: true });
+    fs.writeFileSync(path.join(store, 'results', 'ghost.json'), JSON.stringify({ events: [], progress: [], geojson: GEOJSON }));
+    fs.writeFileSync(path.join(store, 'refused.json'), '{"id": "refused", "sta');
+    fs.writeFileSync(path.join(store, 'results', 'refused.json'), JSON.stringify({ events: [], progress: [], geojson: GEOJSON }));
+    const logged: string[] = [];
+    new JobManager(dir, 50, '/p', m => logged.push(m));
+    assert.ok(!fs.existsSync(path.join(store, 'results', 'ghost.json')), 'no job file: gone');
+    assert.ok(logged.includes('route job ghost: gone; its route results removed'));
+    assert.ok(fs.existsSync(path.join(store, 'results', 'refused.json')), 'its job file is there, refused: kept');
+    assert.ok(fs.existsSync(path.join(store, 'refused.json')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

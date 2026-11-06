@@ -432,8 +432,16 @@ export function abortChannel(channel) {
   if (prev) prev.abort();
   _authChannels.delete(channel);
 }
-/** The channel of every request that opens a route on the map: opening another, computing one or clearing it supersedes it. */
+// The channels of the requests made for the route on screen: its route, its skeleton, its fronts. Each on a channel
+// of its own (two requests in a row on one channel would abort each other), all superseded together when the screen
+// changes (abortRouteRequests: another route opened, one computed, the map cleared).
 export const ROUTE_OPEN_CHANNEL = 'route-load';
+export const ROUTE_SKELETON_CHANNEL = 'skeleton-load';
+export const ROUTE_FRONTS_CHANNEL = 'fronts-load';
+/** The screen's route changed: every request still in flight for the one before is for a route that is gone. */
+export function abortRouteRequests() {
+  for (const c of [ROUTE_OPEN_CHANNEL, ROUTE_SKELETON_CHANNEL, ROUTE_FRONTS_CHANNEL]) abortChannel(c);
+}
 export async function authFetch(url, opts, channel) {
   if (AuthGate.tripped) throw new Error('auth-gate-tripped');
   opts = Object.assign({ credentials: 'same-origin' }, opts || {});
@@ -576,7 +584,8 @@ function loadPolarAngles(polarPath) {
   authFetch(API + '/polar-angles?path=' + encodeURIComponent(polarPath), {}, 'polar-angles')
     .then(r => r.ok ? r.json() : null)
     .then(d => { _polarAngles = d; drawPolarDiagram(); })
-    .catch(() => { _polarAngles = null; });
+    // Superseded by a newer selection on the channel: that one sets the angles.
+    .catch(err => { if (err.name !== 'AbortError') _polarAngles = null; });
 }
 
 // The angles of any polar (a /api/polars token; '' = the default), without

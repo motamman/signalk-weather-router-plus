@@ -132,21 +132,27 @@ export class JobManager extends EventEmitter {
   /**
    * The jobs saved before a restart (loadJsonFiles): one that was queued or running is failed. A window's or set's job
    * is released (its results are in their file); any other job's results are read into memory. A job file saved
-   * before the results had a file of their own holds them: they are moved to theirs, once.
+   * before the results had a file of their own holds them: they are moved to theirs, once. A results file whose job
+   * has no file at all (a delete that removed the job's file but not its results, a results save followed by a failed
+   * save of the job's file) is removed; one whose job file is there but refused is kept with it, and nothing is removed
+   * when the jobs folder could not be listed.
    */
   private loadPersisted(): void {
     /**
-     * A job as saved: an id, a status and its request; a done one its summary, and, when its results are still inside
-     * (the layout before they had a file of their own), those as holdsResults wants them. Any other file is not restored.
+     * A job as saved: an id, a status, its request and when it was created (the lists and the trim order by it); a
+     * done one its summary, and, when its results are still inside (the layout before they had a file of their own),
+     * those as holdsResults wants them. Any other file is not restored.
      */
     const isJob = (v: unknown): v is Job => {
       const j = v as Job | null;
       if (!j || typeof j !== 'object' || typeof j.id !== 'string' || typeof j.status !== 'string' || !j.request) return false;
+      if (typeof j.createdAt !== 'string') return false;
       if (j.status === 'done' && (!j.summary || typeof j.summary !== 'object')) return false;
       return j.events === undefined || holdsResults(j, j.status === 'done');
     };
     const noun = { one: 'route job', a: 'a route job', many: 'route jobs' };
-    for (const j of loadJsonFiles(this.dir, noun, isJob, this.log).records) {
+    const loaded = loadJsonFiles(this.dir, noun, isJob, this.log);
+    for (const j of loaded.records) {
       if (j.status === 'running' || j.status === 'queued') {
         j.status = 'failed';
         j.error = 'plugin restarted while the job was in progress';
@@ -165,7 +171,30 @@ export class JobManager extends EventEmitter {
       }
       j.nextEventId = j.nextEventId ?? j.events.length + 1;
     }
+    if (loaded.folderRead) this.removeResultsWithoutJob(new Set([...loaded.records.map(j => j.id), ...loaded.leftAsIs]));
     this.trim();
+  }
+
+  /** Remove the results files of jobs not among `jobFiles` (the names of every job file, restored or not). */
+  private removeResultsWithoutJob(jobFiles: Set<string>): void {
+    let names: string[];
+    try {
+      names = fs.readdirSync(this.resultsDir);
+    } catch (err) {
+      this.log(`route jobs: ${this.resultsDir} cannot be read (${(err as Error).message}); route results of jobs that are gone stay`);
+      return;
+    }
+    for (const f of names) {
+      if (!f.endsWith('.json')) continue;
+      const id = f.slice(0, -'.json'.length);
+      if (jobFiles.has(id)) continue;
+      const why = removeJson(path.join(this.resultsDir, f));
+      this.log(
+        why
+          ? `route job ${id}: gone, but its route results could not be removed (${why})`
+          : `route job ${id}: gone; its route results removed`
+      );
+    }
   }
 
   /** A job's saved results, or null when their file cannot be read, or does not hold results (reported). */

@@ -52,16 +52,19 @@ test('loadJsonFiles: the records, and each folder or file that cannot be read, o
     fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify({ hello: 'world' }));
     fs.writeFileSync(path.join(dir, 'good.json.tmp'), '{"id": "partial"}');
     fs.mkdirSync(path.join(dir, 'folder.json'));
+    // A copy of good.json under another name: restoring it would write good's files.
+    fs.writeFileSync(path.join(dir, 'copy.json'), JSON.stringify({ id: 'good' }));
     const logged: string[] = [];
     const got = loadJsonFiles(dir, NOUN, isThing, m => logged.push(m));
     assert.deepEqual(got.records, [{ id: 'good' }]);
-    assert.deepEqual(got.leftAsIs.sort(), ['broken', 'folder', 'other'], 'what is there but not restored is named');
+    assert.deepEqual(got.leftAsIs.sort(), ['broken', 'copy', 'folder', 'other'], 'what is there but not restored is named');
     assert.equal(got.folderRead, true);
-    assert.equal(logged.length, 3);
+    assert.equal(logged.length, 4);
+    assert.ok(logged.includes('thing file copy.json holds a thing of another id (good); left as it is, not restored'));
     assert.ok(logged.some(m => /^thing file broken\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
     assert.ok(logged.some(m => /^thing file folder\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
     assert.ok(logged.includes('thing file other.json does not hold a thing; left as it is, not restored'));
-    assert.equal(fs.readdirSync(dir).length, 5, 'every file left as it is');
+    assert.equal(fs.readdirSync(dir).length, 6, 'every file left as it is');
     const none: string[] = [];
     assert.deepEqual(
       loadJsonFiles(path.join(dir, 'gone'), NOUN, isThing, m => none.push(m)),

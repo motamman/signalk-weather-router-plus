@@ -2106,9 +2106,11 @@ the SSE endpoint replays.
   restart a job's event log is the one it finished with.
   Only the newest are kept: the `routing.keepJobs` setting ("finished
   routes kept", default 50, 1–500); older ones are deleted. A job file
-  that cannot be read at start-up, or does not hold a job, is left as it
-  is, not restored, and named in the Signal K log; so is one whose delete
-  fails (it comes back after a restart).
+  that cannot be read at start-up, does not hold a job, or holds a job
+  of another id, is left as it is, not restored, and named in the
+  Signal K log; so is one whose delete fails (it comes back after a
+  restart). A results file whose job has no file at all is removed at
+  start-up.
 - A job that was `queued` or `running` when the plugin stopped is
   loaded as `failed` with `error` "plugin restarted while the job was in
   progress". If the route worker crashes or exits, the running job fails
