@@ -1,6 +1,8 @@
-// The job manager's files (jobs.ts): a job whose file cannot be saved carries it and the queue goes on; a departure
-// window's or ensemble set's job keeps its route results in memory until they are saved; files that cannot be read or
-// removed are reported. The failures are made with a folder where a file belongs, which fails the same way on every OS.
+// The job manager's files (jobs.ts): a job whose file cannot be saved carries it and the queue goes on; its route
+// results are saved once in a file of their own that no later save touches; a departure window's or ensemble set's job
+// keeps them in memory until they are saved; files that cannot be read or removed are reported; a job file saved with
+// its results inside has them moved to their file. The failures are made with a folder where a file belongs, which
+// fails the same way on every OS.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -55,28 +57,92 @@ test('a job whose file cannot be saved carries it and says why; the next job sti
   }
 });
 
-test("a window's job keeps its route results in memory until they are saved; once saved they are read from its file", () => {
+test("a window's job keeps its route results in memory until they are saved; once saved they are read from their file", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
   try {
     const logged: string[] = [];
     const jobs = new JobManager(dir, 50, '/p', m => logged.push(m));
     const unsaved = jobs.submit(ROUTE, 'win-1');
-    folderAt(path.join(dir, 'jobs', `${unsaved.id}.json.tmp`));
+    folderAt(path.join(dir, 'jobs', 'results', `${unsaved.id}.json.tmp`));
     jobs.onDone(unsaved.id, GEOJSON, {}, SUMMARY);
-    assert.ok(unsaved.saveError);
+    assert.match(unsaved.saveError ?? '', /^its route results could not be saved: /);
     assert.deepEqual(unsaved.geojson, GEOJSON, 'not saved: still in memory');
+    assert.deepEqual(jobs.full(unsaved.id)?.geojson, GEOJSON);
+    // The way is clear again: the next save of the job saves them, and they leave memory.
+    fs.rmSync(path.join(dir, 'jobs', 'results', `${unsaved.id}.json.tmp`), { recursive: true });
+    jobs.setPublished(unsaved.id, null, 'not published');
+    assert.equal(unsaved.saveError, undefined);
+    assert.equal(unsaved.geojson, undefined);
     assert.deepEqual(jobs.full(unsaved.id)?.geojson, GEOJSON);
     const saved = jobs.submit(ROUTE, 'win-1');
     jobs.onDone(saved.id, GEOJSON, {}, SUMMARY);
     assert.equal(saved.saveError, undefined);
     assert.equal(saved.geojson, undefined, 'saved: out of memory');
-    assert.deepEqual(jobs.full(saved.id)?.geojson, GEOJSON, 'read from its file');
+    assert.deepEqual(jobs.full(saved.id)?.geojson, GEOJSON, 'read from their file');
     assert.equal(logged.length, 1);
-    // Its file cannot be read now: answered without its results, and that is said.
-    folderAt(path.join(dir, 'jobs', `${saved.id}.json`));
+    // Their file cannot be read now: answered without them, and that is said.
+    folderAt(path.join(dir, 'jobs', 'results', `${saved.id}.json`));
     assert.equal(jobs.full(saved.id)?.geojson, undefined);
-    assert.ok(logged[1].startsWith(`route job ${saved.id}: its file cannot be read (`));
-    assert.ok(logged[1].endsWith('); answered without its route results'));
+    assert.ok(logged[1].startsWith(`route job ${saved.id}: its route results cannot be read (`));
+    assert.ok(logged[1].endsWith('); answered without them'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a later save of a job never touches its route results' file, even one that cannot be read", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
+  try {
+    const logged: string[] = [];
+    const jobs = new JobManager(dir, 50, '/p', m => logged.push(m));
+    const j = jobs.submit(ROUTE, 'win-1');
+    jobs.onDone(j.id, GEOJSON, {}, SUMMARY);
+    const results = path.join(dir, 'jobs', 'results', `${j.id}.json`);
+    fs.writeFileSync(results, '{"geojson": {"type": "Feat');
+    jobs.setPublished(j.id, 'res-1');
+    assert.equal(fs.readFileSync(results, 'utf8'), '{"geojson": {"type": "Feat', 'their file is as it was');
+    assert.equal(j.saveError, undefined);
+    const own = JSON.parse(fs.readFileSync(path.join(dir, 'jobs', `${j.id}.json`), 'utf8')) as Record<string, unknown>;
+    assert.equal(own.resourceId, 'res-1');
+    assert.ok(!('geojson' in own) && !('events' in own), "the job's own file holds no results");
+    assert.deepEqual(logged, []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a job saved with its results inside its file has them moved to their own file at start-up', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
+  const store = path.join(dir, 'jobs');
+  try {
+    fs.mkdirSync(store, { recursive: true });
+    const old = {
+      id: 'old-1',
+      status: 'done',
+      request: ROUTE,
+      createdAt: '2026-11-06T12:00:00.000Z',
+      finishedAt: '2026-11-06T12:05:00.000Z',
+      summary: SUMMARY,
+      windowId: 'win-1',
+      geojson: GEOJSON,
+      skRoute: {},
+      skeleton: null,
+      fronts: null,
+      progress: [],
+      events: [{ id: 1, event: 'done', data: { status: 'done' } }],
+      nextEventId: 2,
+    };
+    fs.writeFileSync(path.join(store, 'old-1.json'), JSON.stringify(old));
+    const jobs = new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`));
+    assert.equal(jobs.get('old-1')?.geojson, undefined, "a window's job: out of memory");
+    assert.deepEqual(jobs.full('old-1')?.geojson, GEOJSON);
+    assert.deepEqual(jobs.full('old-1')?.events, old.events);
+    const own = JSON.parse(fs.readFileSync(path.join(store, 'old-1.json'), 'utf8')) as Record<string, unknown>;
+    assert.ok(!('geojson' in own) && !('events' in own));
+    assert.deepEqual(
+      (JSON.parse(fs.readFileSync(path.join(store, 'results', 'old-1.json'), 'utf8')) as Record<string, unknown>).geojson,
+      GEOJSON
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

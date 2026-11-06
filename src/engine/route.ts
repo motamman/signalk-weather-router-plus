@@ -96,8 +96,9 @@ export interface RouteWarning {
   to: [number, number];
   repaired: boolean;
   /**
-   * detour_motored and beat_motored: the motoring time, seconds; waves_outside_correction: the time sailed uncorrected,
-   * seconds. search_failed: why the search failed.
+   * wind_over_limit and waves_over_limit: the time over the limit, seconds; detour_motored and beat_motored: the
+   * motoring time, seconds; waves_outside_correction and waves_no_period: the time sailed uncorrected, seconds;
+   * search_failed: why the search failed.
    */
   detail?: string;
 }

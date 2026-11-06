@@ -33,8 +33,9 @@ uses [Semantic Versioning](https://semver.org/).
   cannot read is reported in the log. A set whose file cannot be saved
   carries `save_error` (as a departure window does, below), and
   `forecast_member` is refused with `no_forecast`, and refused (`400`)
-  when that ensemble or member is not on disk, for a route and a
-  departure window alike.
+  when that ensemble or member is not on disk as the data worker last
+  reported, for a route and a departure window alike; one gone since
+  that report fails its route job, which says so.
   On the test box (Pi 5), 72 h: 5 IFS ENS members downloaded
   350,757,112 B (2026-11-05; arithmetic: about 70 MB a member), and a
   decoded IFS ENS member takes 519,126,603 B on disk (`du -sb`,
@@ -116,9 +117,15 @@ uses [Semantic Versioning](https://semver.org/).
   (it was dropped from memory as if saved), and the next job starts. A
   job file that cannot be read at start-up was skipped silently; it is
   reported now, as is a delete that fails and a saved route that cannot
-  be read back. Jobs, departure windows and ensemble sets save their
-  files one way (`src/plugin/jsonfiles.ts`): a save that fails also says
-  when its partial copy could not be removed.
+  be read back. A job's route results are saved once, when it finishes,
+  in a file of their own (`jobs/results/<id>.json`) that no later save
+  rewrites: before, every save of a window's job read its route back
+  from its file and wrote it again, so a read that failed lost the
+  route. Job files saved before keep loading; their results are moved
+  to their own file at start-up. After a restart a job's event log is
+  the one it finished with. Jobs, departure windows and ensemble sets
+  save their files one way (`src/plugin/jsonfiles.ts`): a save that
+  fails also says when its partial copy could not be removed.
 
 ## [0.2.1] - 2026-11-02
 

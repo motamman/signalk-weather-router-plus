@@ -51,8 +51,28 @@ export interface Job {
 /** A job as the API answers it: the type comes from its schema (response_schema.ts), as does the OpenAPI document. */
 export type { JobPublic };
 
-/** What a finished departure-window job keeps only in its file (see release). */
+/**
+ * A finished job's route results: saved once, when it finishes, in a file of their own (results/<id>.json), and never
+ * written again. The job's own file (<id>.json) holds the rest and is saved at each change; it never holds these, so
+ * no save of the job can lose them. A departure window's or ensemble set's job keeps them only in that file (release).
+ */
 const RESULT_KEYS = ['geojson', 'skRoute', 'skeleton', 'fronts', 'events', 'progress'] as const;
+type JobResults = Pick<Job, (typeof RESULT_KEYS)[number]>;
+
+/** A job's results, as saved: its frontier events are display-only and large, streamed live and not kept. */
+function resultsOf(job: Job): JobResults {
+  const out = {} as Record<string, unknown>;
+  for (const k of RESULT_KEYS) out[k] = job[k];
+  return { ...(out as JobResults), events: job.events.filter(e => e.event !== 'frontier') };
+}
+
+/** A job without its results: what its own file holds. */
+function stateOf(job: Job): Omit<Job, (typeof RESULT_KEYS)[number] | 'saveError'> {
+  const out = { ...job } as Record<string, unknown>;
+  for (const k of RESULT_KEYS) delete out[k];
+  delete out.saveError;
+  return out as Omit<Job, (typeof RESULT_KEYS)[number] | 'saveError'>;
+}
 
 export class JobManager extends EventEmitter {
   private jobs = new Map<string, Job>();
@@ -60,7 +80,10 @@ export class JobManager extends EventEmitter {
   private running: string | null = null;
   /** Jobs whose route results are only on disk (release): full() reads them back. */
   private released = new Set<string>();
+  /** Finished jobs whose results file is not saved yet (a save failed): the next save of the job tries again. */
+  private resultsUnsaved = new Set<string>();
   private readonly dir: string;
+  private readonly resultsDir: string;
 
   constructor(
     dataDir: string,
@@ -71,13 +94,19 @@ export class JobManager extends EventEmitter {
   ) {
     super();
     this.dir = path.join(dataDir, 'jobs');
-    fs.mkdirSync(this.dir, { recursive: true });
+    this.resultsDir = path.join(this.dir, 'results');
+    fs.mkdirSync(this.resultsDir, { recursive: true });
     this.loadPersisted();
   }
 
+  private resultsFile(id: string): string {
+    return path.join(this.resultsDir, `${id}.json`);
+  }
+
   /**
-   * The jobs saved before a restart (loadJsonFiles): one that was queued or running is failed, and a window's or set's
-   * job is released (its results are in the file it was read from).
+   * The jobs saved before a restart (loadJsonFiles): one that was queued or running is failed. A window's or set's job
+   * is released (its results are in their file); any other job's results are read into memory. A job file saved
+   * before the results had a file of their own holds them: they are moved to theirs, once.
    */
   private loadPersisted(): void {
     /** A job as saved: an id, a status and its request; any other file is not restored. */
@@ -89,40 +118,62 @@ export class JobManager extends EventEmitter {
         j.status = 'failed';
         j.error = 'plugin restarted while the job was in progress';
       }
-      j.events = j.events ?? [];
-      j.nextEventId = j.nextEventId ?? j.events.length + 1;
       this.jobs.set(j.id, j);
-      // Its results are in the file it was read from.
-      if (j.windowId || j.ensembleSetId) this.release(j);
+      if (j.events !== undefined) {
+        // Saved with its results inside: they get their file now, and the job's file loses them.
+        j.progress = j.progress ?? [];
+        this.resultsUnsaved.add(j.id);
+        this.persist(j);
+      } else if (j.windowId || j.ensembleSetId) {
+        j.events = [];
+        j.progress = [];
+        this.released.add(j.id);
+      } else {
+        Object.assign(j, this.readResults(j.id) ?? { events: [], progress: [] });
+      }
+      j.nextEventId = j.nextEventId ?? j.events.length + 1;
     }
     this.trim();
   }
 
+  /** A job's saved results, or null when they cannot be read (reported). */
+  private readResults(id: string): JobResults | null {
+    try {
+      return JSON.parse(fs.readFileSync(this.resultsFile(id), 'utf8')) as JobResults;
+    } catch (err) {
+      this.log(`route job ${id}: its route results cannot be read (${(err as Error).message}); answered without them`);
+      return null;
+    }
+  }
+
   /**
-   * Save a finished job's file: how it outlives a restart and, for a departure window's or an ensemble set's job,
-   * where its route results are kept once they leave memory (release, only once they are saved). A save that fails is
-   * the job's to carry: `saveError` says why its file is behind (the API shows it), the failure is reported, its
-   * results stay in memory, and a later change (a publish) saves it again. It never throws into the worker's answer,
-   * a request or the queue.
+   * Save a finished job: its results once (their file is never written again), then its own file, at each change.
+   * A window's or set's job leaves memory (release) only once its results are saved. A save that fails is the job's
+   * to carry: `saveError` says what is behind (the API shows it), the failure is reported, unsaved results stay in
+   * memory, and the next change saves again. It never throws into the worker's answer, a request or the queue.
    */
   private persist(job: Job): void {
     if (job.status === 'queued' || job.status === 'running') return;
     delete job.saveError;
-    // A released job's results are only in its file: written back with it, not lost.
-    const full = this.full(job.id) ?? job;
-    // Frontier events are display-only and large: streamed live, not kept.
-    const why = saveJson(path.join(this.dir, `${job.id}.json`), { ...full, events: full.events.filter(e => e.event !== 'frontier') });
-    if (why) {
-      job.saveError = `its file could not be saved: ${why}`;
-      this.log(`route job ${job.id}: ${job.saveError}`);
-      return;
+    const failed: string[] = [];
+    if (this.resultsUnsaved.has(job.id)) {
+      const why = saveJson(this.resultsFile(job.id), resultsOf(job));
+      if (why) failed.push(`its route results could not be saved: ${why}`);
+      else {
+        this.resultsUnsaved.delete(job.id);
+        if (job.windowId || job.ensembleSetId) this.release(job);
+      }
     }
-    if ((job.windowId || job.ensembleSetId) && !this.released.has(job.id)) this.release(job);
+    const why = saveJson(path.join(this.dir, `${job.id}.json`), stateOf(job));
+    if (why) failed.push(`its file could not be saved: ${why}`);
+    if (!failed.length) return;
+    job.saveError = failed.join('; ');
+    this.log(`route job ${job.id}: ${job.saveError}`);
   }
 
   /**
    * Drop a finished departure-window job's route results from memory once
-   * they are saved in its file (persist). A window keeps up to WINDOW_LIMITS.maxDepartures jobs
+   * they are saved in their file (persist). A window keeps up to WINDOW_LIMITS.maxDepartures jobs
    * and WINDOW_LIMITS.keep windows, all exempt from the keepJobs trim, and
    * once a departure is done the window needs only its metrics (windows.ts),
    * taken from the 'done' event before this runs. Ordinary jobs keep theirs.
@@ -138,23 +189,15 @@ export class JobManager extends EventEmitter {
   }
 
   /**
-   * The job with its route results: a released one's are read from its file,
-   * for this answer only. A file that cannot be read is reported, and the job
-   * is answered without them.
+   * The job with its route results: a released one's are read from their
+   * file, for this answer only. A file that cannot be read is reported, and
+   * the job is answered without them.
    */
   full(id: string): Job | undefined {
     const job = this.jobs.get(id);
     if (!job || !this.released.has(id)) return job;
-    let stored: Partial<Job>;
-    try {
-      stored = JSON.parse(fs.readFileSync(path.join(this.dir, `${id}.json`), 'utf8')) as Partial<Job>;
-    } catch (err) {
-      this.log(`route job ${id}: its file cannot be read (${(err as Error).message}); answered without its route results`);
-      return job;
-    }
-    const out = { ...job } as Record<string, unknown>;
-    for (const k of RESULT_KEYS) if (stored[k] !== undefined) out[k] = stored[k];
-    return out as unknown as Job;
+    const stored = this.readResults(id);
+    return stored ? { ...job, ...stored } : job;
   }
 
   /** Change how many finished jobs are kept (settings) and trim now. */
@@ -335,6 +378,8 @@ export class JobManager extends EventEmitter {
 
   private finish(job: Job): void {
     if (this.running === job.id) this.running = null;
+    // Its results are final now: saved once, with the job.
+    this.resultsUnsaved.add(job.id);
     this.persist(job);
     this.trim();
     this.pump();
@@ -361,9 +406,12 @@ export class JobManager extends EventEmitter {
     this.queue = this.queue.filter(q => q !== id);
     this.jobs.delete(id);
     this.released.delete(id);
-    // A file that cannot be removed stays: the job comes back after a restart.
+    this.resultsUnsaved.delete(id);
+    // A file that cannot be removed stays: the job comes back after a restart; its results, with it.
     const why = removeJson(path.join(this.dir, `${id}.json`));
     if (why) this.log(`route job ${id}: its file could not be deleted (${why}); it comes back after a restart`);
+    const whyResults = removeJson(this.resultsFile(id));
+    if (whyResults) this.log(`route job ${id}: its route results file could not be deleted (${whyResults})`);
     return true;
   }
 

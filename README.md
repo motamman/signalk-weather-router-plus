@@ -2095,7 +2095,9 @@ the SSE endpoint replays.
 
 - The queue holds at most 16 waiting jobs; a 17th is refused with `429`.
 - Finished jobs (`done`, `failed`, `cancelled`) are saved to disk
-  (`jobs/<id>.json` in the plugin data directory) and survive a restart.
+  (`jobs/<id>.json` in the plugin data directory, the route results
+  once in `jobs/results/<id>.json`) and survive a restart. After a
+  restart a job's event log is the one it finished with.
   Only the newest are kept: the `routing.keepJobs` setting ("finished
   routes kept", default 50, 1–500); older ones are deleted. A job file
   that cannot be read at start-up, or does not hold a job, is left as it
@@ -2139,7 +2141,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `no_currents` | boolean | | false | ignore every current source |
 | `wind_model` | string | | `auto` | `auto`: regional wind from signalk-grib-downloader where finer and covering, ECMWF elsewhere; `ecmwf`: ECMWF only |
 | `avoid_areas` | boolean | | true | treat the areas marked on Signal K notes (`properties.avoid.radius_m` around the note's position) as land |
-| `forecast_member` | `{model, member, cycle?}` | | none | route on one ensemble member's forecast instead of the main one (no regional wind): `model` `"ifs-ens"` or `"aifs-ens"` (downloaded, else `400`), `member` 0..50 on disk (0 = the control), `cycle` (yyyymmddHH) refused when it is no longer the ensemble's cycle in use. Refused (`400`) with `no_forecast`, and an ensemble set refuses a route with `no_forecast`. A departure window's route with `forecast_member` is checked the same way before the window starts (`400 {error: "route: forecast_member: …"}`). Ensemble sets send it per member; `summary.forecast_member` names it |
+| `forecast_member` | `{model, member, cycle?}` | | none | route on one ensemble member's forecast instead of the main one (no regional wind): `model` `"ifs-ens"` or `"aifs-ens"` (downloaded, else `400`), `member` 0..50 on disk as the data worker last reported (0 = the control; a member gone since fails the job: "member N is not on disk"), `cycle` (yyyymmddHH) refused when it is no longer the ensemble's cycle in use. Refused (`400`) with `no_forecast`, and an ensemble set refuses a route with `no_forecast`. A departure window's route with `forecast_member` is checked the same way before the window starts (`400 {error: "route: forecast_member: …"}`). Ensemble sets send it per member; `summary.forecast_member` names it |
 | `vessel` | object | | the vessel settings | per-route overrides; absent keys use the settings ([Configuration](#configuration)) |
 | `vessel.name` | string | | | ignored (accepted so older clients still validate); the vessel name is Signal K's `vessels.self.name` |
 | `vessel.motor_speed_ms` | number | m/s | setting (3.087) | 0.01..50 |
@@ -2223,7 +2225,7 @@ found"}`.
 | `error` | string | `failed` / `cancelled` only |
 | `resource_id` | string | Resources API id once published (equal to the job id) |
 | `publish_error` | string | the last publishing error, when publishing failed |
-| `save_error` | string | only while the job's file could not be saved (a full or read-only disk): why. The job is answered from memory but would not survive a restart; a departure window's or ensemble set's job keeps its route in memory until it is saved. The failure is in the Signal K log, and a later save (a publish) clears this |
+| `save_error` | string | only while the job's last save failed (a full or read-only disk): why. The job is answered from memory. When its first save failed, it would not survive a restart; when a later one failed (a publish), a restart brings back the job as last saved, without that change. Its route results are saved once, in a file of their own that no later save rewrites (`jobs/results/<id>.json`); until they are, they stay in memory (a departure window's or ensemble set's job too). The failure is in the Signal K log, and the next save clears this |
 | `links` | object | as in the `202` of `POST /api/routes` |
 
 Progress entry:
@@ -2331,7 +2333,7 @@ LineString `properties`:
 | `stop_count` | number | count | start + waypoints + destination; present with `snaps` |
 | `start_original`, `start_anchor`, `start_snap_distance_m` | `[lon, lat]`, `[lon, lat]`, number | degrees, m | present when the start was moved: the drawn point, where the route starts, and the distance between them |
 | `end_original`, `end_anchor`, `end_snap_distance_m` | as above | | present when the destination was moved |
-| `warnings` | array | | present when any; items `{leg_index, violation, from, to, repaired, detail?}`, `violation` `"leg_crosses_land"`, `"wind_over_limit"`, `"waves_over_limit"` (`detail` the seconds the leg spends over the limit, worked out on the final route, block or avoid), `"detour_motored"` (a depth-check detour that motored on a sailing route; `detail` its motoring time, seconds), `"search_failed"` (the search on an open stretch of a chart-mesh leg failed and the stretch follows the mesh route instead; `from`/`to` the stretch's ends, `detail` the search's reason), `"beat_motored"` (the refined router found no room to tack and motored the leg straight; `detail` its motoring time, seconds) or `"waves_outside_correction"` (the polar set's wave-correction table had no factor for the sea on part of the leg, which was sailed uncorrected; `detail` those seconds), `from`/`to` `[lon, lat]` |
+| `warnings` | array | | present when any; items `{leg_index, violation, from, to, repaired, detail?}`, `violation` `"leg_crosses_land"`, `"wind_over_limit"`, `"waves_over_limit"` (`detail` the seconds the leg spends over the limit, worked out on the final route, block or avoid), `"detour_motored"` (a depth-check detour that motored on a sailing route; `detail` its motoring time, seconds), `"search_failed"` (the search on an open stretch of a chart-mesh leg failed and the stretch follows the mesh route instead; `from`/`to` the stretch's ends, `detail` the search's reason), `"beat_motored"` (the refined router found no room to tack and motored the leg straight; `detail` its motoring time, seconds) `"waves_outside_correction"` (the polar set's wave-correction table had no factor for the sea on part of the leg, which was sailed uncorrected; `detail` those seconds) or `"waves_no_period"` (the forecast had waves but no Tm02, `mp2`, to read that table with on part of the leg, which was sailed uncorrected; `detail` those seconds); a `detail` in seconds is a string of whole seconds; `from`/`to` `[lon, lat]` |
 | `land_crossings` | number | count | present when a warning is `leg_crosses_land` |
 | `has_land_crossing` | boolean | | `true` when `land_crossings` is present |
 | `max_swh_m` | number | m | highest significant wave height at a route point; present when wave data was sampled |

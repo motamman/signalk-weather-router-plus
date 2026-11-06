@@ -48,7 +48,10 @@ export const EnsembleSetRequestSchema = Type.Object({
     description: 'How many of its members on disk to route (the control first where there is one)',
   }),
   main_job_id: Type.Optional(
-    Type.String({ description: "The same route's job on the main forecast, listed with the members for comparison (GET .../main)" })
+    Type.String({
+      description:
+        "The same route's job on the main forecast, listed with the members for comparison: the `main` field of GET /api/ensemble-sets/{id}",
+    })
   ),
 });
 export type EnsembleSetRequest = Static<typeof EnsembleSetRequestSchema>;
