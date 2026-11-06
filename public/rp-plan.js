@@ -388,12 +388,12 @@ function loadSkeleton(id) {
 // the Publish + Delete buttons; changed only by _setRouteOnScreen.
 let _currentRouteJobId = null;
 /**
- * The route on screen becomes job `id` (null: none) named `name`. Every change of it goes through here: a route still
- * being opened (a request on ROUTE_OPEN_CHANNEL) is for the route that was, and is aborted, its body read with it, so
- * no answer for another route is ever drawn.
+ * The route on screen becomes job `id` (null: none) named `name`. Every change of the screen goes through here, and
+ * each one supersedes a route still being opened (a request on ROUTE_OPEN_CHANNEL): it is aborted, its body read with
+ * it, so no answer from before the change is ever drawn, a Clear with nothing on screen included.
  */
 function _setRouteOnScreen(id, name) {
-  if (id !== _currentRouteJobId) abortChannel(ROUTE_OPEN_CHANNEL);
+  abortChannel(ROUTE_OPEN_CHANNEL);
   _currentRouteJobId = id;
   _currentRouteName = name;
 }

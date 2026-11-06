@@ -20,10 +20,7 @@ import * as path from 'node:path';
 import type { IRouter } from 'express';
 import {
   CONFIG_SCHEMA,
-  DEFAULT_MIRROR,
-  ENSEMBLE_DEFAULTS,
-  ENSEMBLE_DOWNLOAD_NOTE,
-  MIRRORS,
+  configChoices,
   resolveConfig,
   rtofsLoadSame,
   smocLoadSame,
@@ -41,7 +38,7 @@ import { siText } from './plugin/unittext';
 import { JobManager, type Job } from './plugin/jobs';
 import { windowNotification, WindowManager, type DepartureWindow } from './plugin/windows';
 import { EnsembleSetManager } from './plugin/ensembles';
-import { ECMWF_MIRROR_LABELS, ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from './data/ecmwf';
+import type { EnsembleModelId } from './data/ecmwf';
 import { registerApi } from './plugin/api';
 import { NotStartedError } from './plugin/errors';
 import { TileService, TileStore, tileGenerationKeys, tileGroup } from './plugin/tiles';
@@ -1570,14 +1567,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         windows: windows ? { running: windows.running } : null,
         ensemble_sets: ensembleSets ? { running: ensembleSets.running } : null,
         // What the plugin config offers (config.ts), for the configuration panel (public/remoteEntry.js) to show.
-        config_choices: {
-          mirrors: MIRRORS.map(id => ({ id, label: ECMWF_MIRROR_LABELS[id] })),
-          mirror_default: DEFAULT_MIRROR,
-          ensemble_note: ENSEMBLE_DOWNLOAD_NOTE,
-          ensembles: ENSEMBLE_MODELS.map(id => ({ id, name: ENSEMBLES[id].name })),
-          ensemble_members: ENSEMBLE_MEMBER_CHOICES,
-          ensemble_defaults: ENSEMBLE_DEFAULTS,
-        },
+        config_choices: configChoices(),
         // The name, draught and air draft are Signal K's (vessels.self.name, design.*), not plugin settings.
         vessel: config?.vessel ? { ...config.vessel, ...selfDesign(), name: selfName() } : undefined,
         polar_source: config?.polarSource,

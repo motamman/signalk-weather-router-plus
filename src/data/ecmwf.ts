@@ -94,8 +94,16 @@ export const ENSEMBLES: Record<EnsembleModelId, EnsembleModel> = {
   },
 };
 
-/** The routing fields an ensemble member holds, by stream (the main forecast's base fields less the pressure). */
+/** The routing fields an ensemble member holds, by stream (the main forecast's base fields less the pressure): required. */
 export const ENSEMBLE_PARAMS = { enfo: ['10u', '10v'], waef: ['swh', 'mwp', 'mwd'] } as const;
+
+/**
+ * The optional field an ensemble member holds when its index has it, never required, as the main forecast's
+ * OPTIONAL_WAVE_PARAMS: mp2, the mean zero-crossing period Tm02 the wave correction reads. IFS ENS publishes it, AIFS
+ * ENS does not (data.ecmwf.int, 2026-11-06, the 00z run's +24 h wave indexes); a member without it routes its waves
+ * uncorrected (engine/smoother.ts waves_no_period). pp1d is not read by the router, so not fetched for every member.
+ */
+export const ENSEMBLE_OPTIONAL_PARAMS = { enfo: [], waef: ['mp2'] } as const;
 
 /** The number of members a setting may ask for: 5 to 50 in fives. */
 export const ENSEMBLE_MEMBER_CHOICES = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50] as const;

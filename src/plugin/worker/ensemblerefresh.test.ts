@@ -31,7 +31,7 @@ function state(root: string, models: EnsembleModelId[]): WorkerState {
   return {
     role: 'data',
     cacheRoot: root,
-    config: { forecast: { ensemble: { models, members: 5 }, horizonS: 6 * 3600, mirror: 'ecmwf' } },
+    config: { forecast: { ensemble: models.length ? { models, members: 5 } : null, horizonS: 6 * 3600, mirror: 'ecmwf' } },
     client: {},
     run: { cycleTime: CYCLE },
     ensembles: {},

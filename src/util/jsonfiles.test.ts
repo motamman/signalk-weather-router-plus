@@ -54,7 +54,9 @@ test('loadJsonFiles: the records, and each folder or file that cannot be read, o
     fs.mkdirSync(path.join(dir, 'folder.json'));
     const logged: string[] = [];
     const got = loadJsonFiles(dir, NOUN, isThing, m => logged.push(m));
-    assert.deepEqual(got, [{ id: 'good' }]);
+    assert.deepEqual(got.records, [{ id: 'good' }]);
+    assert.deepEqual(got.leftAsIs.sort(), ['broken', 'folder', 'other'], 'what is there but not restored is named');
+    assert.equal(got.folderRead, true);
     assert.equal(logged.length, 3);
     assert.ok(logged.some(m => /^thing file broken\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
     assert.ok(logged.some(m => /^thing file folder\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
@@ -63,7 +65,11 @@ test('loadJsonFiles: the records, and each folder or file that cannot be read, o
     const none: string[] = [];
     assert.deepEqual(
       loadJsonFiles(path.join(dir, 'gone'), NOUN, isThing, m => none.push(m)),
-      []
+      {
+        records: [],
+        leftAsIs: [],
+        folderRead: false,
+      }
     );
     assert.match(none[0], /^things: .* cannot be read \(.*\); none restored$/);
   } finally {

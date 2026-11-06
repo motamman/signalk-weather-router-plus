@@ -529,7 +529,7 @@ var signalk_weather_router_plus = (function () {
     // What the plugin config offers (config.ts, sent in the status): until the status answers, the mirror shows as set
     // and the ensemble choices are not shown.
     var choices = status && status.config_choices ? status.config_choices : null;
-    var mirrorNow = get(['forecast', 'mirror'], choices ? choices.mirror_default : '');
+    var mirrorNow = choices ? get(['forecast', 'mirror'], choices.mirror_default) : null;
     var ensDefaults = choices ? choices.ensemble_defaults : null;
     var ensembleOn = ensDefaults ? !!get(['forecast', 'ensemble', 'enabled'], ensDefaults.enabled) : false;
     var ensembleStatus = status && Array.isArray(status.ensembles) ? status.ensembles : [];
@@ -541,11 +541,11 @@ var signalk_weather_router_plus = (function () {
       h('div', { className: 'mb-2 small' }, fc && fc.cycle
         ? statusDot('ok', 'Last fetched: the ' + String(fc.cycle).slice(0, 16).replace('T', ' ') + 'Z run, loaded ' + (fc.loaded_at ? String(fc.loaded_at).slice(0, 16).replace('T', ' ') + 'Z' : '') + (fc.model ? ' (' + fc.model + ')' : ''))
         : statusDot('off', status && status.forecast_loading ? 'Fetching a forecast now.' : 'No forecast loaded yet.')),
-      row('Mirror',
+      choices ? row('Mirror',
         h('select', { className: 'form-select form-control', style: { maxWidth: 320 }, value: mirrorNow,
           onChange: function (e) { set(['forecast', 'mirror'], e.target.value); } },
-          (choices ? choices.mirrors : [{ id: mirrorNow, label: mirrorNow }]).map(function (m) { return h('option', { key: m.id, value: m.id }, m.label); })),
-        'Changes which server is contacted every six hours. Nothing else.'),
+          choices.mirrors.map(function (m) { return h('option', { key: m.id, value: m.id }, m.label); })),
+        'Changes which server is contacted every six hours. Nothing else.') : null,
       ensembleStatus.length ? h('div', { className: 'mb-2 small' }, ensembleStatus.map(function (e) {
         var text = e.name + ': ' + (e.cycle ? e.members.length + ' members of the ' + String(e.cycle).slice(0, 16).replace('T', ' ') + 'Z run, ' + (e.bytes === null ? MISSING : gb(e.bytes)) + ' on disk' : 'none on disk yet')
           + (e.loading ? '; downloading the ' + String(e.loading.cycle).slice(0, 16).replace('T', ' ') + 'Z run' + (e.loading.total ? ' (' + e.loading.done + ' of ' + e.loading.total + ')' : '') : '')

@@ -68,6 +68,23 @@ export type { JobPublic };
 const RESULT_KEYS = ['geojson', 'skRoute', 'skeleton', 'fronts', 'events', 'progress'] as const;
 type JobResults = Pick<Job, (typeof RESULT_KEYS)[number]>;
 
+/** A route as routeformat.ts writes it: a feature collection whose features (the line first, then the points) carry properties. */
+function holdsRoute(v: unknown): boolean {
+  const features = (v as { features?: unknown } | null)?.features;
+  if (!Array.isArray(features)) return false;
+  const shaped = features.every(f => {
+    const g = f as { geometry?: { type?: unknown }; properties?: unknown } | null;
+    return !!g && typeof g.geometry?.type === 'string' && !!g.properties && typeof g.properties === 'object';
+  });
+  return shaped && features.some(f => (f as { geometry: { type: string } }).geometry.type === 'LineString');
+}
+
+/** Results as saved (resultsOf): the events and progress, and for a done job its route. */
+function holdsResults(v: unknown, done: boolean): v is JobResults {
+  const r = v as JobResults | null;
+  return !!r && typeof r === 'object' && Array.isArray(r.events) && Array.isArray(r.progress) && (!done || holdsRoute(r.geojson));
+}
+
 /** A job's results, as saved: its frontier events are display-only and large, streamed live and not kept. */
 function resultsOf(job: Job): JobResults {
   const out = {} as Record<string, unknown>;
@@ -118,11 +135,18 @@ export class JobManager extends EventEmitter {
    * before the results had a file of their own holds them: they are moved to theirs, once.
    */
   private loadPersisted(): void {
-    /** A job as saved: an id, a status and its request; any other file is not restored. */
-    const isJob = (v: unknown): v is Job =>
-      !!v && typeof v === 'object' && typeof (v as Job).id === 'string' && typeof (v as Job).status === 'string' && !!(v as Job).request;
+    /**
+     * A job as saved: an id, a status and its request; a done one its summary, and, when its results are still inside
+     * (the layout before they had a file of their own), those as holdsResults wants them. Any other file is not restored.
+     */
+    const isJob = (v: unknown): v is Job => {
+      const j = v as Job | null;
+      if (!j || typeof j !== 'object' || typeof j.id !== 'string' || typeof j.status !== 'string' || !j.request) return false;
+      if (j.status === 'done' && (!j.summary || typeof j.summary !== 'object')) return false;
+      return j.events === undefined || holdsResults(j, j.status === 'done');
+    };
     const noun = { one: 'route job', a: 'a route job', many: 'route jobs' };
-    for (const j of loadJsonFiles(this.dir, noun, isJob, this.log)) {
+    for (const j of loadJsonFiles(this.dir, noun, isJob, this.log).records) {
       if (j.status === 'running' || j.status === 'queued') {
         j.status = 'failed';
         j.error = 'plugin restarted while the job was in progress';
@@ -130,7 +154,6 @@ export class JobManager extends EventEmitter {
       this.jobs.set(j.id, j);
       if (j.events !== undefined) {
         // Saved with its results inside: they get their file now, and the job's file loses them.
-        j.progress = j.progress ?? [];
         this.resultsUnsaved.add(j.id);
         this.persist(j);
       } else if (j.windowId || j.ensembleSetId) {
@@ -138,21 +161,25 @@ export class JobManager extends EventEmitter {
         j.progress = [];
         this.released.add(j.id);
       } else {
-        Object.assign(j, this.readResults(j.id) ?? { events: [], progress: [] });
+        Object.assign(j, this.readResults(j) ?? { events: [], progress: [] });
       }
       j.nextEventId = j.nextEventId ?? j.events.length + 1;
     }
     this.trim();
   }
 
-  /** A job's saved results, or null when they cannot be read (reported). */
-  private readResults(id: string): JobResults | null {
+  /** A job's saved results, or null when their file cannot be read, or does not hold results (reported). */
+  private readResults(job: Job): JobResults | null {
+    let v: unknown;
     try {
-      return JSON.parse(fs.readFileSync(this.resultsFile(id), 'utf8')) as JobResults;
+      v = JSON.parse(fs.readFileSync(this.resultsFile(job.id), 'utf8'));
     } catch (err) {
-      this.log(`route job ${id}: its route results cannot be read (${(err as Error).message}); answered without them`);
+      this.log(`route job ${job.id}: its route results cannot be read (${(err as Error).message}); answered without them`);
       return null;
     }
+    if (holdsResults(v, job.status === 'done')) return v;
+    this.log(`route job ${job.id}: its route results file does not hold route results; answered without them`);
+    return null;
   }
 
   /**
@@ -208,7 +235,7 @@ export class JobManager extends EventEmitter {
   full(id: string): Job | undefined {
     const job = this.jobs.get(id);
     if (!job || !this.released.has(id)) return job;
-    const stored = this.readResults(id);
+    const stored = this.readResults(job);
     return stored ? { ...job, ...stored } : job;
   }
 
@@ -425,9 +452,12 @@ export class JobManager extends EventEmitter {
     this.jobs.delete(id);
     this.released.delete(id);
     this.resultsUnsaved.delete(id);
-    // A file that cannot be removed stays: the job comes back after a restart; its results, with it.
+    // A job file that cannot be removed stays, and its results with it: the job comes back after a restart, whole.
     const why = removeJson(path.join(this.dir, `${id}.json`));
-    if (why) this.log(`route job ${id}: its file could not be deleted (${why}); it comes back after a restart`);
+    if (why) {
+      this.log(`route job ${id}: its file could not be deleted (${why}); it comes back after a restart, with its route results`);
+      return true;
+    }
     const whyResults = removeJson(this.resultsFile(id));
     if (whyResults) this.log(`route job ${id}: its route results file could not be deleted (${whyResults})`);
     return true;

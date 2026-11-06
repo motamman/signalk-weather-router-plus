@@ -342,10 +342,13 @@ export abstract class JobSeries<S extends SeriesRecord> {
 
   /**
    * The series saved before a restart. One that was running ends failed: its job in progress the job manager has
-   * already failed, its items not started are cancelled. Route jobs of series that are gone are deleted.
+   * already failed, its items not started are cancelled. Route jobs of series that are gone are deleted: gone is no
+   * file at all. A series whose file is there but refused (reported, left as it is) keeps its jobs, and a folder that
+   * cannot be listed is unknown: nothing is deleted then.
    */
   private loadPersisted(): void {
-    for (const s of loadJsonFiles(this.dir, this.kind.noun, (v: unknown): v is S => this.holds(v), this.deps.log)) {
+    const loaded = loadJsonFiles(this.dir, this.kind.noun, (v: unknown): v is S => this.holds(v), this.deps.log);
+    for (const s of loaded.records) {
       this.series.set(s.id, s);
       this.items(s).forEach((d, k) => {
         if (!d.job_id) return;
@@ -369,8 +372,13 @@ export abstract class JobSeries<S extends SeriesRecord> {
         this.persist(s);
       }
     }
-    const known = new Set(this.byJob.keys());
-    for (const j of this.jobs.list(Number.MAX_SAFE_INTEGER, true)) if (this.seriesOfJob(j) && !known.has(j.id)) this.jobs.delete(j.id);
+    if (loaded.folderRead) {
+      const onDisk = new Set([...loaded.records.map(s => s.id), ...loaded.leftAsIs]);
+      for (const j of this.jobs.list(Number.MAX_SAFE_INTEGER, true)) {
+        const of = this.seriesOfJob(j);
+        if (of !== undefined && !onDisk.has(of)) this.jobs.delete(j.id);
+      }
+    }
     this.trim();
   }
 }

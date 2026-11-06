@@ -12,9 +12,12 @@ uses [Semantic Versioning](https://semver.org/).
   Optional and off by default (plugin configuration, *Download
   ensembles*: which ensembles, at least one, and 5 to 50 members). Each
   cycle, after the forecast, the routing fields (`10u`, `10v`, `swh`,
-  `mwp`, `mwd`) of the chosen members are downloaded to the forecast's
-  horizon and decoded to disk, one run per member, each message checked
-  to be its member (GRIB2 template 4.1, now read). With *Route each
+  `mwp`, `mwd`, and the wave period `mp2` where the ensemble publishes
+  it: IFS ENS does, AIFS ENS does not, checked 2026-11-06) of the chosen
+  members are downloaded to the forecast's horizon and decoded to disk,
+  one run per member, each message checked to be its member (GRIB2
+  template 4.1, now read). A member without `mp2` routes its waves
+  uncorrected, with a `waves_no_period` warning. With *Route each
   ensemble member too* (Route → Plan, with the ensemble and the members),
   Find Route computes the route on the main forecast and an ensemble set
   computes the same request as its own route search on each member's
@@ -32,16 +35,20 @@ uses [Semantic Versioning](https://semver.org/).
   why. The data worker alone records each ensemble's cycle in use
   (`current.json`), from the members complete on disk; a record it
   cannot read, or cannot write (the cycle is then not in use), is
-  reported in the log and the ensemble's status. A set whose file cannot be saved
-  carries `save_error` (as a departure window does, below), and
-  `forecast_member` is refused with `no_forecast`, and refused (`400`)
-  when that ensemble or member is not on disk as the data worker last
-  reported, for a route and a departure window alike; one gone since
-  that report fails its route job, which says so.
+  reported in the log and the ensemble's status. A set whose file
+  cannot be saved carries `save_error` (as a departure window does,
+  below), and `forecast_member` is refused with `no_forecast`, and
+  refused (`400`) when that ensemble or member is not on disk as the
+  data worker last reported, for a route and a departure window alike;
+  one gone since that report fails its route job, which says so. Off,
+  nothing else of the ensemble setting is read or checked. The owner's
+  Refresh, or a route, during a pass a background round started makes
+  it the owner's: a metered or lost connection no longer stops it.
   On the test box (Pi 5), 72 h: 5 IFS ENS members downloaded
   350,757,112 B (2026-11-05; arithmetic: about 70 MB a member), and a
   decoded IFS ENS member takes 519,126,603 B on disk (`du -sb`,
-  2026-11-06, the 06Z run).
+  2026-11-06, the 06Z run); both with the five required fields, before
+  `mp2` made a sixth for an IFS ENS member (not measured).
 - **Polar sets from Polar Management (polar-format 2).** A `polarSet`
   2.0.0 active in Polar Management is routed on its `best` table; a v1
   `polarTable` routes as before. A null cell (no sailing solution) has no
@@ -152,7 +159,10 @@ uses [Semantic Versioning](https://semver.org/).
   file was never saved; a job none of whose saves succeeded is lost. Job
   files saved before keep loading; their results are moved to their own
   file at start-up. After a restart a job's event log is the one it
-  finished with. Jobs, departure windows and ensemble sets
+  finished with. A departure window's or ensemble set's jobs are deleted
+  at start-up only when the window or set has no file at all; one whose
+  file is refused keeps its jobs, and a jobs folder that cannot be
+  listed keeps every job. Jobs, departure windows and ensemble sets
   save their files one way (`src/plugin/jsonfiles.ts`): a save that
   fails also says when its partial copy could not be removed.
 

@@ -47,33 +47,51 @@ export interface RecordNoun {
   many: string;
 }
 
+/** What a folder of records held (loadJsonFiles). */
+export interface LoadedRecords<T> {
+  /** The records restored. */
+  records: T[];
+  /** The names (without .json) of the files left as they are: not readable, or not holding such a record. */
+  leftAsIs: string[];
+  /** The folder could be listed: when not, nothing in it is known, restored or not. */
+  folderRead: boolean;
+}
+
 /**
  * The records saved in `dir` (its .json files), each as `holds` recognises it. A folder that cannot be read, a file
  * that cannot be read or parsed, and one that does not hold such a record are reported through `log` and left as
- * they are; the others are returned.
+ * they are, and the answer names them: what belongs to a record left as it is must be kept too.
  */
-export function loadJsonFiles<T>(dir: string, noun: RecordNoun, holds: (v: unknown) => v is T, log: (msg: string) => void): T[] {
+export function loadJsonFiles<T>(
+  dir: string,
+  noun: RecordNoun,
+  holds: (v: unknown) => v is T,
+  log: (msg: string) => void
+): LoadedRecords<T> {
   let files: string[];
   try {
     files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
   } catch (err) {
     log(`${noun.many}: ${dir} cannot be read (${(err as Error).message}); none restored`);
-    return [];
+    return { records: [], leftAsIs: [], folderRead: false };
   }
-  const out: T[] = [];
+  const records: T[] = [];
+  const leftAsIs: string[] = [];
   for (const f of files) {
     let v: unknown;
     try {
       v = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
     } catch (err) {
       log(`${noun.one} file ${f} cannot be read (${(err as Error).message}); left as it is, not restored`);
+      leftAsIs.push(f.slice(0, -'.json'.length));
       continue;
     }
     if (!holds(v)) {
       log(`${noun.one} file ${f} does not hold ${noun.a}; left as it is, not restored`);
+      leftAsIs.push(f.slice(0, -'.json'.length));
       continue;
     }
-    out.push(v);
+    records.push(v);
   }
-  return out;
+  return { records, leftAsIs, folderRead: true };
 }

@@ -148,9 +148,16 @@ if (role === 'data') setNetworkObserver((state, reason) => noteNetwork(st, state
  */
 let ensemblePass: Promise<void> | null = null;
 let ensembleUserPass = false;
-/** Start the ensemble pass (refreshEnsembles) unless one is under way; `user`: the owner asked. Its end sends the status. */
+/**
+ * Start the ensemble pass (refreshEnsembles) unless one is under way; `user`: the owner asked (Refresh, a route), and
+ * the pass is not stopped by a hold (internet-hold below). The owner asking while a background pass runs makes that
+ * pass the owner's: it is the download they asked for. Its end sends the status.
+ */
 function startEnsembles(st: WorkerState, offline: string | null, held: () => string | null, user: boolean): void {
-  if (ensemblePass) return;
+  if (ensemblePass) {
+    if (user) ensembleUserPass = true;
+    return;
+  }
   ensembleUserPass = user;
   const changed = (): void => st.send({ type: 'data-status', status: dataStatus(st) });
   ensemblePass = refreshEnsembles(st, offline, held, changed)

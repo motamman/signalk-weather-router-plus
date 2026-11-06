@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { cycleFor, type EcmwfClient, ENSEMBLE_PARAMS, ENSEMBLES, type IndexRecord, isGribFile } from './ecmwf';
+import { cycleFor, type EcmwfClient, ENSEMBLE_OPTIONAL_PARAMS, ENSEMBLE_PARAMS, ENSEMBLES, type IndexRecord, isGribFile } from './ecmwf';
 import { dirBytes } from './decoded';
 import { GLOBAL_CELLS } from './loader';
 import {
@@ -115,14 +115,22 @@ test('prune: keeps the members wanted in the cycles kept and the pending GRIB ca
  * A fake client for IFS ENS member 1: index records of 10 bytes for the steps in `published` (none for the others),
  * and every field it is asked for written to the cache as a GRIB-headed message; `fetched` counts those.
  */
-function fakeClient(published: number[]): { client: EcmwfClient; indexed: number[]; fetched: () => number } {
+function fakeClient(
+  published: number[],
+  /** The optional wave field in the wave indexes too (IFS ENS publishes mp2; AIFS ENS does not). */
+  withOptional = false
+): { client: EcmwfClient; indexed: number[]; fetched: () => number } {
   const indexed: number[] = [];
   let fetched = 0;
   const client = {
     fetchEnsembleIndex: async (_c: unknown, _m: unknown, stream: string, _k: string, step: number) => {
       indexed.push(step);
       if (!published.includes(step)) return null;
-      return ENSEMBLE_PARAMS[stream as keyof typeof ENSEMBLE_PARAMS].map((param, i) => ({
+      const params = [
+        ...ENSEMBLE_PARAMS[stream as keyof typeof ENSEMBLE_PARAMS],
+        ...(withOptional ? ENSEMBLE_OPTIONAL_PARAMS[stream as keyof typeof ENSEMBLE_OPTIONAL_PARAMS] : []),
+      ];
+      return params.map((param, i) => ({
         param,
         step: String(step),
         levtype: 'sfc',
@@ -231,6 +239,48 @@ test('the disk check is asked about exactly what the pass writes, and a no stops
     assert.match(r.error ?? '', /ECMWF IFS ENS 2026110500: not downloaded: no room/);
     assert.equal(fetched(), 0);
     assert.deepEqual(r.members, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the optional wave field is planned, fetched and counted only when the index has it, as IFS ENS does and AIFS ENS does not', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
+  try {
+    const run = async (withOptional: boolean): Promise<{ asked: number[]; fetched: number; error?: string }> => {
+      const { client, fetched } = fakeClient([0, 3, 6], withOptional);
+      const asked: number[] = [];
+      const [r] = await runEnsembleCycle(client, {
+        cacheRoot: root,
+        cycle: cycleFor(new Date('2026-11-05T00:00:00Z')),
+        horizonS: 6 * 3600,
+        models: ['ifs-ens'],
+        members: 1,
+        log: () => undefined,
+        diskCheck: bytes => {
+          asked.push(bytes);
+          return 'no room';
+        },
+      });
+      return { asked, fetched: fetched(), error: r.error };
+    };
+    // Without mp2 in the indexes: the five required fields, nothing else looked for.
+    const without = await run(false);
+    assert.deepEqual(without.asked, [5 * 3 * 10 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
+    // With it: a sixth field per step is fetched and decoded for the member.
+    const withIt = await run(true);
+    assert.deepEqual(withIt.asked, [6 * 3 * 10 + 1 * 6 * 3 * GLOBAL_CELLS * 4]);
+    assert.equal(withIt.fetched, 0, 'stopped by the disk check before any message');
+    // A member whose required fields are all cached still has its index read, so an optional field it lacks is fetched.
+    for (const step of [0, 3, 6])
+      for (const [stream, params] of Object.entries(ENSEMBLE_PARAMS))
+        for (const p of params) {
+          const f = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, stream, step, p);
+          fs.mkdirSync(path.dirname(f), { recursive: true });
+          fs.writeFileSync(f, 'GRIB------');
+        }
+    const cachedRequired = await run(true);
+    assert.deepEqual(cachedRequired.asked, [1 * 3 * 10 + 1 * 6 * 3 * GLOBAL_CELLS * 4], 'only mp2 is still to fetch');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

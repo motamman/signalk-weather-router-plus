@@ -548,3 +548,36 @@ test('a window file that cannot be read at start-up is reported and left as it i
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a restart: the jobs of a window whose file is refused are kept; only a window with no file at all loses its jobs', () => {
+  const h = harness();
+  const mk = (): DepartureWindow => {
+    const w = h.windows.create({ route: ROUTE, from: new Date(T0).toISOString(), to: new Date(T0).toISOString(), step_s: 6 * 3600 });
+    h.finish();
+    return w;
+  };
+  const refused = mk();
+  const gone = mk();
+  const kept = mk();
+  h.windows.close();
+  const file = (w: DepartureWindow): string => path.join(h.dir, 'windows', `${w.id}.json`);
+  fs.writeFileSync(file(refused), '{"id": "' + refused.id + '", "depa');
+  fs.unlinkSync(file(gone));
+  const logged: string[] = [];
+  const jobs = new JobManager(h.dir, 50, '/plugins/wrp', m => assert.fail(`unexpected log: ${m}`));
+  const windows = new WindowManager(jobs, h.dir, {
+    cancelRunning: () => undefined,
+    forecastValidToMs: () => null,
+    log: m => logged.push(m),
+  });
+  assert.equal(windows.get(refused.id), undefined, 'not restored');
+  assert.ok(logged.some(m => m.startsWith(`departure window file ${refused.id}.json cannot be read (`)));
+  const jobsOf = (w: DepartureWindow): Job[] => jobs.list(100, true).filter(j => j.windowId === w.id);
+  assert.equal(jobsOf(refused).length, 1, 'its file is there: its job stays, with its route');
+  assert.deepEqual(jobs.full(jobsOf(refused)[0].id)?.geojson?.type, 'FeatureCollection');
+  assert.equal(jobsOf(gone).length, 0, 'no file: an orphan, deleted');
+  assert.equal(jobsOf(kept).length, 1);
+  assert.ok(windows.get(kept.id));
+  windows.close();
+  fs.rmSync(h.dir, { recursive: true, force: true });
+});

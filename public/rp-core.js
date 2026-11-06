@@ -419,6 +419,9 @@ function _rateNote(ok) {
 
 // The single funnel for same-origin app fetches. `channel` makes a new
 // request abort the prior one on that channel (pan/zoom supersession).
+// The channel owns a request until the next one on it, or abortChannel:
+// not only until its headers arrive, so that an abort reaches a body
+// still being read (a Response's json() rejects with AbortError then).
 // 400 from an overlay endpoint ("no wave data in the forecast", "skt
 // not loaded") is a routine answer, not a server failure: it must not
 // wind up the backoff for every other caller.
@@ -470,7 +473,6 @@ export async function authFetch(url, opts, channel) {
   }
   finally {
     AuthGate.untrack(ctrl);
-    if (channel && _authChannels.get(channel) === ctrl) _authChannels.delete(channel);
   }
 }
 

@@ -26,6 +26,7 @@ import {
   type Cycle,
   cycleFor,
   type EcmwfClient,
+  ENSEMBLE_OPTIONAL_PARAMS,
   ENSEMBLE_PARAMS,
   ENSEMBLES,
   type EnsembleModel,
@@ -41,8 +42,14 @@ import { saveJson } from '../util/jsonfiles';
 export const ENSEMBLE_GRIB_DIR = 'ecmwf-ens';
 export const ENSEMBLE_DECODED_DIR = 'forecast-ens';
 
-/** The fields of a member, in the order they are stored. */
+/** The required fields of a member, in the order they are stored (the optional ones are in each step's own list). */
 export const ENSEMBLE_FIELDS: string[] = [...ENSEMBLE_PARAMS.enfo, ...ENSEMBLE_PARAMS.waef];
+/** The streams of a member's fields, each with its required and its optional parameters. */
+const ENSEMBLE_STREAMS = (Object.keys(ENSEMBLE_PARAMS) as (keyof typeof ENSEMBLE_PARAMS)[]).map(stream => ({
+  stream,
+  params: ENSEMBLE_PARAMS[stream] as readonly string[],
+  optional: ENSEMBLE_OPTIONAL_PARAMS[stream] as readonly string[],
+}));
 
 /** A member's folder: m00 the control, m01–m50 the perturbed members. */
 export function memberDir(member: number): string {
@@ -72,19 +79,28 @@ export function ensembleSteps(model: EnsembleModel, cycle: Pick<Cycle, 'maxStep'
 /**
  * The index records of one member's fields in a step file: by parameter and member number; the control file's records
  * carry no number (ecmwf.ts ENSEMBLES), so a control is any record there. One record per field, or an error naming
- * what is missing or doubled.
+ * what is missing or doubled; an `optional` field the index does not have is left out, not an error.
  */
-export function memberRecords(idx: IndexRecord[], member: number, control: boolean, params: readonly string[]): IndexRecord[] {
-  return params.map(p => {
+export function memberRecords(
+  idx: IndexRecord[],
+  member: number,
+  control: boolean,
+  params: readonly string[],
+  optional = false
+): IndexRecord[] {
+  const out: IndexRecord[] = [];
+  for (const p of params) {
     const recs = idx.filter(
       r =>
         r.param === p &&
         (r.levtype === undefined || r.levtype === 'sfc') &&
         (control ? r.number === undefined : Number(r.number) === member)
     );
+    if (recs.length === 0 && optional) continue;
     if (recs.length !== 1) throw new Error(`${control ? 'the control' : `member ${member}`}: ${recs.length} records of ${p} in the index`);
-    return recs[0];
-  });
+    out.push(recs[0]);
+  }
+  return out;
 }
 
 /** Where member `member`'s `param` at `step` is cached. */
@@ -303,7 +319,8 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
  * anything is fetched (what is cached stays for the next round; nothing is decoded short). A cycle not finished yet
  * costs one index request per stream and file each round, not the whole ladder's. The indexes give the exact length
  * of every message still to fetch: with the members' decoded runs, that is what the disk check (o.diskCheck) is asked
- * about. Then the messages are fetched step by step.
+ * about. Then the messages are fetched step by step. The optional fields (ENSEMBLE_OPTIONAL_PARAMS) are fetched for
+ * a member when the index has them, and counted in what the pass writes only then.
  */
 async function downloadModel(
   client: EcmwfClient,
@@ -313,7 +330,10 @@ async function downloadModel(
   members: number[],
   ladder: number[]
 ): Promise<{ steps: number[]; downloaded: number; bytes: number }> {
-  /** The members a step file holds that still have a message to fetch from it (none: every one is cached). */
+  /**
+   * The members a step file holds that still have a message to fetch from it (none: every required and optional field
+   * is cached; whether an optional one exists is the index's to say, so it is read).
+   */
   const toGet = (file: EnsembleModel['files'][number], stream: string, params: readonly string[], step: number): number[] => {
     const inFile = members.filter(m => (m === 0) === file.control);
     const cachedAll = inFile.every(m => params.every(p => isGribFile(ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, p))));
@@ -323,9 +343,9 @@ async function downloadModel(
   // here, without reading every index before it. The indexes read here serve the full read below.
   const read = new Map<string, IndexRecord[]>();
   const last = ladder[ladder.length - 1];
-  for (const [stream, params] of Object.entries(ENSEMBLE_PARAMS)) {
+  for (const { stream, params, optional } of ENSEMBLE_STREAMS) {
     for (const file of model.files) {
-      if (!toGet(file, stream, params, last).length) continue;
+      if (!toGet(file, stream, [...params, ...optional], last).length) continue;
       const idx = await client.fetchEnsembleIndex(o.cycle, model, stream, file.kind, last);
       if (!idx)
         throw new Error(
@@ -340,10 +360,12 @@ async function downloadModel(
   // the exact size of what is still to fetch, for the disk check.
   const plan: { step: number; stream: string; kind: string; recs: { rec: IndexRecord; path: string }[] }[] = [];
   let toFetch = 0;
+  // The optional fields the indexes have: a member's decoded run holds them too (what the pass writes).
+  const optionalPresent = new Set<string>();
   for (const step of ladder) {
-    for (const [stream, params] of Object.entries(ENSEMBLE_PARAMS)) {
+    for (const { stream, params, optional } of ENSEMBLE_STREAMS) {
       for (const file of model.files) {
-        const inFile = toGet(file, stream, params, step);
+        const inFile = toGet(file, stream, [...params, ...optional], step);
         if (!inFile.length) continue;
         const known = read.get(`${stream}/${file.kind}/${step}`);
         const idx = known !== undefined ? known : await client.fetchEnsembleIndex(o.cycle, model, stream, file.kind, step);
@@ -355,21 +377,22 @@ async function downloadModel(
               : `${model.name} ${name}: +${step} h ${stream} is not published yet (to +${before} h so far); retried next round`
           );
         }
-        const recs = inFile
-          .flatMap(m =>
-            memberRecords(idx, m, file.control, params).map(rec => ({
-              rec,
-              path: ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, rec.param),
-            }))
-          )
-          .filter(r => !isGribFile(r.path));
+        const all = inFile.flatMap(m =>
+          [...memberRecords(idx, m, file.control, params), ...memberRecords(idx, m, file.control, optional, true)].map(rec => ({
+            rec,
+            path: ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, rec.param),
+          }))
+        );
+        for (const r of all) if (optional.includes(r.rec.param)) optionalPresent.add(r.rec.param);
+        const recs = all.filter(r => !isGribFile(r.path));
         for (const r of recs) toFetch += r.rec._length;
         plan.push({ step, stream, kind: file.kind, recs });
       }
     }
   }
-  // What the pass writes: the messages to fetch, and each member's decoded run (a global float32 per field and step).
-  const decoded = members.length * ENSEMBLE_FIELDS.length * ladder.length * GLOBAL_CELLS * 4;
+  // What the pass writes: the messages to fetch, and each member's decoded run (a global float32 per field and step,
+  // the optional fields the indexes have included).
+  const decoded = members.length * (ENSEMBLE_FIELDS.length + optionalPresent.size) * ladder.length * GLOBAL_CELLS * 4;
   const short = o.diskCheck(toFetch + decoded);
   if (short) throw new Error(`${model.name} ${name}: not downloaded: ${short}`);
   let downloaded = 0;
@@ -392,7 +415,9 @@ async function downloadModel(
 /**
  * One member decoded from the cache into its decoded run, one step at a time through one reused step block, as the
  * main forecast's streaming decode (loader.ts decodeForecastToDisk). Every message must be that member's
- * (grib2.ts product.ensemble), or the member is refused.
+ * (grib2.ts product.ensemble), or the member is refused. An optional field (ENSEMBLE_OPTIONAL_PARAMS) is built into
+ * the step on its own, from its cached message when there is one, so nothing wrong with it stops the member: it is
+ * left out of that step and reported.
  */
 function decodeMember(
   o: EnsembleCycleOptions,
@@ -405,25 +430,39 @@ function decodeMember(
   if (!steps.length) throw new Error('no steps downloaded');
   const t = Date.now();
   const writer = new DecodedRunWriter(path.join(o.cacheRoot, ENSEMBLE_DECODED_DIR, model.id, memberDir(member)), name);
-  const slab = new FloatSlab(ENSEMBLE_FIELDS.length * GLOBAL_CELLS);
+  const optionalCount = ENSEMBLE_STREAMS.reduce((n, s) => n + s.optional.length, 0);
+  const slab = new FloatSlab((ENSEMBLE_FIELDS.length + optionalCount) * GLOBAL_CELLS);
   const scratch: DecodeScratch = {};
   const fillScratch: NanFillScratch = {};
+  /** The cached message of `param` at `step`, checked to be this member's. */
+  const message = (stream: string, step: number, param: string): { param: string; message: ReturnType<typeof parseGrib2Message> } => {
+    const parsed = parseGrib2Message(
+      new Uint8Array(fs.readFileSync(ensembleGribPath(o.cacheRoot, model.id, name, member, stream, step, param)))
+    );
+    const got = parsed.product.ensemble?.member;
+    if (got !== member)
+      throw new Error(
+        `${param} +${step} h is ${got === undefined ? 'not an ensemble member' : `member ${got}`}, expected member ${member}`
+      );
+    return { param, message: parsed };
+  };
   try {
     for (const step of steps) {
-      const named = Object.entries(ENSEMBLE_PARAMS).flatMap(([stream, params]) =>
-        params.map(param => {
-          const message = parseGrib2Message(
-            new Uint8Array(fs.readFileSync(ensembleGribPath(o.cacheRoot, model.id, name, member, stream, step, param)))
-          );
-          const got = message.product.ensemble?.member;
-          if (got !== member)
-            throw new Error(
-              `${param} +${step} h is ${got === undefined ? 'not an ensemble member' : `member ${got}`}, expected member ${member}`
-            );
-          return { param, message };
-        })
-      );
-      writer.writeStep(buildStep(named, null, 3, scratch, slab, fillScratch));
+      const named = ENSEMBLE_STREAMS.flatMap(({ stream, params }) => params.map(param => message(stream, step, param)));
+      const built = buildStep(named, null, 3, scratch, slab, fillScratch);
+      for (const { stream, optional } of ENSEMBLE_STREAMS) {
+        for (const param of optional) {
+          if (!isGribFile(ensembleGribPath(o.cacheRoot, model.id, name, member, stream, step, param))) continue;
+          try {
+            const extra = buildStep([message(stream, step, param)], null, 3, scratch, slab, fillScratch);
+            if (extra.validMs !== built.validMs) throw new Error('its valid time differs from the step');
+            for (const [k, f] of extra.fields) built.fields.set(k, f);
+          } catch (err) {
+            o.log(`${model.name} ${memberDir(member)} +${step} h: ${param} not decoded (${(err as Error).message}), left out`);
+          }
+        }
+      }
+      writer.writeStep(built);
       slab.reset();
     }
     writer.finish({

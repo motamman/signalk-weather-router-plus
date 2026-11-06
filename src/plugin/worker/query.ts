@@ -502,7 +502,7 @@ export function dataStatus(st: WorkerState): DataStatus {
     checks: { ...st.checks },
     connectivity: { ...st.connectivity },
     harmonicErrors: [...st.harmonicErrors],
-    ensembles: (st.config?.forecast.ensemble.models ?? []).map(m => {
+    ensembles: (st.config?.forecast.ensemble?.models ?? []).map(m => {
       const cur = readEnsembleCurrent(st.cacheRoot, m);
       const s = st.ensembles[m];
       return {

@@ -161,7 +161,11 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   how many members (5 to 50 in fives, members 1 to N, and AIFS ENS's
   control too), are chosen there; at least one ensemble while they are
   on. Only the routing fields are fetched (`10u`, `10v`, `swh`, `mwp`,
-  `mwd`), to the forecast's horizon, step by step from the published
+  `mwd`, and the mean zero-crossing period `mp2` where the ensemble
+  publishes it: IFS ENS does, AIFS ENS does not, checked on
+  data.ecmwf.int 2026-11-06; a member without it routes its waves
+  uncorrected, with a `waves_no_period` warning), to the forecast's
+  horizon, step by step from the published
   `.index` files (`ecmwf-ens/` under the plugin data directory), and each
   member is decoded to disk as a run of its own in the forecast's format
   (`forecast-ens/<model>/mNN/<cycle>/`; m00 is the control); every
@@ -205,7 +209,9 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   member), 75.3 s. *On disk, measured 2026-11-06 (`du -sb`, the 06Z run,
   72 h):* 519,126,603 B per IFS ENS member (25 steps) and 269,947,987 B
   per AIFS ENS member (13 steps), the same for each of the 21 members.
-  The time of one member's route is not measured yet.
+  Both measures are of the five required fields, before `mp2` made a
+  sixth for an IFS ENS member (not measured). The time of one member's
+  route is not measured yet.
 - **Land:** GSHHG shorelines as shapefiles (`GSHHS_f_L1.shp` for full
   resolution, automatically including L2–L4 siblings; add `GSHHS_f_L6.shp` for Antarctica) or the OSM
   land-polygons export. At start the plugin cuts the coastline into
@@ -1722,7 +1728,7 @@ React and needs no build step for it.
 | `polarsDir` | directory of `.pol`/`.csv` polars listed by `/api/polars`. Blank = the library bundled with the plugin (`data/polars/`: the ~700 polars of the OpenCPN [weather_routing_pi](https://github.com/seandepagnier/weather_routing_pi) library, GPL-3.0), with user polars (generated ones included) kept in `polars/user/` in the plugin data directory, so an update never removes them. Set, user polars are in `<polarsDir>/user/` |
 | `currents.harmonicDir` | directory of tidal-harmonic `.npz` files |
 | `forecast.mirror` | `ecmwf`, `aws` or `google` |
-| `forecast.ensemble.enabled` | download ECMWF ensembles each cycle, after the forecast (default off: nothing downloaded, nothing shown). See [Data](#data) |
+| `forecast.ensemble.enabled` | download ECMWF ensembles each cycle, after the forecast (default off: nothing downloaded, nothing shown, and the other `ensemble` settings are not read or checked). See [Data](#data) |
 | `forecast.ensemble.models` | `ifs-ens`, `aifs-ens` or both (default `ifs-ens`); at least one while ensembles are on. One no longer chosen is deleted from disk |
 | `forecast.ensemble.members` | members per ensemble, 5 to 50 in fives (default 5): members 1 to this, and AIFS ENS's control too |
 | `weatherProvider.enabled` | register with the Weather API (default on) |

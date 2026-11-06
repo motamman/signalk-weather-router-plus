@@ -21,6 +21,7 @@ import type { RouterKind } from '../engine/router';
 import { DEFAULT_MESH_CATALOG_URL } from './meshes';
 import { HOUR_S } from '../geo/units';
 import {
+  ECMWF_MIRROR_LABELS,
   ECMWF_MIRRORS,
   ENSEMBLE_MEMBER_CHOICES,
   ENSEMBLE_MODELS,
@@ -147,9 +148,10 @@ export interface ResolvedConfig {
     regionalGribs: string;
     /**
      * The ensembles downloaded beside the main forecast, after it, and how many members of each (members 1 to N, and
-     * the control where one is published); no models = off: nothing downloaded, nothing shown.
+     * the control where one is published); null = off: nothing downloaded, nothing shown, and nothing of the
+     * setting read or checked.
      */
-    ensemble: { models: EnsembleModelId[]; members: number };
+    ensemble: { models: EnsembleModelId[]; members: number } | null;
   };
   currents: {
     harmonicDir: string | null;
@@ -239,12 +241,29 @@ export const MIRRORS = Object.keys(ECMWF_MIRRORS) as EcmwfMirror[];
 /** The mirror when the config names none: the schema, resolveConfig and the configuration panel (via the status) read it. */
 export const DEFAULT_MIRROR: EcmwfMirror = 'ecmwf';
 
-/** What the ensemble downloads cost and do, for the plugin config's schema and the configuration panel (via the status). */
+/**
+ * What one member of each ensemble costs, at 72 h, from the test box (Pi 5): downloaded per cycle (2026-11-05: 5 IFS
+ * ENS members took 350,757,112 B; AIFS ENS's control and 5 members 206,788,659 B; arithmetic per member) and on disk
+ * (du -sb, the 06Z run of 2026-11-06). Both were measured with the five required fields; an IFS ENS member now holds
+ * mp2 as a sixth (ecmwf.ts ENSEMBLE_OPTIONAL_PARAMS), so its figures are arithmetic: the download plus one mp2 message
+ * a step at the main forecast's measured size (440,100 B, the 05 Nov 18Z run at +24 h, from its .index; 25 steps at
+ * 72 h), the disk six fifths exactly (every decoded field is the same global float32 grid). AIFS ENS publishes no
+ * mp2: its figures stand.
+ */
+export const ENSEMBLE_MEMBER_COST = {
+  downloadBytes: { 'ifs-ens': 350_757_112 / 5 + 25 * 440_100, 'aifs-ens': 206_788_659 / 6 } satisfies Record<EnsembleModelId, number>,
+  diskBytes: { 'ifs-ens': (519_126_603 * 6) / 5, 'aifs-ens': 269_947_987 } satisfies Record<EnsembleModelId, number>,
+};
+
+/** What the ensemble downloads cost and do, for the plugin config's schema and the configuration pages (configChoices). */
 export const ENSEMBLE_DOWNLOAD_NOTE =
   "Also download ECMWF ensembles, each cycle after the forecast (wind and waves, to the forecast's horizon), so Find Route " +
   "can compute the route on each member's forecast as well: where each member's route goes and when it arrives. At 72 h, " +
-  'per member and cycle, on the test box (Pi 5): about 70 MB downloaded (5 IFS ENS members took 350,757,112 B, 2026-11-05); ' +
-  'on disk 519 MB for an IFS ENS member and 270 MB for an AIFS ENS member (du, 2026-11-06).';
+  `per member and cycle: an IFS ENS member about ${Math.round(ENSEMBLE_MEMBER_COST.downloadBytes['ifs-ens'] / 1e6)} MB downloaded and ` +
+  `${Math.round(ENSEMBLE_MEMBER_COST.diskBytes['ifs-ens'] / 1e6)} MB on disk (arithmetic from the test box's measures with five fields, ` +
+  "2026-11-05 and 2026-11-06, plus its sixth field, the wave period mp2, at the main forecast's measured message size), an AIFS ENS member about " +
+  `${Math.round(ENSEMBLE_MEMBER_COST.downloadBytes['aifs-ens'] / 1e6)} MB downloaded and ${Math.round(ENSEMBLE_MEMBER_COST.diskBytes['aifs-ens'] / 1e6)} MB on disk ` +
+  '(measured on the test box, Pi 5, 2026-11-05 and 2026-11-06).';
 
 /** The ensemble downloads when the config says nothing: off; on, IFS ENS with 5 members. The schema and resolveEnsemble read these. */
 export const ENSEMBLE_DEFAULTS: { enabled: boolean; models: EnsembleModelId[]; members: number } = {
@@ -444,16 +463,51 @@ function cacheNumber(v: unknown, def: number, min: number, max: number, name: st
   return n;
 }
 
-/** The ensemble downloads from the plugin config: off unless enabled; enabled needs at least one known ensemble. */
+/** What the plugin config offers, for the pages that set it: the mirrors, the ensembles, the member counts, the defaults. */
+export function configChoices(): {
+  mirrors: { id: EcmwfMirror; label: string }[];
+  mirror_default: EcmwfMirror;
+  ensembles: { id: EnsembleModelId; name: string }[];
+  ensemble_members: readonly number[];
+  ensemble_defaults: typeof ENSEMBLE_DEFAULTS;
+  ensemble_note: string;
+} {
+  return {
+    mirrors: MIRRORS.map(id => ({ id, label: ECMWF_MIRROR_LABELS[id] })),
+    mirror_default: DEFAULT_MIRROR,
+    ensembles: ENSEMBLE_MODELS.map(id => ({ id, name: ENSEMBLES[id].name })),
+    ensemble_members: ENSEMBLE_MEMBER_CHOICES,
+    ensemble_defaults: ENSEMBLE_DEFAULTS,
+    ensemble_note: ENSEMBLE_DOWNLOAD_NOTE,
+  };
+}
+
+/** Why `members` is not a member count this plugin offers (ENSEMBLE_MEMBER_CHOICES), or null. */
+export function ensembleMembersProblem(members: number): string | null {
+  return (ENSEMBLE_MEMBER_CHOICES as readonly number[]).includes(members)
+    ? null
+    : `${String(members)} is not one of ${ENSEMBLE_MEMBER_CHOICES.join(', ')}`;
+}
+
+/** Why `models` are not ensembles this plugin downloads (the first unknown one), or null. */
+export function ensembleModelsProblem(models: readonly string[]): string | null {
+  const bad = models.find(m => !(ENSEMBLE_MODELS as readonly string[]).includes(m));
+  return bad === undefined ? null : `${bad} is not one of ${ENSEMBLE_MODELS.join(', ')}`;
+}
+
+/**
+ * The ensemble downloads from the plugin config: null (off) unless enabled, and then nothing else of the setting is
+ * read or checked (a feature that is off changes nothing, a start-up included); enabled needs a member count on the
+ * list and at least one known ensemble.
+ */
 export function resolveEnsemble(e: NonNullable<PluginConfig['forecast']>['ensemble']): ResolvedConfig['forecast']['ensemble'] {
+  if (!(e?.enabled ?? ENSEMBLE_DEFAULTS.enabled)) return null;
   const members = e?.members ?? ENSEMBLE_DEFAULTS.members;
-  if (!(ENSEMBLE_MEMBER_CHOICES as readonly number[]).includes(members))
-    throw new Error(`config forecast.ensemble.members: ${String(members)} is not one of ${ENSEMBLE_MEMBER_CHOICES.join(', ')}`);
-  if (!(e?.enabled ?? ENSEMBLE_DEFAULTS.enabled)) return { models: [], members };
+  const badCount = ensembleMembersProblem(members);
+  if (badCount) throw new Error(`config forecast.ensemble.members: ${badCount}`);
   const models = e?.models ?? ENSEMBLE_DEFAULTS.models;
-  for (const m of models)
-    if (!(ENSEMBLE_MODELS as readonly string[]).includes(m))
-      throw new Error(`config forecast.ensemble.models: ${String(m)} is not one of ${ENSEMBLE_MODELS.join(', ')}`);
+  const problem = ensembleModelsProblem(models);
+  if (problem) throw new Error(`config forecast.ensemble.models: ${problem}`);
   if (models.length === 0)
     throw new Error(
       'config forecast.ensemble: ensemble downloads are on but no ensemble is selected; select at least one, or turn them off'

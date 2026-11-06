@@ -65,7 +65,7 @@ import { smocSettings } from './currents';
 import type { ArcoLayout, ArcoResolution } from '../../data/arco';
 import { localMeshes, meshesToOpen, readyMeshDirs } from '../meshes';
 import { beamFor, DEFAULT_SEARCH } from '../../engine/search/presets';
-import { ENSEMBLES, type EnsembleModelId } from '../../data/ecmwf';
+import { ENSEMBLE_OPTIONAL_PARAMS, ENSEMBLE_PARAMS, ENSEMBLES, type EnsembleModelId } from '../../data/ecmwf';
 import { type DecodedRun, openDecodedRun } from '../../data/decoded';
 import { memberRunDir, readEnsembleCurrent } from '../../data/ensemble';
 
@@ -509,9 +509,12 @@ export function compactFront(f: StageFront): { stage: number; total: number; poi
   return { stage: f.stage, total: f.totalStages, points: f.points.map(p => [p.lon, p.lat, p.timeMs, p.viaCount]), best: f.best };
 }
 
-/** Fields the engine samples: wind (at, atMany) and waves (wavesAt). */
-// mp2 (Tm02, the wave correction's period) where the run has it: a run or step without it is read without it.
-const ROUTE_PARAMS = ['10u', '10v', 'swh', 'mwp', 'mwd', 'mp2'];
+/**
+ * Fields the engine samples of a run: wind (at, atMany) and waves (wavesAt). The routing fields an ensemble member
+ * holds (ecmwf.ts), the optional one (mp2, the wave correction's period) read where the run has it: a run or step
+ * without it is read without it.
+ */
+const ROUTE_PARAMS = [...ENSEMBLE_PARAMS.enfo, ...ENSEMBLE_PARAMS.waef, ...ENSEMBLE_OPTIONAL_PARAMS.waef];
 
 /**
  * Degrees added around the corridor box for the route's forecast area.

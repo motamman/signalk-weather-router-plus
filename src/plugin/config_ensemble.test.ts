@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveEnsemble } from './config';
 
-test('ensemble downloads: off unless enabled, and off downloads nothing', () => {
-  assert.deepEqual(resolveEnsemble(undefined), { models: [], members: 5 });
-  assert.deepEqual(resolveEnsemble({ enabled: false, models: ['aifs-ens'], members: 20 }), { models: [], members: 20 });
+test('ensemble downloads: off unless enabled, and off reads and checks nothing of the setting', () => {
+  assert.equal(resolveEnsemble(undefined), null);
+  assert.equal(resolveEnsemble({ enabled: false, models: ['aifs-ens'], members: 20 }), null);
+  // A count or an ensemble that would be refused while on: off, they are not looked at (the start-up goes on).
+  assert.equal(resolveEnsemble({ enabled: false, models: ['gefs'], members: 7 }), null);
 });
 
 test('ensemble downloads: on, IFS ENS until another is chosen; at least one while on', () => {

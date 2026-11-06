@@ -343,14 +343,14 @@ async function refreshForecastInner(
 /** What stays of each chosen ensemble on disk (data/ensemble.ts pruneEnsembles): the members wanted, the cycle in use, `pending` cycles. */
 function ensembleKeep(
   st: WorkerState,
-  cfg: ResolvedConfig,
+  e: NonNullable<ResolvedConfig['forecast']['ensemble']>,
   pending: Partial<Record<EnsembleModelId, string>>
 ): Parameters<typeof pruneEnsembles>[1] {
   const keep: Parameters<typeof pruneEnsembles>[1] = {};
-  for (const m of cfg.forecast.ensemble.models) {
+  for (const m of e.models) {
     const cur = readEnsembleCurrent(st.cacheRoot, m);
     keep[m] = {
-      members: [...new Set([...ensembleMembers(ENSEMBLES[m], cfg.forecast.ensemble.members), ...(cur ? cur.members : [])])],
+      members: [...new Set([...ensembleMembers(ENSEMBLES[m], e.members), ...(cur ? cur.members : [])])],
       cycles: cur ? [cur.cycle] : [],
       pending: pending[m] ?? null,
     };
@@ -415,7 +415,7 @@ export async function refreshEnsembles(
 ): Promise<void> {
   const { config: cfg } = requireInit(st);
   const e = cfg.forecast.ensemble;
-  if (!e.models.length) {
+  if (!e) {
     // Both folders, whichever is there (a download that failed before any decode leaves only the GRIB cache); a
     // missing one reads as empty.
     pruneEnsemblesReported(st, {}, 'off; ');
@@ -457,7 +457,7 @@ export async function refreshEnsembles(
   // A model complete on disk for this cycle is the ensemble in use, whatever stopped the pass that decoded it.
   for (const m of e.models) if (!missing.includes(m)) record(m);
   if (!missing.length) {
-    if (pruneEnsemblesReported(st, ensembleKeep(st, cfg, {}), '')) measureEnsembles(st, e.models);
+    if (pruneEnsemblesReported(st, ensembleKeep(st, e, {}), '')) measureEnsembles(st, e.models);
     return;
   }
   const why = offline ?? held();
@@ -505,7 +505,7 @@ export async function refreshEnsembles(
   // What the pass completed is in use from now on: checked on disk, not taken from the child's answer. A model whose
   // pass reported an error keeps that error in its status unless its cycle is now complete.
   for (const m of missing) if (wanted(m).every(n => memberComplete(st.cacheRoot, m, n, cycle, horizonHours))) record(m);
-  pruneEnsemblesReported(st, ensembleKeep(st, cfg, pending), '');
+  pruneEnsemblesReported(st, ensembleKeep(st, e, pending), '');
   measureEnsembles(st, e.models);
   changed();
 }

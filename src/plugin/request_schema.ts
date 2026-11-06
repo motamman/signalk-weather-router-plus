@@ -225,7 +225,6 @@ export const VESSEL_FIELDS = {
 
 const Point = Type.Object({ lat: Type.Number(), lon: Type.Number() });
 
-/** The whole route request: the type, the validator's ranges and the OpenAPI schema. */
 /** The fields of `forecast_member`: the schema (OpenAPI) and the check (validateRouteRequest) both read them. */
 const FORECAST_MEMBER_FIELDS = {
   model: Type.Enum(ENSEMBLE_MODELS, { type: 'string', description: 'The ensemble (downloaded: plugin config Ensemble downloads)' }),
@@ -243,6 +242,7 @@ const FORECAST_MEMBER_FIELDS = {
   ),
 };
 
+/** The whole route request: the type, the validator's ranges and the OpenAPI schema. */
 export const RouteRequestSchema = Type.Object({
   start: Point,
   end: Point,
