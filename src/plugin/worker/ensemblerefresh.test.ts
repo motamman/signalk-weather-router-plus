@@ -12,7 +12,15 @@ import { refreshEnsembles } from './forecast';
 import type { WorkerState } from './state';
 import type { runChildTask } from '../childtask';
 import type { EnsembleModelId } from '../../data/ecmwf';
-import { ENSEMBLE_DECODED_DIR, ENSEMBLE_GRIB_DIR, type EnsembleModelResult } from '../../data/ensemble';
+import {
+  ENSEMBLE_DECODED_DIR,
+  ENSEMBLE_FIELDS,
+  ENSEMBLE_GRIB_DIR,
+  memberComplete,
+  readEnsembleCurrent,
+  type EnsembleModelResult,
+} from '../../data/ensemble';
+import { DECODED_FORMAT, DECODED_VERSION, fieldFile, INDEX_FILE } from '../../data/decoded';
 import type { EnsembleDecodeTask, ForecastDecodeEvent } from '../forecastdecodetask';
 
 const CYCLE = new Date('2026-11-06T00:00:00Z');
@@ -38,6 +46,38 @@ function put(root: string, rel: string): string {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, 'GRIB');
   return p;
+}
+
+/**
+ * A complete decoded run of IFS ENS member `member` for the 6 h cycle, in the decoded-run format on a 2 × 2 grid: its
+ * index and one float32 file per field and step (openDecodedRun checks every file's size against the grid).
+ */
+function decodedMember(root: string, member: number): string {
+  const dir = path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', `m${String(member).padStart(2, '0')}`, CYCLE_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  const steps = [0, 3, 6];
+  const grid = { lat0: 0, lon0: 0, dLat: 1, dLon: 1, nLat: 2, nLon: 2, wrapLon: false };
+  for (const h of steps)
+    for (const p of ENSEMBLE_FIELDS) fs.writeFileSync(path.join(dir, fieldFile(h, p)), Buffer.alloc(grid.nLat * grid.nLon * 4));
+  fs.writeFileSync(
+    path.join(dir, INDEX_FILE),
+    JSON.stringify({
+      format: DECODED_FORMAT,
+      version: DECODED_VERSION,
+      byteOrder: 'LE',
+      cycle: CYCLE_NAME,
+      cycleTimeMs: CYCLE.getTime(),
+      request: { horizonHours: 6, params: ENSEMBLE_FIELDS },
+      stepHours: steps,
+      grid,
+      steps: steps.map(h => ({ stepHours: h, validMs: CYCLE.getTime() + h * 3600_000, params: ENSEMBLE_FIELDS })),
+      bytes: steps.length * ENSEMBLE_FIELDS.length * grid.nLat * grid.nLon * 4,
+      decodedAt: CYCLE.toISOString(),
+      decodeMs: 1,
+      complete: true,
+    })
+  );
+  return dir;
 }
 
 /** A child-task runner that must not be called. */
@@ -98,7 +138,8 @@ test('one ensemble fails: it keeps its pending GRIB cache and decoded members fo
   try {
     const ifsCache = put(root, path.join(ENSEMBLE_GRIB_DIR, 'ifs-ens', CYCLE_NAME, 'm01', 'enfo-000h-10u.grib2'));
     // A member of the failing ensemble already decoded in this cycle (an earlier round got it before stopping).
-    const ifsDecoded = put(root, path.join(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', CYCLE_NAME, 'index.json'));
+    decodedMember(root, 1);
+    assert.ok(memberComplete(root, 'ifs-ens', 1, CYCLE_NAME, 6), 'the fixture is a complete decoded run');
     const aifsCache = put(root, path.join(ENSEMBLE_GRIB_DIR, 'aifs-ens', CYCLE_NAME, 'm00', 'enfo-000h-10u.grib2'));
     const st = state(root, ['ifs-ens', 'aifs-ens']);
     let asked: EnsembleDecodeTask | null = null;
@@ -129,8 +170,52 @@ test('one ensemble fails: it keeps its pending GRIB cache and decoded members fo
     assert.match(st.ensembles['ifs-ens']?.error ?? '', /not published yet/);
     assert.equal(st.ensembles['aifs-ens']?.error, null);
     assert.ok(fs.existsSync(ifsCache), "the failed ensemble's GRIB cache stays for the next round");
-    assert.ok(fs.existsSync(ifsDecoded), "the failed ensemble's members decoded in this cycle stay too");
+    assert.ok(memberComplete(root, 'ifs-ens', 1, CYCLE_NAME, 6), "the failed ensemble's members decoded in this cycle stay, whole");
     assert.ok(!fs.existsSync(aifsCache), "the finished ensemble's GRIB cache goes");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a cycle complete on disk is recorded as the one in use, whatever stopped the pass that decoded it: nothing pruned, no download', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ensref-'));
+  try {
+    // Every wanted IFS ENS member of this cycle is decoded, but current.json still names the cycle before (the plugin
+    // stopped after the last decode, before the cycle was recorded).
+    for (const n of [1, 2, 3, 4, 5]) decodedMember(root, n);
+    fs.writeFileSync(
+      path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json'),
+      JSON.stringify({
+        model: 'ifs-ens',
+        cycle: '2026110518',
+        cycleTimeMs: CYCLE.getTime() - 6 * 3600_000,
+        members: [1, 2, 3, 4, 5],
+        horizonHours: 6,
+        at: '',
+      })
+    );
+    const st = state(root, ['ifs-ens']);
+    await refreshEnsembles(st, null, () => null, undefined, neverRun);
+    const cur = readEnsembleCurrent(root, 'ifs-ens');
+    assert.equal(cur?.cycle, CYCLE_NAME);
+    assert.deepEqual(cur?.members, [1, 2, 3, 4, 5]);
+    for (const n of [1, 2, 3, 4, 5]) assert.ok(memberComplete(root, 'ifs-ens', n, CYCLE_NAME, 6), `member ${n} kept`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("after a pass, the members it completed are recorded by the worker from the disk, not from the child's answer", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ensref-'));
+  try {
+    const st = state(root, ['ifs-ens']);
+    // The child decodes every member, and answers nothing about them.
+    const run = (async () => {
+      for (const n of [1, 2, 3, 4, 5]) decodedMember(root, n);
+      return [result('ifs-ens')];
+    }) as unknown as typeof runChildTask;
+    await refreshEnsembles(st, null, () => null, undefined, run);
+    assert.equal(readEnsembleCurrent(root, 'ifs-ens')?.cycle, CYCLE_NAME);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

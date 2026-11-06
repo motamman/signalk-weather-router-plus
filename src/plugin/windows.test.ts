@@ -83,7 +83,7 @@ interface Harness {
 
 function harness(opts: { dir?: string; validTo?: number | null; keepJobs?: number } = {}): Harness {
   const dir = opts.dir ?? tmp();
-  const jobs = new JobManager(dir, opts.keepJobs ?? 50, '/plugins/wrp', () => undefined);
+  const jobs = new JobManager(dir, opts.keepJobs ?? 50, '/plugins/wrp');
   const started: Job[] = [];
   jobs.on('start', (j: Job) => started.push(j));
   const cancelled: string[] = [];
@@ -92,6 +92,7 @@ function harness(opts: { dir?: string; validTo?: number | null; keepJobs?: numbe
     cancelRunning: id => cancelled.push(id),
     forecastValidToMs: () => (opts.validTo === undefined ? T0 + 240 * H : opts.validTo),
     onFinished: w => finished.push(w),
+    log: () => undefined,
   };
   const windows = new WindowManager(jobs, dir, deps, '/plugins/wrp');
   const finish: Harness['finish'] = (how = {}) => {
@@ -143,7 +144,7 @@ test('validateWindowRequest: the route, the times, the step and the size of the 
 
 test('departureMetrics: strongest wind, highest waves, roughest sea, time close-hauled under sail, past the forecast', () => {
   const dir = tmp();
-  const jobs = new JobManager(dir, 50, '', () => undefined);
+  const jobs = new JobManager(dir, 50, '');
   const job = jobs.submit({ ...ROUTE, departure: new Date(T0).toISOString() });
   jobs.onDone(job.id, routeGeo(T0, { wind: 14, swh: 3.2, twa: [0, 45, 120, 50], beyond: true }), {}, summary(T0, 18));
   const m = departureMetrics(jobs.get(job.id)!);
@@ -373,7 +374,7 @@ test('a done departure keeps only its metrics in memory: its route is read from 
 
 test('a departure that fails as it is submitted is recorded, and the window goes on to the end', () => {
   const dir = tmp();
-  const jobs = new JobManager(dir, 50, '', () => undefined);
+  const jobs = new JobManager(dir, 50, '');
   // As dispatchRoute without a Resources API: the job fails before submit() returns.
   jobs.on('start', (j: Job) => jobs.onError(j.id, 'this Signal K server has no Resources API to read notes from'));
   const finished: DepartureWindow[] = [];
@@ -381,6 +382,7 @@ test('a departure that fails as it is submitted is recorded, and the window goes
     cancelRunning: () => {},
     forecastValidToMs: () => T0 + 240 * H,
     onFinished: w => finished.push(w),
+    log: () => undefined,
   });
   const w = windows.create({ route: ROUTE, from: new Date(T0).toISOString(), to: new Date(T0 + 12 * H).toISOString(), step_s: 6 * 3600 });
   assert.equal(w.status, 'done', 'not left running');
@@ -437,4 +439,35 @@ test('windowNotification: the fastest of the passages that end within the foreca
     state: 'warn',
     message: 'departure window finished: no route for any of its 2 departures',
   });
+});
+
+test('a window whose file cannot be saved carries it: its departure still reaches the worker, the window says why, and the next save clears it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-win-'));
+  try {
+    const jobs = new JobManager(dir, 50, '');
+    const started: Job[] = [];
+    jobs.on('start', (j: Job) => started.push(j));
+    const logged: string[] = [];
+    const windows = new WindowManager(jobs, dir, {
+      cancelRunning: () => undefined,
+      forecastValidToMs: () => T0 + 240 * H,
+      log: m => logged.push(m),
+    });
+    const store = path.join(dir, 'windows');
+    fs.rmSync(store, { recursive: true });
+    fs.writeFileSync(store, 'not a folder');
+    const w = windows.create({ route: ROUTE, from: new Date(T0).toISOString(), to: new Date(T0 + 12 * H).toISOString(), step_s: 6 * 3600 });
+    assert.equal(started.length, 1, 'the first departure reached the worker');
+    assert.match(windows.get(w.id)?.save_error ?? '', /^its file could not be saved: /);
+    assert.ok(logged.some(m => m.startsWith(`departure window ${w.id}: its file could not be saved`)));
+    fs.rmSync(store);
+    fs.mkdirSync(store);
+    windows.cancel(w.id);
+    assert.equal(windows.get(w.id)?.save_error, undefined);
+    const saved = JSON.parse(fs.readFileSync(path.join(store, `${w.id}.json`), 'utf8')) as Record<string, unknown>;
+    assert.equal(saved.status, 'cancelled');
+    assert.ok(!('save_error' in saved));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

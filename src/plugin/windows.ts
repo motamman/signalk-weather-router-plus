@@ -102,6 +102,9 @@ export const DepartureWindowSchema = Type.Object({
   status: WindowStatusSchema,
   created_at: Type.String(),
   finished_at: Type.Optional(Type.String()),
+  save_error: Type.Optional(
+    Type.String({ description: "Why the window's file on disk is behind it (its last save failed); absent once a save succeeds" })
+  ),
   error: Type.Optional(Type.String()),
   request: WindowRequestSchema,
   departures: Type.Array(WindowDepartureSchema),
@@ -226,7 +229,8 @@ export interface WindowDeps {
   forecastValidToMs: () => number | null;
   /** A window finished: tell the user (Signal K notification). */
   onFinished?: (w: DepartureWindow) => void;
-  log?: (msg: string) => void;
+  /** Where a failure the window carries is reported (persist). */
+  log: (msg: string) => void;
 }
 
 export class WindowManager {
@@ -411,10 +415,25 @@ export class WindowManager {
     if (status === 'done') this.deps.onFinished?.(w);
   }
 
+  /**
+   * Save the departure window's file. The file is how the departure window outlives a restart; the departure window itself runs from memory. A save that
+   * fails (a full or read-only disk) is the departure window's to carry, not its caller's: `save_error` says why its file is behind
+   * (the API shows it), the failure is reported, and the next change saves it again, clearing it. It never throws into
+   * a job event, a request or the start-up.
+   */
   private persist(w: DepartureWindow): void {
-    const tmp = path.join(this.dir, `${w.id}.json.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(w));
-    fs.renameSync(tmp, path.join(this.dir, `${w.id}.json`));
+    const file = path.join(this.dir, `${w.id}.json`);
+    const tmp = `${file}.tmp`;
+    delete w.save_error;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(w));
+      fs.renameSync(tmp, file);
+    } catch (err) {
+      w.save_error = `its file could not be saved: ${(err as Error).message}`;
+      this.deps.log(`departure window ${w.id}: ${w.save_error}`);
+      // Its half-written copy, if the write got that far (existsSync never throws).
+      if (fs.existsSync(tmp)) fs.rmSync(tmp);
+    }
   }
 
   private trim(): void {

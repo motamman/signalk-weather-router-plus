@@ -140,8 +140,9 @@ export interface EnsembleModelResult {
 }
 
 /**
- * A model's ensemble in use: the cycle and members of its last complete pass (`current.json` in its folder). Routes and
- * the status read it, so a cycle still being decoded is never used, and the one before stays until it is replaced.
+ * A model's ensemble in use: the cycle whose wanted members are all complete on disk, and those members (`current.json`
+ * in its folder). Routes and the status read it, so a cycle still being decoded is never used, and the one before
+ * stays until it is replaced. Only the data worker writes it (recordEnsembleCycle), from what is on disk.
  */
 export interface EnsembleCurrent {
   model: EnsembleModelId;
@@ -163,6 +164,33 @@ export function readEnsembleCurrent(cacheRoot: string, model: EnsembleModelId): 
   } catch {
     return null;
   }
+}
+
+/**
+ * Record `cycleTime`'s run as the model's ensemble in use, its `wanted` members being complete on disk (the caller has
+ * checked them: worker/forecast.ts refreshEnsembles, each round and after each pass), so what is in use follows what is
+ * on disk whatever stopped the pass that decoded it. Written only when it changes the record: another cycle or
+ * horizon, or a wanted member the record lacks. Members recorded beyond those wanted stay until the next cycle
+ * replaces the record: sets started on this cycle may still be routing on them.
+ */
+export function recordEnsembleCycle(
+  cacheRoot: string,
+  model: EnsembleModelId,
+  cycleTime: Date,
+  wanted: number[],
+  horizonHours: number
+): void {
+  const cycle = cycleName(cycleTime);
+  const cur = readEnsembleCurrent(cacheRoot, model);
+  if (cur && cur.cycle === cycle && cur.horizonHours === horizonHours && wanted.every(n => cur.members.includes(n))) return;
+  writeEnsembleCurrent(cacheRoot, {
+    model,
+    cycle,
+    cycleTimeMs: cycleTime.getTime(),
+    members: wanted,
+    horizonHours,
+    at: new Date().toISOString(),
+  });
 }
 
 function writeEnsembleCurrent(cacheRoot: string, c: EnsembleCurrent): void {
@@ -239,17 +267,8 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
         log(`${model.name} ${name}: not downloaded (${r.error})`);
       }
     }
+    // What is on disk now; the data worker records the cycle in use from it (recordEnsembleCycle).
     r.members = want.filter(m => memberComplete(o.cacheRoot, id, m, name, horizonHours));
-    // Complete for this model when every member wanted is on disk: that cycle becomes the one in use.
-    if (r.members.length === want.length)
-      writeEnsembleCurrent(o.cacheRoot, {
-        model: id,
-        cycle: name,
-        cycleTimeMs: o.cycle.time.getTime(),
-        members: r.members,
-        horizonHours,
-        at: new Date().toISOString(),
-      });
     log(
       `${model.name} ${name}: ${r.members.length} of ${want.length} members on disk (${todo.length - r.failed.length} decoded now, ${r.downloaded} fields downloaded, ${r.failed.length} failed)`
     );
@@ -259,9 +278,10 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
 }
 
 /**
- * Every field of `members` for the ladder into the cache. Every step's index is read first: a step the server does not
- * have is not published yet (ensembleSteps), and the model's pass stops with an error before anything is fetched (what
- * is cached stays for the next round; nothing is decoded short). The indexes give the exact length of every message
+ * Every field of `members` for the ladder into the cache. The last step's indexes are read first, then every step's: a
+ * step the server does not have is not published yet (ensembleSteps), and the model's pass stops with an error before
+ * anything is fetched (what is cached stays for the next round; nothing is decoded short). A cycle not finished yet
+ * costs one index request per stream and file each round, not the whole ladder's. The indexes give the exact length of every message
  * still to fetch: with the members' decoded runs, that is what the disk check (o.diskCheck) is asked about. Then the
  * messages are fetched step by step.
  */
@@ -273,18 +293,40 @@ async function downloadModel(
   members: number[],
   ladder: number[]
 ): Promise<{ steps: number[]; downloaded: number; bytes: number }> {
-  // Every step's index first: a step not published yet stops the pass before anything is fetched, and the indexes give
+  // The members a step file holds that still have a message to fetch from it (none: every one is cached).
+  const toGet = (file: EnsembleModel['files'][number], stream: string, params: readonly string[], step: number): number[] => {
+    const inFile = members.filter(m => (m === 0) === file.control);
+    const cachedAll = inFile.every(m => params.every(p => isGribFile(ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, p))));
+    return cachedAll ? [] : inFile;
+  };
+  // The ladder's last step first, one index per stream and file: a cycle the server has not finished publishing stops
+  // here, without reading every index before it. The indexes read here serve the full read below.
+  const read = new Map<string, IndexRecord[]>();
+  const last = ladder[ladder.length - 1];
+  for (const [stream, params] of Object.entries(ENSEMBLE_PARAMS)) {
+    for (const file of model.files) {
+      if (!toGet(file, stream, params, last).length) continue;
+      const idx = await client.fetchEnsembleIndex(o.cycle, model, stream, file.kind, last);
+      if (!idx)
+        throw new Error(
+          last === ladder[0]
+            ? `${model.name} ${name}: the first step (+${last} h) is not published`
+            : `${model.name} ${name}: +${last} h ${stream}, the last step, is not published yet; retried next round`
+        );
+      read.set(`${stream}/${file.kind}/${last}`, idx);
+    }
+  }
+  // Then every step's index: a step not published yet stops the pass before anything is fetched, and the indexes give
   // the exact size of what is still to fetch, for the disk check.
   const plan: { step: number; stream: string; kind: string; recs: { rec: IndexRecord; path: string }[] }[] = [];
   let toFetch = 0;
   for (const step of ladder) {
     for (const [stream, params] of Object.entries(ENSEMBLE_PARAMS)) {
       for (const file of model.files) {
-        const inFile = members.filter(m => (m === 0) === file.control);
+        const inFile = toGet(file, stream, params, step);
         if (!inFile.length) continue;
-        const paths = inFile.flatMap(m => params.map(p => ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, p)));
-        if (paths.every(isGribFile)) continue;
-        const idx = await client.fetchEnsembleIndex(o.cycle, model, stream, file.kind, step);
+        const known = read.get(`${stream}/${file.kind}/${step}`);
+        const idx = known !== undefined ? known : await client.fetchEnsembleIndex(o.cycle, model, stream, file.kind, step);
         if (!idx) {
           const before = ladder[ladder.indexOf(step) - 1];
           throw new Error(

@@ -17,6 +17,7 @@ import {
   memberComplete,
   pruneEnsembles,
   readEnsembleCurrent,
+  recordEnsembleCycle,
 } from '../../data/ensemble';
 import { ForecastStore } from '../../data/forecast';
 import { isOffline } from '../../data/http';
@@ -399,17 +400,19 @@ export async function refreshEnsembles(
   }
   measureEnsembles(st, e.models);
   if (!st.run) return;
-  const cycle = cycleName(st.run.cycleTime);
+  // The forecast's cycle as this round found it (a new run may be adopted while the child works).
+  const cycleTime = st.run.cycleTime;
+  const cycle = cycleName(cycleTime);
   const horizonHours = cfg.forecast.horizonS / HOUR_S;
+  const wanted = (m: EnsembleModelId): number[] => ensembleMembers(ENSEMBLES[m], e.members);
   // Each wanted member's decoded run checked once a round (memberComplete reads its index and stats every field file):
   // the models with members still to get, and those members.
   const todo = e.models
-    .map(m => ({
-      m,
-      members: ensembleMembers(ENSEMBLES[m], e.members).filter(n => !memberComplete(st.cacheRoot, m, n, cycle, horizonHours)),
-    }))
+    .map(m => ({ m, members: wanted(m).filter(n => !memberComplete(st.cacheRoot, m, n, cycle, horizonHours)) }))
     .filter(x => x.members.length > 0);
   const missing = todo.map(x => x.m);
+  // A model complete on disk for this cycle is the ensemble in use, whatever stopped the pass that decoded it.
+  for (const m of e.models) if (!missing.includes(m)) recordEnsembleCycle(st.cacheRoot, m, cycleTime, wanted(m), horizonHours);
   const pending = Object.fromEntries(missing.map(m => [m, cycle])) as Partial<Record<EnsembleModelId, string>>;
   const note = (m: EnsembleModelId, s: Partial<NonNullable<WorkerState['ensembles'][EnsembleModelId]>>): void => {
     // checkedAt last: this note's time, never the entry's earlier one.
@@ -428,7 +431,7 @@ export async function refreshEnsembles(
   }
   // The disk is checked in the child, against the exact size of what each model's pass writes (data/ensemble.ts
   // downloadModel, forecastdecodetask.ts diskCheck).
-  for (const m of missing) note(m, { loading: { cycle: st.run.cycleTime.toISOString(), done: 0, total: null }, error: null });
+  for (const m of missing) note(m, { loading: { cycle: cycleTime.toISOString(), done: 0, total: null }, error: null });
   st.ensembleAbort = new AbortController();
   try {
     const results = await runTask(
@@ -436,7 +439,7 @@ export async function refreshEnsembles(
         task: 'ensemble-decode',
         cacheRoot: st.cacheRoot,
         mirror: cfg.forecast.mirror,
-        cycle: st.run.cycleTime.toISOString(),
+        cycle: cycleTime.toISOString(),
         horizonS: cfg.forecast.horizonS,
         models: missing,
         members: e.members,
@@ -446,7 +449,7 @@ export async function refreshEnsembles(
       ev => {
         // Each step is one model's: the child decodes the models one after the other.
         if (ev.event === 'decode-step' && ev.model)
-          note(ev.model, { loading: { cycle: st.run!.cycleTime.toISOString(), done: ev.done, total: ev.total } });
+          note(ev.model, { loading: { cycle: cycleTime.toISOString(), done: ev.done, total: ev.total } });
         else if (ev.event === 'decode-log') st.log('info', `ensembles: ${ev.message}`);
       }
     );
@@ -463,6 +466,10 @@ export async function refreshEnsembles(
   } finally {
     st.ensembleAbort = null;
   }
+  // What the pass completed is in use from now on: checked on disk, not taken from the child's answer.
+  for (const m of missing)
+    if (wanted(m).every(n => memberComplete(st.cacheRoot, m, n, cycle, horizonHours)))
+      recordEnsembleCycle(st.cacheRoot, m, cycleTime, wanted(m), horizonHours);
   const removed = pruneEnsembles(st.cacheRoot, ensembleKeep(st, cfg, pending));
   if (removed.length) st.log('debug', `ensembles: removed ${removed.join(', ')}`);
   measureEnsembles(st, e.models);

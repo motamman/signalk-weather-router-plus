@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { JobManager, type Job, type JobEvent } from './jobs';
+import { JobManager, type Job } from './jobs';
 import type { RouteRequest, RouteSummary } from './protocol';
 import { EnsembleSetManager, validateEnsembleSetRequest } from './ensembles';
 
@@ -29,14 +29,14 @@ function summary(hours: number): RouteSummary {
 
 function harness(onDisk: number[] | null = [0, 1, 2, 3, 4, 5, 6]) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
-  const jobs = new JobManager(dir, 50, '/p', () => undefined);
+  const jobs = new JobManager(dir, 50, '/p');
   const started: Job[] = [];
   jobs.on('start', (j: Job) => started.push(j));
   const cancelled: string[] = [];
   const sets = new EnsembleSetManager(
     jobs,
     dir,
-    { cancelRunning: id => cancelled.push(id), onDisk: () => (onDisk ? { cycle: CYCLE, members: onDisk } : null) },
+    { cancelRunning: id => cancelled.push(id), onDisk: () => (onDisk ? { cycle: CYCLE, members: onDisk } : null), log: () => undefined },
     '/p'
   );
   const finish = (hours: number): void => {
@@ -58,6 +58,10 @@ test('validateEnsembleSetRequest: the route, a known ensemble, 5 to 51 members, 
     /set per member/
   );
   assert.match(validateEnsembleSetRequest({ route: { ...ROUTE, start: { lat: 99, lon: 0 } }, model: 'ifs-ens', members: 5 })!, /^route: /);
+  assert.match(
+    validateEnsembleSetRequest({ route: { ...ROUTE, no_forecast: true }, model: 'ifs-ens', members: 5 })!,
+    /no_forecast cannot be combined/
+  );
 });
 
 test('a set routes each member on its own forecast, one job at a time, control first, pinned to the cycle', () => {
@@ -121,25 +125,72 @@ test('the main forecast route named in the request is reported with its metrics 
   assert.match(validateEnsembleSetRequest({ route: ROUTE, model: 'ifs-ens', members: 5, main_job_id: '' })!, /main_job_id/);
 });
 
-test('a listener that throws on a job event is reported, and the job still reaches the worker', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
+test('a set whose file cannot be saved carries it: its member still reaches the worker, the set says why, and the next save clears it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
   try {
+    const jobs = new JobManager(dir, 50, '/p');
+    const started: Job[] = [];
+    jobs.on('start', (j: Job) => started.push(j));
     const logged: string[] = [];
-    const jobs = new JobManager(dir, 50, '/p', m => logged.push(m));
-    // As an ensemble set's or a departure window's file failing to save on the 'running' event.
-    jobs.on('event', (_id: string, ev: JobEvent) => {
-      if (ev.event === 'status' && ev.data.status === 'running') throw new Error('ENOSPC: no space left on device');
-    });
-    const heard: string[] = [];
-    jobs.on('event', (_id: string, ev: JobEvent) => heard.push(String(ev.data.status ?? ev.event)));
-    const started: string[] = [];
-    jobs.on('start', (job: { id: string }) => started.push(job.id));
-    const job = jobs.submit({ start: { lat: 41.4, lon: -71.4 }, end: { lat: 41.2, lon: -71.6 } });
-    assert.deepEqual(started, [job.id], 'the job reached the worker');
-    assert.ok(heard.includes('running'), 'the other listener heard the event');
-    assert.equal(logged.length, 1);
-    assert.match(logged[0], new RegExp(`job ${job.id}: a listener of its status event failed: ENOSPC`));
+    const sets = new EnsembleSetManager(
+      jobs,
+      dir,
+      { cancelRunning: () => undefined, onDisk: () => ({ cycle: CYCLE, members: [0, 1, 2, 3, 4, 5] }), log: m => logged.push(m) },
+      '/p'
+    );
+    // The folder the sets are saved in is gone and a file stands in its place: every save fails.
+    const store = path.join(dir, 'ensemble-sets');
+    fs.rmSync(store, { recursive: true });
+    fs.writeFileSync(store, 'not a folder');
+    const s = sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 });
+    assert.equal(started.length, 1, 'the first member reached the worker');
+    assert.match(sets.get(s.id)?.save_error ?? '', /^its file could not be saved: /);
+    assert.ok(logged.some(m => m.startsWith(`ensemble set ${s.id}: its file could not be saved`)));
+    // The disk is back: the next change saves the set, without the error, and clears it.
+    fs.rmSync(store);
+    fs.mkdirSync(store);
+    sets.cancel(s.id);
+    assert.equal(sets.get(s.id)?.save_error, undefined);
+    const saved = JSON.parse(fs.readFileSync(path.join(store, `${s.id}.json`), 'utf8')) as Record<string, unknown>;
+    assert.equal(saved.status, 'cancelled');
+    assert.ok(!('save_error' in saved));
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a set found running at start-up that cannot be saved still loads, failed, and says why; its file stays as it was', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
+  const store = path.join(dir, 'ensemble-sets');
+  try {
+    fs.mkdirSync(store, { recursive: true });
+    const running = {
+      id: 'set-1',
+      status: 'running',
+      created_at: new Date(T0).toISOString(),
+      request: { route: ROUTE, model: 'aifs-ens', members: 5 },
+      name: 'ECMWF AIFS ENS',
+      cycle: CYCLE,
+      members: [{ member: 0, job_id: null, status: 'pending' }],
+    };
+    const file = path.join(store, 'set-1.json');
+    fs.writeFileSync(file, JSON.stringify(running));
+    // A read-only folder: the recovered set cannot be saved.
+    fs.chmodSync(store, 0o500);
+    const logged: string[] = [];
+    const sets = new EnsembleSetManager(
+      new JobManager(dir, 50, '/p'),
+      dir,
+      { cancelRunning: () => undefined, onDisk: () => null, log: m => logged.push(m) },
+      '/p'
+    );
+    const s = sets.get('set-1');
+    assert.equal(s?.status, 'failed');
+    assert.match(s?.save_error ?? '', /^its file could not be saved: /);
+    assert.equal(logged.length, 1);
+    assert.equal((JSON.parse(fs.readFileSync(file, 'utf8')) as { status: string }).status, 'running', 'the file is as it was');
+  } finally {
+    fs.chmodSync(store, 0o700);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

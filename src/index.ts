@@ -1328,7 +1328,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
     );
     updateTileGenerations();
     startPrebuilder(dataDir);
-    jobs = new JobManager(dataDir, config.routing.keepJobs, BASE_PATH, m => app.error(m));
+    jobs = new JobManager(dataDir, config.routing.keepJobs, BASE_PATH);
     jobs.on('start', (job: Job) => {
       // First start: the first forecast is still downloading. The route waits for it
       // rather than downloading its own copy of the same fields alongside.
@@ -1351,6 +1351,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         cancelRunning: cancelRunningJob,
         forecastValidToMs: () => (forecastRun ? forecastRun.index.steps[forecastRun.index.steps.length - 1].validMs : null),
         onFinished: notifyWindow,
+        log: m => app.error(m),
       },
       BASE_PATH
     );
@@ -1364,6 +1365,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
           const e = (dataStatus?.ensembles ?? []).find(x => x.model === model);
           return e && e.cycle && e.members.length ? { cycle: e.cycle, members: [...e.members] } : null;
         },
+        log: m => app.error(m),
       },
       BASE_PATH
     );

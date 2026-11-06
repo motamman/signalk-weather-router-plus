@@ -139,7 +139,7 @@ function fakeClient(published: number[]): { client: EcmwfClient; indexed: number
   return { client, indexed, fetched: () => fetched };
 }
 
-test('a step not published yet stops the model before anything is fetched: nothing decoded short, no cycle in use, the cache kept', async () => {
+test('a cycle not finished yet stops the model at its last step, before reading the ladder or fetching anything; the cache kept', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
   try {
     // IFS ENS, 6 h: steps 0, 3, 6; the server has +0 h only. One +0 h message is cached from an earlier round.
@@ -154,10 +154,10 @@ test('a step not published yet stops the model before anything is fetched: nothi
       models: ['ifs-ens'],
       members: 1,
     });
-    assert.match(r.error ?? '', /\+3 h enfo is not published yet \(to \+0 h so far\); retried next round/);
+    assert.match(r.error ?? '', /\+6 h enfo, the last step, is not published yet; retried next round/);
     assert.deepEqual(r.members, []);
     assert.deepEqual(r.steps, []);
-    assert.deepEqual(indexed, [0, 0, 3], 'stopped at the first step missing');
+    assert.deepEqual(indexed, [6], 'one index request: the last step');
     assert.equal(fetched(), 0, 'every index is read before any message is fetched');
     assert.equal(readEnsembleCurrent(root, 'ifs-ens'), null, 'no cycle in use');
     assert.ok(!fs.existsSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01')), 'no member decoded');
@@ -192,6 +192,29 @@ test('the disk check is asked about exactly what the pass writes, and a no stops
     assert.match(r.error ?? '', /ECMWF IFS ENS 2026110500: not downloaded: no room/);
     assert.equal(fetched(), 0);
     assert.deepEqual(r.members, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('every step published: each index is read once; a step missing inside the ladder still stops it before anything is fetched', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
+  try {
+    const cycle = cycleFor(new Date('2026-11-05T00:00:00Z'));
+    const all = fakeClient([0, 3, 6]);
+    await runEnsembleCycle(all.client, { cacheRoot: root, cycle, horizonS: 6 * 3600, models: ['ifs-ens'], members: 1 });
+    assert.deepEqual(
+      [...all.indexed].sort((a, b) => a - b),
+      [0, 0, 3, 3, 6, 6],
+      'each step file of each stream once'
+    );
+    assert.equal(all.fetched(), 15);
+    fs.rmSync(path.join(root, ENSEMBLE_GRIB_DIR), { recursive: true, force: true });
+    // The last step is there but +3 h is not: the full read stops at the gap.
+    const gap = fakeClient([0, 6]);
+    const [r] = await runEnsembleCycle(gap.client, { cacheRoot: root, cycle, horizonS: 6 * 3600, models: ['ifs-ens'], members: 1 });
+    assert.match(r.error ?? '', /\+3 h enfo is not published yet \(to \+0 h so far\); retried next round/);
+    assert.equal(gap.fetched(), 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

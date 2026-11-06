@@ -348,6 +348,8 @@ export function validateRouteRequest(b: RouteRequest): string | null {
     if (e) return e;
   }
   if (b.forecast_member !== undefined) {
+    // A member's forecast and no forecast at all cannot both be the route's weather.
+    if (b.no_forecast === true) return 'forecast_member cannot be combined with no_forecast';
     const e = b.forecast_member as unknown as Record<string, unknown> | null;
     if (!e || typeof e !== 'object') return 'forecast_member must be {model, member}';
     if (!(ENSEMBLE_MODELS as readonly string[]).includes(e.model as string))

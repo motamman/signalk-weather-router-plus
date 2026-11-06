@@ -78,6 +78,9 @@ export const EnsembleSetSchema = Type.Object({
   status: EnsembleSetStatusSchema,
   created_at: Type.String(),
   finished_at: Type.Optional(Type.String()),
+  save_error: Type.Optional(
+    Type.String({ description: "Why the set's file on disk is behind it (its last save failed); absent once a save succeeds" })
+  ),
   error: Type.Optional(Type.String()),
   request: EnsembleSetRequestSchema,
   name: Type.String({ description: "The ensemble's name" }),
@@ -121,6 +124,9 @@ export function validateEnsembleSetRequest(b: unknown): string | null {
     return 'main_job_id must be a route job id';
   if ((r.route as { forecast_member?: unknown }).forecast_member !== undefined)
     return 'route: forecast_member is set per member by the set; leave it out';
+  // Each member routes on its own forecast: a set of calm-wind routes would only be the same route again.
+  if ((r.route as { no_forecast?: unknown }).no_forecast === true)
+    return 'route: no_forecast cannot be combined with an ensemble set (each member routes on its own forecast)';
   const routeErr = validateRouteRequest(r.route as EnsembleSetRequest['route']);
   return routeErr ? `route: ${routeErr}` : null;
 }
@@ -130,7 +136,8 @@ export interface EnsembleSetDeps {
   cancelRunning: (jobId: string) => void;
   /** The cycle (ISO) and members on disk of an ensemble's cycle in use, or null when none is. */
   onDisk: (model: EnsembleModelId) => { cycle: string; members: number[] } | null;
-  log?: (msg: string) => void;
+  /** Where a failure the set carries is reported (persist). */
+  log: (msg: string) => void;
 }
 
 export class EnsembleSetManager {
@@ -326,10 +333,25 @@ export class EnsembleSetManager {
     this.trim();
   }
 
+  /**
+   * Save the ensemble set's file. The file is how the ensemble set outlives a restart; the ensemble set itself runs from memory. A save that
+   * fails (a full or read-only disk) is the ensemble set's to carry, not its caller's: `save_error` says why its file is behind
+   * (the API shows it), the failure is reported, and the next change saves it again, clearing it. It never throws into
+   * a job event, a request or the start-up.
+   */
   private persist(s: EnsembleSet): void {
-    const tmp = path.join(this.dir, `${s.id}.json.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(s));
-    fs.renameSync(tmp, path.join(this.dir, `${s.id}.json`));
+    const file = path.join(this.dir, `${s.id}.json`);
+    const tmp = `${file}.tmp`;
+    delete s.save_error;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(s));
+      fs.renameSync(tmp, file);
+    } catch (err) {
+      s.save_error = `its file could not be saved: ${(err as Error).message}`;
+      this.deps.log(`ensemble set ${s.id}: ${s.save_error}`);
+      // Its half-written copy, if the write got that far (existsSync never throws).
+      if (fs.existsSync(tmp)) fs.rmSync(tmp);
+    }
   }
 
   /** Finished sets beyond ENSEMBLE_SET_LIMITS.keep, oldest first, deleted with their route jobs. */

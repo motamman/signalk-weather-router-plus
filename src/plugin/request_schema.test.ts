@@ -51,6 +51,11 @@ test('route request: forecast_member names a known ensemble, a member 0..50 and 
     'forecast_member.cycle must be yyyymmddHH'
   );
   assert.equal(
+    validateRouteRequest({ ...ok, no_forecast: true, forecast_member: { model: 'ifs-ens', member: 1 } }),
+    'forecast_member cannot be combined with no_forecast'
+  );
+  assert.equal(validateRouteRequest({ ...ok, no_forecast: false, forecast_member: { model: 'ifs-ens', member: 1 } }), null);
+  assert.equal(
     validateRouteRequest({ ...ok, forecast_member: null as unknown as RouteRequest['forecast_member'] }),
     'forecast_member must be {model, member}'
   );

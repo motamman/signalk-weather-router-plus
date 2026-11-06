@@ -60,9 +60,7 @@ export class JobManager extends EventEmitter {
   constructor(
     dataDir: string,
     private keepJobs: number,
-    private readonly basePath: string,
-    /** Where a listener's failure is reported (emitEvent). */
-    private readonly log: (message: string) => void
+    private readonly basePath: string
   ) {
     super();
     this.dir = path.join(dataDir, 'jobs');
@@ -165,16 +163,7 @@ export class JobManager extends EventEmitter {
       job.events.push(ev);
       if (job.events.length > 500) job.events.splice(0, job.events.length - 500);
     }
-    // Each listener on its own (an ensemble set or departure window saving its file, an event stream): one that throws
-    // is reported and the others still hear the event, so a failure in one never stops a job reaching the worker
-    // (pump sends 'start' after the 'running' event).
-    for (const fn of this.listeners('event') as ((id: string, e: JobEvent) => void)[]) {
-      try {
-        fn(job.id, ev);
-      } catch (err) {
-        this.log(`job ${job.id}: a listener of its ${event} event failed: ${(err as Error).message}`);
-      }
-    }
+    this.emit('event', job.id, ev);
   }
 
   links(id: string): JobLinks {

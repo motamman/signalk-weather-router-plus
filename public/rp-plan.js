@@ -43,9 +43,10 @@ let _winStale = false;  // the markers moved since the window on screen was star
 // poll. Declared here for the same reason: renderResultStrip and the clears reach it.
 let _ens = null;
 let _ensTimer = null;
-// Which screen the set requests belong to: each time a set leaves the screen (_ensGone) it moves on, and an answer
-// asked for before that (a poll in flight, a set being started, a route's set being looked up) is dropped.
-let _ensGen = 0;
+// The set's place on the screen, and every request made for it: a set being started, polled, its lines fetched, a
+// route's set looked up. Each request holds the screen it was asked for, and acts only while that screen has not
+// ended. _ensGone ends it, saying whether the set is to be cancelled; a new screen takes its place.
+let _ensScreen = { ended: false, cancel: false };
 
 let _activeReplanES = null;
 function closeReplanStream() { if (_activeReplanES) { try { _activeReplanES.close(); } catch (_) {} _activeReplanES = null; } }
@@ -2672,41 +2673,53 @@ const _ensLines = new Map();   // job id → { coords (map coordinates), main }:
 function _ensStart(route, want, mainJobId) {
   const req = { route: { ...route }, model: want.model, members: want.members, main_job_id: mainJobId };
   delete req.route.publish;
-  const gen = _ensGen;
+  const screen = _ensScreen;
   authFetch(API + '/ensemble-sets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) }, null)
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
     .then(d => {
       appendLog('Ensemble: ' + d.members + ' member routes started', 'done');
-      // Its route was cleared or replaced meanwhile: the set stays on the server (listed with that route), not shown.
-      if (gen === _ensGen) _ensPoll(d.id, gen);
+      if (!screen.ended) {
+        _ensPoll(d.id, screen);
+        return;
+      }
+      // Its screen ended before the set existed. Find Route asked for it to go: it is cancelled now. Clear or another
+      // route did not: it stays on the server, listed with its route, and is shown when that route is opened again.
+      if (screen.cancel) _ensCancel(d.id);
     })
     .catch(err => appendLog('Ensemble routes not started: ' + err.message, 'error'));
 }
-/** Follow set `id` on the screen of generation `gen` (_ensGen); an answer for a screen gone is dropped. */
-function _ensPoll(id, gen) {
+/** Follow set `id` on `screen` (_ensScreen) while that screen lasts. */
+function _ensPoll(id, screen) {
   clearTimeout(_ensTimer);
   authFetch(API + '/ensemble-sets/' + encodeURIComponent(id), { cache: 'no-store' }, 'ensemble-set')
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status })))))
     .then(set => {
-      if (gen !== _ensGen) return;   // the set left the screen meanwhile (Find Route, Clear, another route)
+      if (screen.ended) return;   // the set left the screen meanwhile (Find Route, Clear, another route)
       _ens = set;
       _ensDraw();
       _ensRender();
       if (set.status === 'running' || set.members.some(m => m.status === 'running' || m.status === 'queued'))
-        _ensTimer = setTimeout(() => _ensPoll(id, gen), 3000);
+        _ensTimer = setTimeout(() => _ensPoll(id, screen), 3000);
     })
     .catch(err => {
-      if (err.name === 'AbortError' || gen !== _ensGen) return;
+      if (err.name === 'AbortError' || screen.ended) return;
       if (err.status === 404) { _ensGone(false); return; }
-      _ensTimer = setTimeout(() => _ensPoll(id, gen), 10000);
+      _ensTimer = setTimeout(() => _ensPoll(id, screen), 10000);
     });
 }
-/** The set leaves the screen; `cancel`: a set still computing is cancelled on the server too. */
+/** Cancel set `id` on the server: its members not computed yet are not computed. A cancel that fails is logged (the set goes on). */
+function _ensCancel(id) {
+  authFetch(API + '/ensemble-sets/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }, null)
+    .then(r => (r.ok ? null : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
+    .catch(err => appendLog('Ensemble set ' + id + ' not cancelled, its members go on computing: ' + err.message, 'error'));
+}
+/** The set leaves the screen; `cancel`: a set still computing, or one still being started, is cancelled on the server too. */
 function _ensGone(cancel) {
-  _ensGen++;
+  _ensScreen.ended = true;
+  _ensScreen.cancel = cancel;
+  _ensScreen = { ended: false, cancel: false };
   clearTimeout(_ensTimer);
-  if (cancel && _ens && _ens.status === 'running')
-    authFetch(API + '/ensemble-sets/' + encodeURIComponent(_ens.id) + '/cancel', { method: 'POST' }, null).catch(() => {});
+  if (cancel && _ens && _ens.status === 'running') _ensCancel(_ens.id);
   _ens = null;
   _ensSource.clear();
   _ensCorridorSource.clear();
@@ -2717,7 +2730,7 @@ function _ensGone(cancel) {
 /** Each finished route of the set on screen (the main forecast's and the members'): its line fetched once and drawn. */
 function _ensDraw() {
   const set = _ens;
-  const gen = _ensGen;
+  const screen = _ensScreen;
   const routes = set.main && set.main.status === 'done' ? [{ ...set.main, main: true }, ...set.members] : set.members;
   for (const m of routes) {
     if (m.status !== 'done' || !m.job_id || _ensDrawn.has(m.job_id)) continue;
@@ -2725,7 +2738,7 @@ function _ensDraw() {
     authFetch(API + '/routes/' + encodeURIComponent(m.job_id) + '/result', { cache: 'no-store' }, null)
       .then(r => (r.ok ? r.json() : null))
       .then(geo => {
-        if (gen !== _ensGen || !geo || !_ens || _ens.id !== set.id) return;   // the set left the screen meanwhile (even to come back)
+        if (screen.ended || !geo) return;   // the set left the screen meanwhile (even to come back)
         const pts = (geo.features || []).filter(f => f.geometry && f.geometry.type === 'Point').map(f => f.geometry.coordinates);
         if (pts.length < 2) return;
         const coords = unwrapLonLats(pts).map(c => ol.proj.fromLonLat(c));
@@ -2736,7 +2749,7 @@ function _ensDraw() {
         _ensLines.set(m.job_id, { coords, main: !!m.main });
         _ensCorridor();
       })
-      .catch(() => { if (gen === _ensGen) _ensDrawn.delete(m.job_id); });
+      .catch(() => { if (!screen.ended) _ensDrawn.delete(m.job_id); });
   }
 }
 // ── The corridor: where all the set's routes lie, display only ──
@@ -2859,12 +2872,12 @@ window.addEventListener('rp:units', _ensRender);
  */
 function _ensForRoute(id) {
   if (_ens && ((_ens.main && _ens.main.job_id === id) || _ens.members.some(m => m.job_id === id))) return;
-  const gen = _ensGen;
+  const screen = _ensScreen;
   authFetch(API + '/ensemble-sets?limit=12', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : []))
     .then(list => {
       const set = Array.isArray(list) ? list.find(x => x.request && x.request.main_job_id === id) : null;
-      if (set && gen === _ensGen && _currentRouteJobId === id) _ensPoll(set.id, gen);
+      if (set && !screen.ended && _currentRouteJobId === id) _ensPoll(set.id, screen);
     })
     .catch(() => { /* none: the route has no set */ });
 }
