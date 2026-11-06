@@ -16,6 +16,16 @@ import { ROUTER_KINDS } from '../engine/router';
 import { SEARCH_PRESETS } from '../engine/search/presets';
 import { SETTINGS_SPEC } from './settings';
 import { AIR_DRAFT_M_RANGE, DRAUGHT_M_RANGE, OVERHEAD_M_RANGE, UKC_M_RANGE } from '../vessel/vessel';
+import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS } from '../data/ecmwf';
+
+/**
+ * The fewest and most members a route can be checked against: the most is the most members downloaded plus a control
+ * (AIFS ENS has one, IFS ENS none). The members on disk bound it further (api.ts).
+ */
+export const ENSEMBLE_MEMBERS_RANGE = [
+  ENSEMBLE_MEMBER_CHOICES[0],
+  ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1] + 1,
+] as const;
 
 /** The range a setting allows, for a request field that overrides it. */
 function settingRange(key: string): { minimum: number; maximum: number } {
@@ -237,6 +247,22 @@ export const RouteRequestSchema = Type.Object({
   vessel: Type.Optional(
     Type.Object(VESSEL_FIELDS, { description: 'Per-route overrides of the vessel settings (SI); absent keys use the settings.' })
   ),
+  ensemble: Type.Optional(
+    Type.Object(
+      {
+        model: Type.Enum(ENSEMBLE_MODELS, { type: 'string', description: 'The ensemble (downloaded: plugin config Ensemble downloads)' }),
+        members: Type.Integer({
+          minimum: ENSEMBLE_MEMBERS_RANGE[0],
+          maximum: ENSEMBLE_MEMBERS_RANGE[1],
+          description: 'How many of its members on disk (the control first where there is one): at most those downloaded',
+        }),
+      },
+      {
+        description:
+          "After the route is found on the main forecast, sail it in each of these members' weather: arrival spread, time over the limits (GET .../ensemble). Absent = no ensemble check.",
+      }
+    )
+  ),
 });
 
 export type RouteRequest = Static<typeof RouteRequestSchema>;
@@ -314,6 +340,15 @@ export function validateRouteRequest(b: RouteRequest): string | null {
     if (name === 'departure' && v === '') continue; // empty = now
     const e = fieldError(name, v, schema);
     if (e) return e;
+  }
+  if (b.ensemble !== undefined) {
+    const e = b.ensemble as unknown as Record<string, unknown> | null;
+    if (!e || typeof e !== 'object') return 'ensemble must be {model, members}';
+    if (!(ENSEMBLE_MODELS as readonly string[]).includes(e.model as string))
+      return `ensemble.model must be ${ENSEMBLE_MODELS.join(' or ')}`;
+    const n = e.members;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < ENSEMBLE_MEMBERS_RANGE[0] || n > ENSEMBLE_MEMBERS_RANGE[1])
+      return `ensemble.members must be a whole number ${ENSEMBLE_MEMBERS_RANGE[0]}..${ENSEMBLE_MEMBERS_RANGE[1]}`;
   }
   if (b.vessel !== undefined) {
     if (b.vessel === null || typeof b.vessel !== 'object') return 'vessel must be an object';

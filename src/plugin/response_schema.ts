@@ -11,6 +11,7 @@ import { DRAWBRIDGE_CHOICES } from '../engine/mesh/route';
 import { ROUTER_KINDS } from '../engine/router';
 import { SEARCH_PRESETS } from '../engine/search/presets';
 import { RouteRequestSchema } from './request_schema';
+import { ENSEMBLE_MODELS } from '../data/ecmwf';
 
 const nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T, description?: string) =>
   Type.Union([t, Type.Null()], description ? { description } : {});
@@ -95,6 +96,26 @@ export const RouteSummarySchema = Type.Object({
   drawbridges_rule: Type.Optional(Type.Enum(DRAWBRIDGE_CHOICES, { type: 'string' })),
   router: Type.Optional(Type.Enum(ROUTER_KINDS, { type: 'string', description: 'The open-water router that ran.' })),
   search: Type.Optional(Type.Enum(SEARCH_PRESETS, { type: 'string', description: 'The search method the route ran with.' })),
+  ensemble: Type.Optional(
+    Type.Object(
+      {
+        model: Type.Enum(ENSEMBLE_MODELS, { type: 'string' }),
+        name: Type.String(),
+        cycle: Type.String({ description: "The ensemble's cycle (ISO 8601)" }),
+        members: Type.Number(),
+        arrival_p10: nullable(Type.String()),
+        arrival_p50: nullable(Type.String()),
+        arrival_p90: nullable(Type.String()),
+        over_wind: Type.Number({ description: 'Members over the wind limit somewhere on the route' }),
+        over_waves: Type.Number({ description: 'Members over the wave limit somewhere on the route' }),
+        stuck: Type.Number({ description: 'Members in whose weather a leg could not be sailed' }),
+      },
+      {
+        description:
+          "The route sailed in each of the ensemble's members' weather, when the request asked for it: the arrival percentiles over the members that arrive (ISO 8601), and how many members go over a limit or get stuck. Each member: GET .../ensemble.",
+      }
+    )
+  ),
 });
 export type RouteSummary = Static<typeof RouteSummarySchema>;
 
@@ -108,6 +129,7 @@ export const JobLinksSchema = Type.Object({
   cancel: Type.String(),
   publish: Type.String(),
   meteogram: Type.String(),
+  ensemble: Type.String(),
 });
 export type JobLinks = Static<typeof JobLinksSchema>;
 

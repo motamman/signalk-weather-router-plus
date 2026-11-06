@@ -45,7 +45,7 @@ import { type MainToWorker, type WorkerRole, type WorkerToMain } from './protoco
 import { rtofsLoadSame, smocLoadSame } from './config';
 import { setNetworkObserver } from '../data/http';
 import { noteNetwork, requireInit } from './worker/state';
-import { refreshForecast } from './worker/forecast';
+import { refreshEnsembles, refreshForecast } from './worker/forecast';
 import { prepareWaterGrid } from './worker/landgrid';
 import {
   adoptCurrentsRef,
@@ -135,6 +135,7 @@ const st: WorkerState = {
   harmonicErrors: [],
   currentsUnread: [],
   decodeAbort: null,
+  ensembles: {},
 };
 // The data worker's requests say whether there is a connection (status, and a refresh round stops asking servers).
 if (role === 'data') setNetworkObserver((state, reason) => noteNetwork(st, state, reason));
@@ -167,6 +168,8 @@ export async function refresh(st: WorkerState, force: boolean, user = false): Pr
     sendCurrents(st);
     if (st.role === 'data') {
       await refreshForecast(st, force, offline(), held);
+      // The ensembles of the run in use, after it and never in its way.
+      await refreshEnsembles(st, offline(), held).catch(err => st.log('error', `ensembles: ${(err as Error).message}`));
       // After the forecast, so a first boot is not held up by the SMOC resident download.
       await refreshSmoc(st, offline());
       sendCurrents(st);

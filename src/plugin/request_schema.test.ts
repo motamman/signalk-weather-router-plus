@@ -23,7 +23,30 @@ test('route request: ranges come from the settings they override, and the OpenAP
     assert.deepEqual([f.minimum, f.maximum], [spec(key).min, spec(key).max], field);
   }
   const schema = routeRequestSchema() as { properties: Record<string, unknown> };
-  assert.deepEqual(Object.keys(schema.properties), ['start', 'end', 'waypoints', ...Object.keys(ROUTE_REQUEST_FIELDS), 'vessel']);
+  assert.deepEqual(Object.keys(schema.properties), [
+    'start',
+    'end',
+    'waypoints',
+    ...Object.keys(ROUTE_REQUEST_FIELDS),
+    'vessel',
+    'ensemble',
+  ]);
+});
+
+test('route request: an ensemble check names a known ensemble and 5 to 51 members (50 and a control)', () => {
+  assert.equal(validateRouteRequest({ ...ok, ensemble: { model: 'ifs-ens', members: 5 } }), null);
+  assert.equal(validateRouteRequest({ ...ok, ensemble: { model: 'aifs-ens', members: 51 } }), null);
+  assert.equal(
+    validateRouteRequest({ ...ok, ensemble: { model: 'gefs', members: 5 } as unknown as RouteRequest['ensemble'] }),
+    'ensemble.model must be ifs-ens or aifs-ens'
+  );
+  for (const members of [4, 52, 5.5, '10'])
+    assert.equal(
+      validateRouteRequest({ ...ok, ensemble: { model: 'ifs-ens', members } as unknown as RouteRequest['ensemble'] }),
+      'ensemble.members must be a whole number 5..51',
+      String(members)
+    );
+  assert.equal(validateRouteRequest({ ...ok, ensemble: null as unknown as RouteRequest['ensemble'] }), 'ensemble must be {model, members}');
 });
 
 test('route request: valid bodies pass, each bad field names itself', () => {

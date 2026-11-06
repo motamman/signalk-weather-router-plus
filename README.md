@@ -150,6 +150,44 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   disk). Route areas are released when a route ends, so each route
   decodes its CMEMS SMOC area again from the disk cache (2.1–3.4 s
   measured).
+- **Ensembles (optional, off by default).** With *Download ensembles* on
+  in the plugin configuration, each cycle, after the forecast, the plugin
+  also downloads ECMWF's open-data ensembles at 0.25°: **IFS ENS** (50
+  perturbed members, no control; every 3 h to 144 h, then every 6 h) and
+  **AIFS ENS** (a control and 50 members; every 6 h). Which ones, and
+  how many members (5 to 50 in fives, members 1 to N, and AIFS ENS's
+  control too), are chosen there; at least one ensemble while they are
+  on. Only the routing fields are fetched (`10u`, `10v`, `swh`, `mwp`,
+  `mwd`), to the forecast's horizon, step by step from the published
+  `.index` files (`ecmwf-ens/` under the plugin data directory), and each
+  member is decoded to disk as a run of its own in the forecast's format
+  (`forecast-ens/<model>/mNN/<cycle>/`; m00 is the control); every
+  message is checked to be the member it is filed as (GRIB2 product
+  template 4.1). A cycle is used only once every member chosen is on
+  disk; until then the one before stays. The download holds off while
+  offline or held, as the forecast's does, and checks the free disk
+  first.
+
+  A route can then be **checked against an ensemble**: it is found on
+  the main forecast as always, then sailed leg by leg from its departure
+  in each member's wind and waves (with the route's currents, boat and
+  limits; nothing is searched again). Per member: the arrival, the time
+  over the wind and the wave limit (counted, not stopped at), the
+  strongest wind and highest waves met, or where it could not be sailed;
+  in all: the 10th, 50th and 90th percentile arrival over the members
+  that arrive, and how many go over each limit or cannot sail it. In the
+  webapp: Route → Plan, *Check the route against an ensemble*, with the
+  ensemble and the number of members (5 to those on disk) in Route →
+  Options → Ensemble; the result strip carries the summary and the
+  Itinerary tab a table of the members. Over the API: the request's
+  `ensemble`, and `GET /api/routes/{id}/ensemble`.
+
+  *Measured on the test box (Pi 5), 2026-11-05, 72 h:* IFS ENS, 5
+  members: 625 fields, 350,757,112 B downloaded (arithmetic: about
+  70 MB per member), decoded in 121.8 s, 519 MB on disk per member
+  (5 fields × 25 steps × 4.15 MB). AIFS ENS, the control and 5 members:
+  390 fields, 206,788,659 B, 75.3 s, 270 MB per member (13 steps).
+  Sailing a route in one member's weather took 10–50 ms.
 - **Land:** GSHHG shorelines as shapefiles (`GSHHS_f_L1.shp` for full
   resolution, automatically including L2–L4 siblings; add `GSHHS_f_L6.shp` for Antarctica) or the OSM
   land-polygons export. At start the plugin cuts the coastline into
@@ -1653,6 +1691,9 @@ React and needs no build step for it.
 | `polarsDir` | directory of `.pol`/`.csv` polars listed by `/api/polars`. Blank = the library bundled with the plugin (`data/polars/`: the ~700 polars of the OpenCPN [weather_routing_pi](https://github.com/seandepagnier/weather_routing_pi) library, GPL-3.0), with user polars (generated ones included) kept in `polars/user/` in the plugin data directory, so an update never removes them. Set, user polars are in `<polarsDir>/user/` |
 | `currents.harmonicDir` | directory of tidal-harmonic `.npz` files |
 | `forecast.mirror` | `ecmwf`, `aws` or `google` |
+| `forecast.ensemble.enabled` | download ECMWF ensembles each cycle, after the forecast (default off: nothing downloaded, nothing shown). See [Data](#data) |
+| `forecast.ensemble.models` | `ifs-ens`, `aifs-ens` or both (default `ifs-ens`); at least one while ensembles are on. One no longer chosen is deleted from disk |
+| `forecast.ensemble.members` | members per ensemble, 5 to 50 in fives (default 5): members 1 to this, and AIFS ENS's control too |
 | `weatherProvider.enabled` | register with the Weather API (default on) |
 | `overlayCache.enabled` | build map tiles ahead of time (default on) |
 | `overlayCache.radius` | m, around the boat at zoom 8 and below; halved at each deeper zoom (default 250000, 1000–2000000); the map view builds only the tiles it showed |
@@ -1997,6 +2038,7 @@ the SSE endpoint replays.
 | GET | `/api/routes/{id}/fronts` | readonly | every search stage's front and best path, compact (display only) |
 | GET | `/api/routes/{id}/signalk` | readonly | Signal K Resources API route record |
 | GET | `/api/routes/{id}/meteogram` | readonly | conditions where the boat is at each step of the passage |
+| GET | `/api/routes/{id}/ensemble` | readonly | the route sailed in each ensemble member's weather (a request with `ensemble`); 404 without one, 409 before it is done |
 | POST | `/api/routes/{id}/cancel` | readwrite | cancel a queued or running job |
 | POST | `/api/routes/{id}/publish` | readwrite | save the route to the Resources API |
 | DELETE | `/api/routes/{id}` | readwrite | delete a job |
@@ -2059,6 +2101,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `no_currents` | boolean | | false | ignore every current source |
 | `wind_model` | string | | `auto` | `auto`: regional wind from signalk-grib-downloader where finer and covering, ECMWF elsewhere; `ecmwf`: ECMWF only |
 | `avoid_areas` | boolean | | true | treat the areas marked on Signal K notes (`properties.avoid.radius_m` around the note's position) as land |
+| `ensemble` | `{model, members}` | | none | check the finished route against an ensemble on disk: `model` `"ifs-ens"` or `"aifs-ens"` (one downloaded, else `400`), `members` 5..51 and at most those on disk (`/api/status` `ensembles`; the control first where there is one). The route is the one found on the main forecast; it is sailed in each member's weather after the search. `summary.ensemble` carries the percentiles and counts, `GET /api/routes/{id}/ensemble` each member |
 | `vessel` | object | | the vessel settings | per-route overrides; absent keys use the settings ([Configuration](#configuration)) |
 | `vessel.name` | string | | | ignored (accepted so older clients still validate); the vessel name is Signal K's `vessels.self.name` |
 | `vessel.motor_speed_ms` | number | m/s | setting (3.087) | 0.01..50 |

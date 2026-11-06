@@ -14,8 +14,9 @@
  */
 
 import * as path from 'node:path';
-import { cycleFor, ECMWF_MIRRORS, EcmwfClient } from '../data/ecmwf';
+import { cycleFor, ECMWF_MIRRORS, EcmwfClient, type EnsembleModelId } from '../data/ecmwf';
 import { cycleName, DECODED_DIR, DecodedRunWriter } from '../data/decoded';
+import { runEnsembleCycle, type EnsembleModelResult } from '../data/ensemble';
 import { decodeForecastToDisk } from '../data/loader';
 
 export interface ForecastDecodeTask {
@@ -38,6 +39,38 @@ export interface ForecastDecodeResult {
 }
 
 export type ForecastDecodeEvent = { event: 'decode-step'; done: number; total: number } | { event: 'decode-log'; message: string };
+
+/** The ensembles of one cycle downloaded and decoded (childtask.ts task 'ensemble-decode', data/ensemble.ts), in a child for the same reasons. */
+export interface EnsembleDecodeTask {
+  task: 'ensemble-decode';
+  cacheRoot: string;
+  mirror: string;
+  /** Cycle time, ISO: the main forecast's run in use. */
+  cycle: string;
+  horizonS: number;
+  models: EnsembleModelId[];
+  members: number;
+}
+
+export async function runEnsembleDecodeTask(
+  t: EnsembleDecodeTask,
+  emit: (e: ForecastDecodeEvent) => void,
+  client: EcmwfClient = new EcmwfClient({
+    baseUrl: ECMWF_MIRRORS[t.mirror] ?? ECMWF_MIRRORS.ecmwf,
+    cacheDir: path.join(t.cacheRoot, 'ecmwf'),
+    log: message => emit({ event: 'decode-log', message: `ecmwf: ${message}` }),
+  })
+): Promise<EnsembleModelResult[]> {
+  return runEnsembleCycle(client, {
+    cacheRoot: t.cacheRoot,
+    cycle: cycleFor(new Date(t.cycle)),
+    horizonS: t.horizonS,
+    models: t.models,
+    members: t.members,
+    log: message => emit({ event: 'decode-log', message }),
+    onProgress: (done, total) => emit({ event: 'decode-step', done, total }),
+  });
+}
 
 export async function runForecastDecodeTask(
   t: ForecastDecodeTask,

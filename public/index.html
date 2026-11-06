@@ -356,6 +356,21 @@
   #windowResults tr.win-off td { color: var(--text-2); }
   #windowResults .win-sort { display: flex; align-items: center; gap: var(--s-1); margin-top: var(--s-1); }
   #windowResults .win-sort select { width: auto; padding: 1px 4px; font-size: var(--f-xs); }
+  /* The route sailed in each ensemble member's weather (rp-plan.js). */
+  #itinEnsemble:empty { display: none; }
+  #itinEnsemble {
+    margin: var(--s-2) var(--s-2) 0; padding: var(--s-2) var(--s-3);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+    color: var(--text); font-size: var(--f-xs);
+  }
+  #itinEnsemble summary { cursor: pointer; font-weight: 600; }
+  #itinEnsemble .ens-scroll { overflow-x: auto; }
+  #itinEnsemble table { border-collapse: collapse; width: 100%; margin-top: var(--s-1); }
+  #itinEnsemble th { text-align: right; vertical-align: bottom; font-weight: 600; color: var(--text-2); padding: 2px 3px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  #itinEnsemble td { text-align: right; padding: 2px 3px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  #itinEnsemble th:first-child, #itinEnsemble td:first-child { text-align: left; }
+  #itinEnsemble tr.ens-stuck td { color: var(--danger); }
+  #itinEnsemble td.ens-over { color: var(--warn); font-weight: 600; }
   /* Meteogram: the route's conditions along the passage, across the map beside the panel (rp-plan.js). */
   #meteogram {
     position: absolute; left: 10px; right: calc(var(--panel-w-desktop) + 20px);
@@ -964,6 +979,13 @@
   <input type="range" id="sailThresh" min="0" max="5.2" step="0.1" value="2.6" aria-label="Minimum sailing speed">
   </div>
 
+  <!-- Ensemble check (rp-plan.js, Ensemble): shown only while the plugin has an ensemble on disk (the Signal K plugin
+       configuration, Ensemble downloads). Which ensemble and how many members: Options → Ensemble. -->
+  <div id="ensembleRow" hidden>
+    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="The route is found on the main forecast as always, then sailed leg by leg in each ensemble member's wind and waves: when it would arrive in each, and how many go over the wind or wave limit."><input type="checkbox" id="ensembleOn">Check the route against an ensemble</label>
+    <div id="ensembleRowHint" class="ctl-hint"></div>
+  </div>
+
   <button id="findRoute" disabled>Find Route</button>
   <!-- Phase progress while a route computes, in the button's place (rp-plan.js hides the button meanwhile): where the
        user pressed Find Route, so it is in view, with Cancel beside it. A failure stays here under the button. -->
@@ -1054,6 +1076,22 @@
   <div class="ctl-hint" id="limitStrengthHint" hidden>How hard the route tries to stay under a limit set to Avoid. Higher means it will sail further out of its way to avoid it. 0 means it never detours, it only warns.</div>
   <label>Comfort: <input type="range" id="comfortWeight" min="0" max="3" step="0.1" value="1" style="width:8em;vertical-align:middle;" aria-label="Comfort"> <span id="comfortWeightValue"></span> <button type="button" class="srv-reset" id="comfortWeightReset" hidden>Use server setting</button></label>
   <div class="ctl-hint">How much the route avoids rough water, as the boat meets it (head seas count more than following seas). Higher means it gives up more time for a smoother passage. 0 turns comfort off. Needs wave data in the forecast.</div>
+
+  </div>
+  </details>
+
+  <!-- Ensemble: which one and how many members the Plan tab's ensemble check uses (rp-plan.js). Shown only while the
+       plugin has an ensemble on disk. -->
+  <details class="subsection" id="ensembleSection" hidden>
+  <summary>Ensemble</summary>
+  <div class="subsection-body">
+
+  <div class="ctl-hint">With "Check the route against an ensemble" ticked on the Plan tab, the route found on the main forecast is sailed again in each member's weather. Members are the ensemble's other possible weathers; the control (member 0) is the ensemble's own unperturbed run, used first.</div>
+  <label for="ensembleModel">Ensemble</label>
+  <select id="ensembleModel" aria-label="Ensemble"></select>
+  <label>Members: <span id="ensembleMembersLabel">—</span></label>
+  <input type="range" id="ensembleMembers" min="5" max="5" step="1" value="5" aria-label="Ensemble members">
+  <div id="ensembleMembersHint" class="ctl-hint"></div>
 
   </div>
   </details>
@@ -1217,6 +1255,8 @@
       <span class="recompute-actions"><button type="button" id="recomputeYes">Recompute</button><button type="button" id="recomputeNo">Keep as saved</button></span>
     </div>
     <div id="itinSummary"></div>
+    <!-- The route sailed in each ensemble member's weather (GET /api/routes/:id/ensemble; rp-plan.js). -->
+    <div id="itinEnsemble"></div>
     <div id="modalItinerary"></div>
   </div>
   </section>

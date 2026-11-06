@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { JobProgress, JobStatus, RouteRequest, RouteSummary } from './protocol';
 import type { JobLinks, JobPublic } from './response_schema';
+import type { EnsembleCheck } from './protocol';
 
 export interface JobEvent {
   id: number;
@@ -32,6 +33,8 @@ export interface Job {
   skeleton?: Record<string, unknown> | null;
   /** Every search stage's front and best path, compact (display only). */
   fronts?: unknown[] | null;
+  /** The route sailed in each ensemble member's weather, when the request asked for it (engine/ensemble.ts). */
+  ensemble?: EnsembleCheck;
   /** Resources API id when published. */
   resourceId?: string;
   /** The departure window this job is one departure of (windows.ts); such jobs are listed and trimmed with their window. */
@@ -45,7 +48,7 @@ export interface Job {
 export type { JobPublic };
 
 /** What a finished departure-window job keeps only in its file (see release). */
-const RESULT_KEYS = ['geojson', 'skRoute', 'skeleton', 'fronts', 'events', 'progress'] as const;
+const RESULT_KEYS = ['geojson', 'skRoute', 'skeleton', 'fronts', 'ensemble', 'events', 'progress'] as const;
 
 export class JobManager extends EventEmitter {
   private jobs = new Map<string, Job>();
@@ -113,6 +116,7 @@ export class JobManager extends EventEmitter {
     delete job.skRoute;
     delete job.skeleton;
     delete job.fronts;
+    delete job.ensemble;
     job.events = [];
     job.progress = [];
     this.released.add(job.id);
@@ -175,6 +179,7 @@ export class JobManager extends EventEmitter {
       cancel: `${b}/cancel`,
       publish: `${b}/publish`,
       meteogram: `${b}/meteogram`,
+      ensemble: `${b}/ensemble`,
     };
   }
 
@@ -272,7 +277,8 @@ export class JobManager extends EventEmitter {
     skRoute: Record<string, unknown>,
     summary: RouteSummary,
     skeleton: Record<string, unknown> | null = null,
-    fronts: unknown[] | null = null
+    fronts: unknown[] | null = null,
+    ensemble?: EnsembleCheck
   ): void {
     const job = this.jobs.get(id);
     if (!job) return;
@@ -282,6 +288,7 @@ export class JobManager extends EventEmitter {
     job.skRoute = skRoute;
     job.skeleton = skeleton;
     job.fronts = fronts;
+    if (ensemble) job.ensemble = ensemble;
     job.summary = summary;
     this.emitEvent(job, 'route', geojson);
     this.emitEvent(job, 'done', { status: 'done', summary });

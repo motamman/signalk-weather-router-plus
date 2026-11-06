@@ -44,6 +44,9 @@
  *  - forecast-decode: one ECMWF cycle downloaded and decoded to disk
  *              (plugin/forecastdecodetask.ts), so the data worker keeps
  *              answering map queries meanwhile; streams its progress;
+ *  - ensemble-decode: the chosen ensembles' members of that cycle
+ *              downloaded and decoded to disk (data/ensemble.ts), after the
+ *              forecast, the same way;
  *  - coast-cut: the coastline cut into its tiles (geo/coasttiles.ts), once
  *              per coastline: every record read, the continents included
  *              (about 750 MB at its peak for GSHHG full resolution, brain
@@ -71,7 +74,8 @@ import type { MeshLegEvent, MeshLegResult, MeshLegTask } from './meshlegtask';
 import type { MeshTransferTask, MeshTransferTaskResult } from './meshtransfer';
 import type { MeshWatersTask, MeshWatersTaskResult } from './meshwaters';
 import type { MeshDownloadResult, MeshDownloadTask } from './mesharchive';
-import type { ForecastDecodeEvent, ForecastDecodeResult, ForecastDecodeTask } from './forecastdecodetask';
+import type { EnsembleDecodeTask, ForecastDecodeEvent, ForecastDecodeResult, ForecastDecodeTask } from './forecastdecodetask';
+import type { EnsembleModelResult } from '../data/ensemble';
 import type { CutResult } from '../geo/coasttiles';
 
 /** Cut the coastline `paths` into its tile store under `root` (geo/coasttiles.ts). */
@@ -95,6 +99,7 @@ export type ChildTask =
   | MeshWatersTask
   | MeshDownloadTask
   | ForecastDecodeTask
+  | EnsembleDecodeTask
   | CoastCutTask;
 
 /** A message a task sends before its answer (the mesh leg's progress and stage fronts, the forecast decode's steps). */
@@ -130,9 +135,11 @@ export type ChildTaskResult<T extends ChildTask> = T extends { task: 'rmtree' }
                       ? MeshDownloadResult
                       : T extends { task: 'forecast-decode' }
                         ? ForecastDecodeResult
-                        : T extends { task: 'coast-cut' }
-                          ? CutResult
-                          : RegionalDecodeResult;
+                        : T extends { task: 'ensemble-decode' }
+                          ? EnsembleModelResult[]
+                          : T extends { task: 'coast-cut' }
+                            ? CutResult
+                            : RegionalDecodeResult;
 
 const isTs = __filename.endsWith('.ts');
 
@@ -302,6 +309,10 @@ async function runTask(t: ChildTask): Promise<unknown> {
     case 'forecast-decode': {
       const { runForecastDecodeTask } = await import('./forecastdecodetask');
       return runForecastDecodeTask(t, event => process.send!({ event }));
+    }
+    case 'ensemble-decode': {
+      const { runEnsembleDecodeTask } = await import('./forecastdecodetask');
+      return runEnsembleDecodeTask(t, event => process.send!({ event }));
     }
     case 'coast-cut': {
       const { cutCoastline } = await import('../geo/coasttiles');

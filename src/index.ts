@@ -1062,7 +1062,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         jobs?.onFrontier(msg.id, { leg: msg.leg, stage: msg.stage, total: msg.total, points: msg.points, best: msg.best });
         return;
       case 'done': {
-        jobs?.onDone(msg.id, msg.geojson, msg.skRoute, msg.summary, msg.skeleton, msg.fronts ?? null);
+        jobs?.onDone(msg.id, msg.geojson, msg.skRoute, msg.summary, msg.skeleton, msg.fronts ?? null, msg.ensemble);
         if (msg.summary.corridor_fallback) {
           corridorFallbacks++;
           log(`route ${msg.id}: corridor search failed, coarse-skeleton fallback used (${corridorFallbacks} since load)`);
@@ -1539,6 +1539,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
         harmonic_dir: config?.currents.harmonicDir,
         extra_fields: config?.forecast.extraFields,
         energy_fields: config?.forecast.energyFields,
+        // The ensembles chosen in the plugin config (data/ensemble.ts): the members in use and the last pass; empty when off.
+        ensembles: dataStatus?.ensembles ?? [],
       }),
       forecastInfo: async (lat, lon) => {
         if (!forecastRun) throw new Error(forecastError ? `forecast unavailable: ${forecastError}` : 'forecast not loaded yet');
@@ -1560,6 +1562,10 @@ export = function plugin(app: SkApp): SignalKPlugin {
       query,
       tiles: () => tiles,
       regionalRuns: () => (dataStatus?.regional ?? []).map(r => ({ name: r.source, cycle: r.cycle })),
+      ensembles: () =>
+        (dataStatus?.ensembles ?? [])
+          .filter(e => e.cycle && e.members.length)
+          .map(e => ({ model: e.model, name: e.name, members: e.members.length })),
       chartGroups: () => charts.groups(),
       chartRows: () => charts.chartRows(),
       downloadCoastline: () => coast.requestDownload(),

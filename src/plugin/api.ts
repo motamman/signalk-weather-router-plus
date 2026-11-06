@@ -28,6 +28,7 @@
  *   GET  /api/routes/:id/result     GeoJSON FeatureCollection
  *   GET  /api/routes/:id/skeleton   coarse A* skeleton GeoJSON
  *   GET  /api/routes/:id/signalk    Signal K Route resource body
+ *   GET  /api/routes/:id/ensemble   the route sailed in each ensemble member's weather (when asked)
  *   GET  /api/routes/:id/meteogram?step_s=   conditions where the boat is at each step of the passage
  *   POST /api/routes/:id/cancel
  *   POST /api/routes/:id/publish    save to the Resources API
@@ -128,6 +129,8 @@ export interface ApiDeps {
   sharedPrefs: SharedPrefsStore;
   /** True when Signal K runs with security off (no users, no application data). */
   securityOff: () => boolean;
+  /** The ensembles a route can be checked against now: each downloaded model and its members on disk (empty when off). */
+  ensembles?: () => { model: string; name: string; members: number }[];
   /** Validate, persist and apply a partial settings update. */
   updateSettings: (partial: unknown) => {
     values: AppSettings;
@@ -743,6 +746,17 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       return;
     }
     if (badPolar(res, body.vessel?.polar, 'vessel.polar')) return;
+    if (body.ensemble) {
+      const have = (deps.ensembles?.() ?? []).find(e => e.model === body.ensemble!.model);
+      if (!have) {
+        json(res, 400, { error: `ensemble ${body.ensemble.model} is not downloaded (plugin config: Ensemble downloads)` });
+        return;
+      }
+      if (body.ensemble.members > have.members) {
+        json(res, 400, { error: `ensemble.members: ${have.name} has ${have.members} members on disk, ${body.ensemble.members} asked` });
+        return;
+      }
+    }
     if (jobs.queueLength >= 16) {
       json(res, 429, { error: 'job queue is full' });
       return;
@@ -798,6 +812,21 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
         return;
       }
       json(res, 200, job.fronts);
+    });
+  });
+
+  // The route sailed in each ensemble member's weather (engine/ensemble.ts), when the request asked for it.
+  ro.get('/api/routes/:id/ensemble', (req: Request, res: Response) => {
+    withJob(req, res, (_jobs, job) => {
+      if (job.status !== 'done') {
+        json(res, 409, { error: `job is ${job.status}`, status: job.status });
+        return;
+      }
+      if (!job.ensemble) {
+        json(res, 404, { error: 'no ensemble check for this job (the request had no ensemble)' });
+        return;
+      }
+      json(res, 200, job.ensemble);
     });
   });
 

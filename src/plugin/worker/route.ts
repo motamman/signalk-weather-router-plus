@@ -65,6 +65,11 @@ import { smocSettings } from './currents';
 import type { ArcoLayout, ArcoResolution } from '../../data/arco';
 import { localMeshes, meshesToOpen, readyMeshDirs } from '../meshes';
 import { beamFor, DEFAULT_SEARCH } from '../../engine/search/presets';
+import { ENSEMBLES } from '../../data/ecmwf';
+import { openDecodedRun } from '../../data/decoded';
+import { ENSEMBLE_FIELDS, memberRunDir, readEnsembleCurrent } from '../../data/ensemble';
+import { checkMember, summarise, type EnsembleCheckEnv, type EnsembleMemberResult } from '../../engine/ensemble';
+import type { EnsembleCheck } from '../protocol';
 
 /** One opened chart mesh (one cluster of a multi-cluster mesh): its name, folder and index. */
 type OpenMesh = { name: string; dir: string; store: MeshStore };
@@ -1113,6 +1118,24 @@ export async function route(
       'info',
       `job ${id}: ${wps.length} waypoints, ${(result.totalDistanceM / NM_M).toFixed(1)} nm, ${(result.totalTimeS / HOUR_S).toFixed(1)} h, ${Date.now() - t} ms`
     );
+    // The ensemble check (engine/ensemble.ts): the route as found, sailed in each chosen member's weather.
+    let ensemble: EnsembleCheck | undefined;
+    if (request.ensemble) {
+      ensemble = await ensembleCheck(
+        st,
+        request.ensemble,
+        result,
+        {
+          vessel,
+          polar: routePolar,
+          current: request.no_currents || st.stack.isEmpty ? new NoCurrent() : st.stack,
+          sim: { ...pipeline.sim },
+        },
+        progress,
+        shouldCancel
+      );
+      summary.ensemble = { model: ensemble.model, name: ensemble.name, cycle: ensemble.cycle, ...ensemble.summary };
+    }
     st.send({
       type: 'done',
       id,
@@ -1121,6 +1144,7 @@ export async function route(
       skeleton: skeletonToGeoJSON(result),
       fronts: result.fronts ? result.fronts.map(f => ({ leg: f.leg, ...compactFront(f) })) : null,
       summary,
+      ...(ensemble ? { ensemble } : {}),
     });
   } catch (err) {
     if (err instanceof RouteCancelled || shouldCancel()) st.send({ type: 'error', id, message: 'cancelled', cancelled: true });
@@ -1138,6 +1162,55 @@ export async function route(
     releaseMemory();
     st.send({ type: 'forecast-memory', memory: { ...st.forecastMemory } });
   }
+}
+
+/**
+ * The finished route sailed in the weather of the first `want.members` members of the ensemble in use (its
+ * current.json: the control first where there is one), each member's forecast window read for the route's box, used,
+ * and dropped before the next, so the worker holds one member's window at a time.
+ */
+async function ensembleCheck(
+  st: WorkerState,
+  want: NonNullable<RouteRequest['ensemble']>,
+  route: Route,
+  env: EnsembleCheckEnv,
+  progress: (stage: number, total: number, message: string) => void,
+  shouldCancel: () => boolean
+): Promise<EnsembleCheck> {
+  const { config: cfg } = requireInit(st);
+  const model = ENSEMBLES[want.model];
+  const cur = readEnsembleCurrent(st.cacheRoot, want.model);
+  if (!cur) throw new RouteError(`${model.name}: no ensemble on disk yet (it downloads after each forecast cycle)`);
+  const members = cur.members.slice(0, want.members);
+  if (members.length < want.members) throw new RouteError(`${model.name}: ${cur.members.length} members on disk, ${want.members} asked`);
+  const wps = route.waypoints;
+  const box = expandBBox(
+    bboxFromLonLat(
+      wps.map(w => w.lon),
+      wps.map(w => w.lat),
+      0
+    ),
+    ROUTE_FORECAST_MARGIN_DEG
+  );
+  const t0 = Date.now();
+  const results: EnsembleMemberResult[] = [];
+  for (const m of members) {
+    if (shouldCancel()) throw new RouteCancelled();
+    const { run, problem } = openDecodedRun(memberRunDir(st.cacheRoot, want.model, m, cur.cycle));
+    if (!run) throw new RouteError(`${model.name} member ${m}: not usable (${problem})`);
+    const opts = { bbox: box, params: ENSEMBLE_FIELDS, marginCells: 1 };
+    const mem = checkRouteForecastMemory(run.windowBytes(opts), cfg.forecast.memoryHeadroomBytes);
+    if (!mem.ok) throw new Error(mem.message);
+    const store = await run.window(opts);
+    results.push(checkMember(route, m, store, env));
+  }
+  const summary = summarise(results);
+  progress(
+    0,
+    0,
+    `ensemble ${model.name} (cycle ${cur.cycle}, ${members.length} members): arrival ${summary.arrival_p10 ?? '—'} to ${summary.arrival_p90 ?? '—'} (10–90 %), ${summary.over_wind} over the wind limit, ${summary.over_waves} over the wave limit, ${summary.stuck} stuck ({time:${(Date.now() - t0) / 1000}})`
+  );
+  return { model: want.model, name: model.name, cycle: new Date(cur.cycleTimeMs).toISOString(), members: results, summary };
 }
 
 /** A blocked crossing in words, quantities as unit tokens (the web app writes them in its user's units). */

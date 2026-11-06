@@ -37,5 +37,6 @@ test('the OpenAPI document: the job document lists what JobPublic carries, and n
     'cancel',
     'publish',
     'meteogram',
+    'ensemble',
   ]);
 });

@@ -9,7 +9,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ForecastStore } from '../../data/forecast';
-import type { DecodedRun, WindowOptions } from '../../data/decoded';
+import { dirBytes, type DecodedRun, type WindowOptions } from '../../data/decoded';
+import { ENSEMBLES } from '../../data/ecmwf';
+import { ENSEMBLE_DECODED_DIR, ENSEMBLE_GRIB_DIR, readEnsembleCurrent } from '../../data/ensemble';
 import { LAYER_PARAMS } from '../layers';
 import { bboxFromLonLat, type BBox } from '../../geo/geodesy';
 import { REGIONAL_DIR } from '../../data/regionaldecode';
@@ -496,5 +498,19 @@ export function dataStatus(st: WorkerState): DataStatus {
     checks: { ...st.checks },
     connectivity: { ...st.connectivity },
     harmonicErrors: [...st.harmonicErrors],
+    ensembles: (st.config?.forecast.ensemble.models ?? []).map(m => {
+      const cur = readEnsembleCurrent(st.cacheRoot, m);
+      const s = st.ensembles[m];
+      return {
+        model: m,
+        name: ENSEMBLES[m].name,
+        cycle: cur ? new Date(cur.cycleTimeMs).toISOString() : null,
+        members: cur ? [...cur.members] : [],
+        bytes: dirBytes(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR, m)) + dirBytes(path.join(st.cacheRoot, ENSEMBLE_GRIB_DIR, m)),
+        loading: s?.loading ?? null,
+        error: s?.error ?? null,
+        checkedAt: s?.checkedAt ?? null,
+      };
+    }),
   };
 }

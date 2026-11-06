@@ -7,7 +7,7 @@
  */
 
 import type { Worker } from 'node:worker_threads';
-import type { EcmwfClient } from '../../data/ecmwf';
+import type { EcmwfClient, EnsembleModelId } from '../../data/ecmwf';
 import type { ForecastStore } from '../../data/forecast';
 import type { DecodedRun } from '../../data/decoded';
 import type { LandMask } from '../../geo/landmask';
@@ -102,6 +102,13 @@ export interface WorkerState {
   currentsUnread: string[];
   /** Kills the forecast decode child process (plugin stopped). */
   decodeAbort: AbortController | null;
+  /** The ensembles' last pass (data worker, worker/forecast.ts refreshEnsembles): what it is doing, or why it could not. */
+  ensembles: Partial<
+    Record<
+      EnsembleModelId,
+      { loading: { cycle: string; done: number; total: number | null } | null; error: string | null; checkedAt: string | null }
+    >
+  >;
 }
 
 /** A request's finding about the connection: a server answered ('ok'), or there was no connection ('offline', why). */

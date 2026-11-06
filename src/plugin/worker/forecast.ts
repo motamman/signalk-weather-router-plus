@@ -9,7 +9,16 @@
 import { HOUR_MS, HOUR_S } from '../../geo/units';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { availableSteps, type Cycle, cycleFor, EcmwfClient, latestExpectedCycle } from '../../data/ecmwf';
+import { availableSteps, type Cycle, cycleFor, EcmwfClient, ENSEMBLES, type EnsembleModelId, latestExpectedCycle } from '../../data/ecmwf';
+import {
+  ENSEMBLE_DECODED_DIR,
+  ENSEMBLE_FIELDS,
+  ensembleMembers,
+  ensembleSteps,
+  memberComplete,
+  pruneEnsembles,
+  readEnsembleCurrent,
+} from '../../data/ensemble';
 import { ForecastStore } from '../../data/forecast';
 import { isOffline } from '../../data/http';
 import { requestedParams, resolveCycle, type ResolvedCycle } from '../../data/loader';
@@ -24,7 +33,7 @@ import {
   type WindowOptions,
 } from '../../data/decoded';
 import { runChildTask } from '../childtask';
-import { checkDecodeResources } from '../memguard';
+import { availableDisk, checkDecodeResources, DISK_RESERVE_BYTES, FIELD_STEP_BYTES } from '../memguard';
 import { type ResolvedConfig } from '../config';
 import { noteNetwork, requireInit } from './state';
 import type { WorkerState } from './state';
@@ -319,6 +328,119 @@ async function refreshForecastInner(
     st.decodingBlockBytes = null;
     st.decodeAbort = null;
   }
+}
+
+/** What stays of each chosen ensemble on disk (data/ensemble.ts pruneEnsembles): the members wanted, the cycle in use, `pending` cycles. */
+function ensembleKeep(
+  st: WorkerState,
+  cfg: ResolvedConfig,
+  pending: Partial<Record<EnsembleModelId, string>>
+): Parameters<typeof pruneEnsembles>[1] {
+  const keep: Parameters<typeof pruneEnsembles>[1] = {};
+  for (const m of cfg.forecast.ensemble.models) {
+    const cur = readEnsembleCurrent(st.cacheRoot, m);
+    keep[m] = {
+      members: [...new Set([...ensembleMembers(ENSEMBLES[m], cfg.forecast.ensemble.members), ...(cur ? cur.members : [])])],
+      cycles: cur ? [cur.cycle] : [],
+      pending: pending[m] ?? null,
+    };
+  }
+  return keep;
+}
+
+/**
+ * Data worker, after the forecast (refresh): the chosen ensembles' members for the cycle of the run in use, downloaded
+ * and decoded in a child process (forecastdecodetask.ts runEnsembleDecodeTask) when any is missing. Never touches the
+ * main forecast: a failure, a hold or a lack of disk is recorded for the status (st.ensembles) and the ensemble in use
+ * stays. Ensembles off: whatever an earlier setting left on disk is removed.
+ */
+export async function refreshEnsembles(st: WorkerState, offline: string | null, held: () => string | null): Promise<void> {
+  const { config: cfg } = requireInit(st);
+  const e = cfg.forecast.ensemble;
+  if (!e.models.length) {
+    if (fs.existsSync(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR))) {
+      const removed = pruneEnsembles(st.cacheRoot, {});
+      if (removed.length) st.log('info', `ensembles: off; removed ${removed.join(', ')}`);
+    }
+    st.ensembles = {};
+    return;
+  }
+  if (!st.run) return;
+  const cycle = cycleName(st.run.cycleTime);
+  const horizonHours = cfg.forecast.horizonS / HOUR_S;
+  const missing = e.models.filter(m =>
+    ensembleMembers(ENSEMBLES[m], e.members).some(n => !memberComplete(st.cacheRoot, m, n, cycle, horizonHours))
+  );
+  const pending = Object.fromEntries(missing.map(m => [m, cycle])) as Partial<Record<EnsembleModelId, string>>;
+  const note = (m: EnsembleModelId, s: Partial<NonNullable<WorkerState['ensembles'][EnsembleModelId]>>): void => {
+    st.ensembles[m] = { loading: null, error: null, checkedAt: new Date().toISOString(), ...st.ensembles[m], ...s };
+  };
+  for (const m of e.models) if (!missing.includes(m)) note(m, { loading: null, error: null });
+  if (!missing.length) {
+    pruneEnsembles(st.cacheRoot, ensembleKeep(st, cfg, {}));
+    return;
+  }
+  const why = offline ?? held();
+  if (why) {
+    for (const m of missing) note(m, { loading: null, error: `cycle ${cycle} not downloaded: ${why}` });
+    return;
+  }
+  // Disk for what is missing, decoded (the GRIB messages are about a seventh of that: 350,757,112 bytes for 625 fields
+  // of IFS ENS, measured on brain 2026-11-05, against 625 × 4.15 MB decoded), with the main forecast's reserve.
+  const steps = (m: EnsembleModelId): number => ensembleSteps(ENSEMBLES[m], cycleFor(st.run!.cycleTime), horizonHours).length;
+  const need = missing.reduce(
+    (a, m) =>
+      a +
+      ensembleMembers(ENSEMBLES[m], e.members).filter(n => !memberComplete(st.cacheRoot, m, n, cycle, horizonHours)).length *
+        ENSEMBLE_FIELDS.length *
+        steps(m) *
+        FIELD_STEP_BYTES,
+    0
+  );
+  fs.mkdirSync(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR), { recursive: true });
+  const disk = availableDisk(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR));
+  if (disk !== null && need + DISK_RESERVE_BYTES > disk) {
+    const text = `cycle ${cycle} not downloaded: it needs {dataSize:${need}} of disk and {dataSize:${disk}} is free ({dataSize:${DISK_RESERVE_BYTES}} must stay free); choose fewer members or ensembles, or free disk space`;
+    for (const m of missing) note(m, { loading: null, error: text });
+    st.log('error', `ensembles: ${text}`);
+    return;
+  }
+  for (const m of missing) note(m, { loading: { cycle: st.run.cycleTime.toISOString(), done: 0, total: null }, error: null });
+  st.decodeAbort = new AbortController();
+  try {
+    const results = await runChildTask(
+      {
+        task: 'ensemble-decode',
+        cacheRoot: st.cacheRoot,
+        mirror: cfg.forecast.mirror,
+        cycle: st.run.cycleTime.toISOString(),
+        horizonS: cfg.forecast.horizonS,
+        models: missing,
+        members: e.members,
+      },
+      null,
+      st.decodeAbort.signal,
+      ev => {
+        if (ev.event === 'decode-step')
+          for (const m of missing) note(m, { loading: { cycle: st.run!.cycleTime.toISOString(), done: ev.done, total: ev.total } });
+        else if (ev.event === 'decode-log') st.log('info', `ensembles: ${ev.message}`);
+      }
+    );
+    for (const r of results) {
+      const failed = r.failed.map(f => `member ${f.member}: ${f.error}`);
+      note(r.model, { loading: null, error: r.error ?? (failed.length ? failed.join('; ') : null) });
+      if (!r.error && !failed.length) delete pending[r.model];
+    }
+  } catch (err) {
+    const h = held();
+    const text = h && st.decodeAbort?.signal.aborted ? `stopped: ${h}` : (err as Error).message;
+    for (const m of missing) note(m, { loading: null, error: `cycle ${cycle} not downloaded: ${text}` });
+    st.log('info', `ensembles: cycle ${cycle} not downloaded (${text})`);
+  } finally {
+    st.decodeAbort = null;
+  }
+  const removed = pruneEnsembles(st.cacheRoot, ensembleKeep(st, cfg, pending));
+  if (removed.length) st.log('debug', `ensembles: removed ${removed.join(', ')}`);
 }
 
 export function keepCycles(current: Cycle, n: number): Cycle[] {

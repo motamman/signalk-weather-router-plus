@@ -20,6 +20,7 @@ import { makeVessel, type VesselParams } from '../vessel/vessel';
 import type { RouterKind } from '../engine/router';
 import { DEFAULT_MESH_CATALOG_URL } from './meshes';
 import { HOUR_S } from '../geo/units';
+import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
 import type { AppSettings } from './settings';
 import type { RouteRequest } from './protocol';
 
@@ -44,6 +45,14 @@ export interface PluginConfig {
   polarsDir?: string;
   forecast?: {
     mirror?: 'ecmwf' | 'aws' | 'google';
+    /** Ensemble downloads (data/ecmwf.ts ENSEMBLES): off unless enabled. */
+    ensemble?: {
+      enabled?: boolean;
+      /** The ensembles to download; at least one while enabled. */
+      models?: string[];
+      /** Members downloaded per ensemble, 5 to 50 in fives. */
+      members?: number;
+    };
   };
   currents?: {
     harmonicDir?: string;
@@ -128,6 +137,11 @@ export interface ResolvedConfig {
     memoryHeadroomBytes: number;
     /** signalk-grib-downloader's folder; empty = find it. */
     regionalGribs: string;
+    /**
+     * The ensembles downloaded beside the main forecast, after it, and how many members of each (members 1 to N, and
+     * the control where one is published); no models = off: nothing downloaded, nothing shown.
+     */
+    ensemble: { models: EnsembleModelId[]; members: number };
   };
   currents: {
     harmonicDir: string | null;
@@ -309,6 +323,31 @@ export const CONFIG_SCHEMA = {
       title: 'Forecast download',
       properties: {
         mirror: { type: 'string', title: 'ECMWF open-data mirror', enum: [...MIRRORS], default: 'ecmwf' },
+        ensemble: {
+          type: 'object',
+          title: 'Ensemble downloads',
+          description:
+            "Also download ECMWF ensembles, each cycle after the forecast, so a route can be checked against each member's weather " +
+            '(how much the arrival varies, how many members meet the wind or wave limit). Wind and waves of the forecast horizon: ' +
+            'for 72 h, about 70 MB to download per member and cycle (measured for IFS ENS) and 0.5 GB on disk (5 fields × 25 steps × 4.15 MB).',
+          properties: {
+            enabled: { type: 'boolean', title: 'Download ensembles', default: false },
+            models: {
+              type: 'array',
+              title: 'Ensembles',
+              items: { type: 'string', enum: [...ENSEMBLE_MODELS], enumNames: ENSEMBLE_MODELS.map(m => ENSEMBLES[m].name) },
+              uniqueItems: true,
+              minItems: 1,
+              default: ['ifs-ens'],
+            },
+            members: {
+              type: 'integer',
+              title: 'Members per ensemble',
+              enum: [...ENSEMBLE_MEMBER_CHOICES],
+              default: 5,
+            },
+          },
+        },
       },
     },
     weatherProvider: {
@@ -383,6 +422,23 @@ function cacheNumber(v: unknown, def: number, min: number, max: number, name: st
   return n;
 }
 
+/** The ensemble downloads from the plugin config: off unless enabled; enabled needs at least one known ensemble. */
+export function resolveEnsemble(e: NonNullable<PluginConfig['forecast']>['ensemble']): ResolvedConfig['forecast']['ensemble'] {
+  const members = e?.members ?? 5;
+  if (!(ENSEMBLE_MEMBER_CHOICES as readonly number[]).includes(members))
+    throw new Error(`config forecast.ensemble.members: ${String(members)} is not one of ${ENSEMBLE_MEMBER_CHOICES.join(', ')}`);
+  if (!e?.enabled) return { models: [], members };
+  const models = e.models ?? ['ifs-ens'];
+  for (const m of models)
+    if (!(ENSEMBLE_MODELS as readonly string[]).includes(m))
+      throw new Error(`config forecast.ensemble.models: ${String(m)} is not one of ${ENSEMBLE_MODELS.join(', ')}`);
+  if (models.length === 0)
+    throw new Error(
+      'config forecast.ensemble: ensemble downloads are on but no ensemble is selected; select at least one, or turn them off'
+    );
+  return { models: [...new Set(models)] as EnsembleModelId[], members };
+}
+
 /**
  * Merge the plugin config (installation) with the web-app settings (SI)
  * into the engine's ResolvedConfig. `settings` must already be valid
@@ -400,6 +456,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
   if (c.polarSource !== undefined && c.polarSource !== 'auto' && c.polarSource !== 'files' && c.polarSource !== 'signalk')
     throw new Error('config polarSource: expected auto, files or signalk');
   const harmonicDir = c.currents?.harmonicDir;
+  const ensemble = resolveEnsemble(c.forecast?.ensemble);
   const v = settings.vessel;
   const f = settings.forecast;
   const cu = settings.currents;
@@ -435,6 +492,7 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       energyFields: f.energyFields,
       memoryHeadroomBytes: f.memoryHeadroom,
       regionalGribs: f.regionalGribs ?? '',
+      ensemble,
     },
     currents: {
       harmonicDir: harmonicDir && harmonicDir.trim() ? harmonicDir.trim() : null,

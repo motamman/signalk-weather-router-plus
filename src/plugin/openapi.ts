@@ -106,7 +106,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           description:
             'Top level: plugin, started, workers {data, route}, forecast, forecast_error, forecast_loading, currents, currents_route_worker, rtofs, overlay_land, overlay_tiles, overlay_prebuild, ' +
             'weather_provider_registered, jobs, vessel, polar, land, harmonic_dir, extra_fields, tides, tides_enabled, tides_error, process_rss_bytes, ' +
-            'meshes (the managed chart meshes, as GET /api/meshes), router (the open-water router the next route runs: "standard" | "refined"), checks, freshness, connectivity. ' +
+            'meshes (the managed chart meshes, as GET /api/meshes), ensembles (per ensemble chosen in the plugin config: {model, name, cycle (ISO, null before the first complete pass), members (the member numbers on disk, 0 = the control), bytes, loading, error, checkedAt}), router (the open-water router the next route runs: "standard" | "refined"), checks, freshness, connectivity. ' +
             '`forecast_error` clears only on a check that reached ECMWF (the newest run in use, or a new one loaded). ' +
             '`checks`: what the last check of each source found, {ecmwf, smoc, tides, "rtofs:<product>" per RTOFS product loaded}, each {outcome: "newest" | "could-not-check" (the server could not be asked: ' +
             'no connection, or it failed; the run in use stays) | "new-run" | "failed" (the server answered but the new run could not be loaded), at, reason}. ' +
@@ -691,6 +691,23 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           responses: {
             200: { description: 'OK' },
             404: { description: 'Not found' },
+            409: { description: 'Not finished' },
+            503: { description: 'Plugin not started' },
+          },
+        },
+      },
+      '/api/routes/{id}/ensemble': {
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        get: {
+          summary: "A finished route sailed in each ensemble member's weather (the request's `ensemble`)",
+          responses: {
+            200: {
+              description:
+                '{model, name, cycle, members: [{member (0 = the control), arrival (null when stuck), time_s, over_wind_s, over_waves_s, max_wind_ms, max_swh_m, ' +
+                'stuck: {lon, lat, reason} (only when a leg could not be sailed)}], summary: {members, arrival_p10, arrival_p50, arrival_p90 (over the members that arrive, ' +
+                'null when none does), over_wind, over_waves, stuck}}. The route is the one found on the main forecast; nothing is searched again.',
+            },
+            404: { description: 'Job not found, or the request asked for no ensemble check' },
             409: { description: 'Not finished' },
             503: { description: 'Plugin not started' },
           },
