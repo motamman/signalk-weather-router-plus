@@ -148,6 +148,7 @@ if (role === 'data') setNetworkObserver((state, reason) => noteNetwork(st, state
  */
 let ensemblePass: Promise<void> | null = null;
 let ensembleUserPass = false;
+/** Start the ensemble pass (refreshEnsembles) unless one is under way; `user`: the owner asked. Its end sends the status. */
 function startEnsembles(st: WorkerState, offline: string | null, held: () => string | null, user: boolean): void {
   if (ensemblePass) return;
   ensembleUserPass = user;
@@ -203,6 +204,7 @@ export async function refresh(st: WorkerState, force: boolean, user = false): Pr
   }
 }
 
+/** Handle one message from the main thread (MainToWorker): init, refresh, a route, a query, a cancel and the rest. */
 export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> {
   switch (msg.type) {
     case 'init': {

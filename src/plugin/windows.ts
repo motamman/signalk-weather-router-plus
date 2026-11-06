@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto';
 import type { Job, JobEvent, JobManager } from './jobs';
 import { Type, type Static } from 'typebox';
 import { RouteRequestSchema, validateRouteRequest } from './request_schema';
+import { loadJsonFiles, removeJson, saveJson } from './jsonfiles';
 
 export const WINDOW_LIMITS = {
   /** Departures in one window. */
@@ -332,16 +333,16 @@ export class WindowManager {
       this.jobs.delete(d.job_id);
     }
     this.windows.delete(id);
-    try {
-      fs.unlinkSync(path.join(this.dir, `${id}.json`));
-    } catch (err) {
-      // Never saved: nothing to remove. Any other failure leaves its file: the window comes back after a restart.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
-        this.deps.log(`departure window ${id}: its file could not be deleted (${(err as Error).message}); it comes back after a restart`);
-    }
+    // A file that cannot be removed stays: the window comes back after a restart.
+    const why = removeJson(path.join(this.dir, `${id}.json`));
+    if (why) this.deps.log(`departure window ${id}: its file could not be deleted (${why}); it comes back after a restart`);
     return true;
   }
 
+  /**
+   * A departure's route job moved on: running, or done (its metrics taken) or failed or cancelled, then the next
+   * departure is submitted while the window runs. Events of jobs that are not a departure are ignored.
+   */
   private onJobEvent(jobId: string, ev: JobEvent): void {
     const at = this.byJob.get(jobId);
     if (!at) return;
@@ -405,6 +406,7 @@ export class WindowManager {
     this.finish(w, 'done');
   }
 
+  /** End the window (`status`, and `error` when given), save it, trim the finished ones, and tell the user once done. */
   private finish(w: DepartureWindow, status: WindowStatus, error?: string): void {
     w.status = status;
     w.finished_at = new Date().toISOString();
@@ -421,18 +423,11 @@ export class WindowManager {
    * event, a request or the start-up.
    */
   private persist(w: DepartureWindow): void {
-    const file = path.join(this.dir, `${w.id}.json`);
-    const tmp = `${file}.tmp`;
     delete w.save_error;
-    try {
-      fs.writeFileSync(tmp, JSON.stringify(w));
-      fs.renameSync(tmp, file);
-    } catch (err) {
-      w.save_error = `its file could not be saved: ${(err as Error).message}`;
-      this.deps.log(`departure window ${w.id}: ${w.save_error}`);
-      // Its half-written copy, if the write got that far (existsSync never throws).
-      if (fs.existsSync(tmp)) fs.rmSync(tmp);
-    }
+    const why = saveJson(path.join(this.dir, `${w.id}.json`), w);
+    if (!why) return;
+    w.save_error = `its file could not be saved: ${why}`;
+    this.deps.log(`departure window ${w.id}: ${w.save_error}`);
   }
 
   private trim(): void {
@@ -448,25 +443,11 @@ export class WindowManager {
    * started are cancelled. Route jobs of windows that are gone are deleted.
    */
   private loadPersisted(): void {
-    let files: string[] = [];
-    try {
-      files = fs.readdirSync(this.dir).filter(f => f.endsWith('.json'));
-    } catch (err) {
-      // The folder was made at start (constructor): one that cannot be read is reported, and nothing is restored.
-      this.deps.log(`departure windows: ${this.dir} cannot be read (${(err as Error).message}); none restored`);
-    }
-    for (const f of files) {
-      let w: DepartureWindow;
-      try {
-        w = JSON.parse(fs.readFileSync(path.join(this.dir, f), 'utf8')) as DepartureWindow;
-      } catch (err) {
-        this.deps.log(`departure window file ${f} cannot be read (${(err as Error).message}); left as it is, not restored`);
-        continue;
-      }
-      if (!w || !w.id || !Array.isArray(w.departures)) {
-        this.deps.log(`departure window file ${f} does not hold a departure window; left as it is, not restored`);
-        continue;
-      }
+    /** A window as saved: an id and its departures; any other file is not restored. */
+    const isWindow = (v: unknown): v is DepartureWindow =>
+      !!v && typeof v === 'object' && !!(v as DepartureWindow).id && Array.isArray((v as DepartureWindow).departures);
+    const noun = { one: 'departure window', a: 'a departure window', many: 'departure windows' };
+    for (const w of loadJsonFiles(this.dir, noun, isWindow, this.deps.log)) {
       this.windows.set(w.id, w);
       w.departures.forEach((d, k) => {
         if (!d.job_id) return;

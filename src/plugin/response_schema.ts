@@ -140,6 +140,9 @@ export const JobPublicSchema = Type.Object({
   error: Type.Optional(Type.String()),
   resource_id: Type.Optional(Type.String()),
   publish_error: Type.Optional(Type.String({ description: 'Why publishing to the Resources API failed, when it did' })),
+  save_error: Type.Optional(
+    Type.String({ description: "Why the job's file on disk is behind it (its last save failed); absent once a save succeeds" })
+  ),
   window_id: Type.Optional(Type.String({ description: 'The departure window this job is one departure of (/api/windows)' })),
   ensemble_set_id: Type.Optional(Type.String({ description: "The ensemble set this job is one member's route of (/api/ensemble-sets)" })),
   links: JobLinksSchema,

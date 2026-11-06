@@ -214,9 +214,19 @@ const frontLayer = new ol.layer.Vector({
     return new ol.style.Style({ stroke: new ol.style.Stroke({ color: _frontColor(frac, final ? 0.45 : 0.85), width: final ? 1.2 : 2 }) });
   },
   zIndex: 14,
-  // Off by default: the Decision lines switch (Layers → Base, and beside Find Route) turns it on.
-  visible: false,
 });
+// --- Skeleton layer (A* presumptive route, blue) ---
+const skeletonLayer = new ol.layer.Vector({
+  source: skeletonSource,
+  style: new ol.style.Style({
+    stroke: new ol.style.Stroke({ color: '#2060cc', width: 2, lineDash: [8, 4] })
+  }),
+  zIndex: 16,
+});
+// The router's search: the stage fronts and best path, and the coarse A* guide. One group, so one visibility: off by
+// default, the Decision lines switch (Layers → Base, and beside Find Route) shows and hides them together. Each layer
+// keeps its own zIndex in the map.
+const searchLayers = new ol.layer.Group({ layers: [frontLayer, skeletonLayer], visible: false });
 // Draw one stage: points [[lon, lat, timeMs, viaCount], …] sorted across the
 // track within each viaCount; best [[lon, lat], …]. `reset` clears earlier
 // stages (a new job); `resetLeg` clears only that leg's stages (a re-run of
@@ -286,7 +296,7 @@ const searchBoatLayer = new ol.layer.Vector({
   source: searchBoatSource,
   style: f => {
     if (f.get('kind') === 'trail') {
-      return frontLayer.getVisible() ? null : new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(120,40,160,0.6)', width: 2 }) });
+      return searchLayers.getVisible() ? null : new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(120,40,160,0.6)', width: 2 }) });
     }
     return new ol.style.Style({
       image: new ol.style.Icon({ src: 'data:image/svg+xml;utf8,' + encodeURIComponent(SEARCH_BOAT_SVG), anchor: [0.5, 0.85] }),
@@ -300,7 +310,7 @@ const searchBoatLayer = new ol.layer.Vector({
   zIndex: 18,
 });
 // The decision lines switched on or off: the trail follows.
-frontLayer.on('change:visible', () => searchBoatSource.changed());
+searchLayers.on('change:visible', () => searchBoatSource.changed());
 /** Put the search's boat at the end of `path` ([[lon, lat], …] from the start), the path trailing behind it. */
 export function showSearchBoat(path, label) {
   searchBoatSource.clear();
@@ -310,18 +320,6 @@ export function showSearchBoat(path, label) {
   searchBoatSource.addFeature(new ol.Feature({ geometry: new ol.geom.Point(coords[coords.length - 1]), kind: 'boat', label: label || '' }));
 }
 export function clearSearchBoat() { searchBoatSource.clear(); }
-
-// --- Skeleton layer (A* presumptive route, blue) ---
-// Part of the router's search, as the stage fronts are: shown and hidden with them by the Decision lines switch.
-const skeletonLayer = new ol.layer.Vector({
-  source: skeletonSource,
-  style: new ol.style.Style({
-    stroke: new ol.style.Stroke({ color: '#2060cc', width: 2, lineDash: [8, 4] })
-  }),
-  zIndex: 16,
-  visible: false,
-});
-frontLayer.on('change:visible', () => skeletonLayer.setVisible(frontLayer.getVisible()));
 
 // --- Proposed-route layer (Live mode re-plan preview, dashed purple) ---
 // Drawn alongside the active route while the user decides Accept/Dismiss.
@@ -1920,7 +1918,7 @@ try {
 
 export const map = new ol.Map({
   target: 'map',
-  layers: [osmLayer, seamarkLayer, windHeatmapLayer, currentHeatmapLayer, roughnessLayer, waveHeatmapLayer, precipHeatmapLayer, temperatureLayer, sstLayer, tideLayer, pressureLayer, currentLayer, seasArrowsLayer, waveArrowsLayer, windLayer, frontLayer, skeletonLayer, pastRouteLayer, trackLayer, routeLayer, proposedRouteLayer, searchBoatLayer, vesselMarkerLayer, notesLayer, seasRouteLayer, ringLayer, markerLayer, condMarkerLayer, meteoMarkerLayer],
+  layers: [osmLayer, seamarkLayer, windHeatmapLayer, currentHeatmapLayer, roughnessLayer, waveHeatmapLayer, precipHeatmapLayer, temperatureLayer, sstLayer, tideLayer, pressureLayer, currentLayer, seasArrowsLayer, waveArrowsLayer, windLayer, searchLayers, pastRouteLayer, trackLayer, routeLayer, proposedRouteLayer, searchBoatLayer, vesselMarkerLayer, notesLayer, seasRouteLayer, ringLayer, markerLayer, condMarkerLayer, meteoMarkerLayer],
   view: new ol.View({
     // Last view this browser had (saved on every move), else Block
     // Island Sound at zoom 11, until the first Signal K position fix
@@ -2190,10 +2188,12 @@ export function watchEnsembleLegend(source, info) {
   source.on('change', _routeLegendSoon);
 }
 const _sym = inner => '<svg width="30" height="14" viewBox="0 0 30 14" style="vertical-align:middle;margin-right:4px;">' + inner + '</svg>';
+/** A legend symbol: a line in `color`, `width` px wide, dashed by `dash` and with the line cap `cap` when given. */
 const _lineSym = (color, width, dash, cap) =>
   _sym('<line x1="2" y1="7" x2="28" y2="7" stroke="' + color + '" stroke-width="' + width + '"'
     + (dash ? ' stroke-dasharray="' + dash.join(' ') + '"' : '') + (cap ? ' stroke-linecap="' + cap + '"' : '') + '/>');
 const _ringSym = color => _sym('<circle cx="15" cy="7" r="5.5" fill="none" stroke="' + color + '" stroke-width="2"/>');
+/** The legend's Route row: one item per kind of route mark on the map now, drawn as the map draws it; '' without any. */
 function _routeLegendRow() {
   const items = [];
   const item = (sym, label) => items.push('<div>' + sym + label + '</div>');
@@ -2224,7 +2224,7 @@ function _routeLegendRow() {
   if (ens && ens.main) item(_lineSym('#1f6b8d', 2), 'ensemble: main forecast\'s route');
   if (ens && ens.members) item(_lineSym('#00b8d4', 3.5, [1, 7], 'round'), 'ensemble: a member\'s route');
   if (ens && ens.open) item(_sym('<line x1="2" y1="7" x2="28" y2="7" stroke="rgba(0,0,0,0.45)" stroke-width="13"/><line x1="2" y1="7" x2="28" y2="7" stroke="rgba(255,255,255,0.9)" stroke-width="11"/>'), 'ensemble: the route opened');
-  if (frontLayer.getVisible()) {
+  if (searchLayers.getVisible()) {
     const fs = frontSource.getFeatures();
     if (fs.some(f => f.get('kind') === 'front'))
       item(_sym('<line x1="2" y1="7" x2="15" y2="7" stroke="' + _frontColor(0, 0.85) + '" stroke-width="2"/><line x1="15" y1="7" x2="28" y2="7" stroke="' + _frontColor(1, 0.85) + '" stroke-width="2"/>'), 'search fronts, early to late');
@@ -2236,6 +2236,7 @@ function _routeLegendRow() {
   if (pastRouteSource.getFeatures().length) item(_lineSym('rgba(120,120,120,0.55)', 2, [6, 6]), 'earlier routes');
   return items.length ? '<div class="lg-row"><div class="lg-title">Route</div><div class="lg-route">' + items.join('') + '</div></div>' : '';
 }
+/** Rebuild the legend box: the Route row first, then a row for each overlay switched on. */
 function updateLegends() {
   const box = document.getElementById('legendBox');
   if (!box) return;
@@ -2352,7 +2353,7 @@ const LAYER_TOGGLES = [
   ['vesselToggle', vesselMarkerLayer],
   ['notesToggle', notesLayer, loadNotes, () => notesSource.clear()],
   ['seasRouteToggle', seasRouteLayer],
-  ['frontToggle', frontLayer],
+  ['frontToggle', searchLayers],
   // The point sources are refreshed, not cleared, when turned off: clear()
   // keeps the loaded-extent index, so turning a layer back on at the same
   // hour and zoom would load nothing (_syncPointSource).

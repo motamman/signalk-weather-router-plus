@@ -83,7 +83,7 @@ interface Harness {
 
 function harness(opts: { dir?: string; validTo?: number | null; keepJobs?: number } = {}): Harness {
   const dir = opts.dir ?? tmp();
-  const jobs = new JobManager(dir, opts.keepJobs ?? 50, '/plugins/wrp');
+  const jobs = new JobManager(dir, opts.keepJobs ?? 50, '/plugins/wrp', m => assert.fail(`unexpected log: ${m}`));
   const started: Job[] = [];
   jobs.on('start', (j: Job) => started.push(j));
   const cancelled: string[] = [];
@@ -144,7 +144,7 @@ test('validateWindowRequest: the route, the times, the step and the size of the 
 
 test('departureMetrics: strongest wind, highest waves, roughest sea, time close-hauled under sail, past the forecast', () => {
   const dir = tmp();
-  const jobs = new JobManager(dir, 50, '');
+  const jobs = new JobManager(dir, 50, '', m => assert.fail(`unexpected log: ${m}`));
   const job = jobs.submit({ ...ROUTE, departure: new Date(T0).toISOString() });
   jobs.onDone(job.id, routeGeo(T0, { wind: 14, swh: 3.2, twa: [0, 45, 120, 50], beyond: true }), {}, summary(T0, 18));
   const m = departureMetrics(jobs.get(job.id)!);
@@ -374,7 +374,7 @@ test('a done departure keeps only its metrics in memory: its route is read from 
 
 test('a departure that fails as it is submitted is recorded, and the window goes on to the end', () => {
   const dir = tmp();
-  const jobs = new JobManager(dir, 50, '');
+  const jobs = new JobManager(dir, 50, '', m => assert.fail(`unexpected log: ${m}`));
   // As dispatchRoute without a Resources API: the job fails before submit() returns.
   jobs.on('start', (j: Job) => jobs.onError(j.id, 'this Signal K server has no Resources API to read notes from'));
   const finished: DepartureWindow[] = [];
@@ -444,7 +444,7 @@ test('windowNotification: the fastest of the passages that end within the foreca
 test('a window whose file cannot be saved carries it: its departure still reaches the worker, the window says why, and the next save clears it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-win-'));
   try {
-    const jobs = new JobManager(dir, 50, '');
+    const jobs = new JobManager(dir, 50, '', m => assert.fail(`unexpected log: ${m}`));
     const started: Job[] = [];
     jobs.on('start', (j: Job) => started.push(j));
     const logged: string[] = [];
@@ -467,6 +467,78 @@ test('a window whose file cannot be saved carries it: its departure still reache
     const saved = JSON.parse(fs.readFileSync(path.join(store, `${w.id}.json`), 'utf8')) as Record<string, unknown>;
     assert.equal(saved.status, 'cancelled');
     assert.ok(!('save_error' in saved));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a window found computing at start-up that cannot be saved, nor its partial copy removed, still loads, failed, and says why', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-win-'));
+  const store = path.join(dir, 'windows');
+  try {
+    fs.mkdirSync(store, { recursive: true });
+    const from = new Date(T0).toISOString();
+    const running = {
+      id: 'win-1',
+      status: 'running',
+      created_at: from,
+      request: { route: ROUTE, from, to: from, step_s: 6 * 3600 },
+      departures: [{ departure: from, job_id: null, status: 'pending' }],
+    };
+    const file = path.join(store, 'win-1.json');
+    fs.writeFileSync(file, JSON.stringify(running));
+    // A folder where the save writes its copy (on every OS): the write fails, and so does removing that copy.
+    fs.mkdirSync(path.join(store, 'win-1.json.tmp', 'inside'), { recursive: true });
+    const logged: string[] = [];
+    const windows = new WindowManager(new JobManager(dir, 50, '', m => assert.fail(`unexpected log: ${m}`)), dir, {
+      cancelRunning: () => undefined,
+      forecastValidToMs: () => T0 + 240 * H,
+      log: m => logged.push(m),
+    });
+    const w = windows.get('win-1');
+    assert.equal(w?.status, 'failed');
+    assert.match(w?.save_error ?? '', /^its file could not be saved: .*; its partial copy win-1\.json\.tmp could not be removed: /);
+    assert.deepEqual(logged, [`departure window win-1: ${w?.save_error}`]);
+    assert.equal((JSON.parse(fs.readFileSync(file, 'utf8')) as { status: string }).status, 'running', 'the file is as it was');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a window file that cannot be read at start-up is reported and left as it is; a window whose file cannot be deleted says so', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-win-'));
+  const store = path.join(dir, 'windows');
+  try {
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 'broken.json'), '{"id": "broken", "depa');
+    fs.writeFileSync(path.join(store, 'other.json'), JSON.stringify({ hello: 'world' }));
+    const logged: string[] = [];
+    const jobs = new JobManager(dir, 50, '', m => assert.fail(`unexpected log: ${m}`));
+    const windows = new WindowManager(jobs, dir, {
+      cancelRunning: () => undefined,
+      forecastValidToMs: () => T0 + 240 * H,
+      log: m => logged.push(m),
+    });
+    assert.ok(logged.some(m => /^departure window file broken\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
+    assert.ok(logged.includes('departure window file other.json does not hold a departure window; left as it is, not restored'));
+    assert.ok(fs.existsSync(path.join(store, 'broken.json')), 'left as it is');
+    // A finished window whose file is a folder now (on every OS, not one that is missing): deleted from the list, the
+    // folder stays, and that is said.
+    const w = windows.create({ route: ROUTE, from: new Date(T0).toISOString(), to: new Date(T0).toISOString(), step_s: 6 * 3600 });
+    windows.cancel(w.id);
+    const stopping = jobs.runningId;
+    if (stopping) jobs.onError(stopping, 'cancelled', true);
+    const file = path.join(store, `${w.id}.json`);
+    fs.rmSync(file);
+    fs.mkdirSync(path.join(file, 'inside'), { recursive: true });
+    assert.equal(windows.delete(w.id), true);
+    assert.equal(windows.get(w.id), undefined);
+    assert.ok(
+      logged.some(
+        m => m.startsWith(`departure window ${w.id}: its file could not be deleted (`) && m.endsWith('it comes back after a restart')
+      )
+    );
+    assert.ok(fs.existsSync(file));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

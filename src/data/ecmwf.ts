@@ -392,6 +392,7 @@ export class EcmwfClient {
     throw new EcmwfError(`no ECMWF cycle in the last ${maxAge} h has +${horizonHours} h published`);
   }
 
+  /** A step file's `.index` from the mirror, parsed into its records (one per message); any answer but 200 throws. */
   async fetchIndex(cycle: Cycle, stream: string, step: number): Promise<IndexRecord[]> {
     const url = this.stepUrl(cycle, stream, step, 'index');
     const res = await this.request(this.stepPath(cycle, stream, step, 'index'));

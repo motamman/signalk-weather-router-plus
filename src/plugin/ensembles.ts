@@ -20,6 +20,7 @@ import { Type, type Static } from 'typebox';
 import type { JobEvent, JobManager } from './jobs';
 import { RouteRequestSchema, validateRouteRequest, ENSEMBLE_MEMBERS_RANGE } from './request_schema';
 import { departureMetrics, DepartureMetricsSchema } from './windows';
+import { loadJsonFiles, removeJson, saveJson } from './jsonfiles';
 import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
 import { cycleName } from '../data/decoded';
 
@@ -255,13 +256,9 @@ export class EnsembleSetManager {
       this.jobs.delete(m.job_id);
     }
     this.sets.delete(id);
-    try {
-      fs.unlinkSync(path.join(this.dir, `${id}.json`));
-    } catch (err) {
-      // Never saved: nothing to remove. Any other failure leaves its file: the set comes back after a restart.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
-        this.deps.log(`ensemble set ${id}: its file could not be deleted (${(err as Error).message}); it comes back after a restart`);
-    }
+    // A file that cannot be removed stays: the set comes back after a restart.
+    const why = removeJson(path.join(this.dir, `${id}.json`));
+    if (why) this.deps.log(`ensemble set ${id}: its file could not be deleted (${why}); it comes back after a restart`);
     return true;
   }
 
@@ -326,6 +323,7 @@ export class EnsembleSetManager {
     this.finish(s, 'done');
   }
 
+  /** End the set with `status`, save it, and trim the finished ones. */
   private finish(s: EnsembleSet, status: EnsembleSetStatus): void {
     s.status = status;
     s.finished_at = new Date().toISOString();
@@ -340,18 +338,11 @@ export class EnsembleSetManager {
    * event, a request or the start-up.
    */
   private persist(s: EnsembleSet): void {
-    const file = path.join(this.dir, `${s.id}.json`);
-    const tmp = `${file}.tmp`;
     delete s.save_error;
-    try {
-      fs.writeFileSync(tmp, JSON.stringify(s));
-      fs.renameSync(tmp, file);
-    } catch (err) {
-      s.save_error = `its file could not be saved: ${(err as Error).message}`;
-      this.deps.log(`ensemble set ${s.id}: ${s.save_error}`);
-      // Its half-written copy, if the write got that far (existsSync never throws).
-      if (fs.existsSync(tmp)) fs.rmSync(tmp);
-    }
+    const why = saveJson(path.join(this.dir, `${s.id}.json`), s);
+    if (!why) return;
+    s.save_error = `its file could not be saved: ${why}`;
+    this.deps.log(`ensemble set ${s.id}: ${s.save_error}`);
   }
 
   /** Finished sets beyond ENSEMBLE_SET_LIMITS.keep, oldest first, deleted with their route jobs. */
@@ -367,25 +358,11 @@ export class EnsembleSetManager {
    * failed, its members not started are cancelled. Route jobs of sets that are gone are deleted.
    */
   private loadPersisted(): void {
-    let files: string[] = [];
-    try {
-      files = fs.readdirSync(this.dir).filter(f => f.endsWith('.json'));
-    } catch (err) {
-      // The folder was made at start (constructor): one that cannot be read is reported, and nothing is restored.
-      this.deps.log(`ensemble sets: ${this.dir} cannot be read (${(err as Error).message}); none restored`);
-    }
-    for (const f of files) {
-      let s: EnsembleSet;
-      try {
-        s = JSON.parse(fs.readFileSync(path.join(this.dir, f), 'utf8')) as EnsembleSet;
-      } catch (err) {
-        this.deps.log(`ensemble set file ${f} cannot be read (${(err as Error).message}); left as it is, not restored`);
-        continue;
-      }
-      if (!s || !s.id || !Array.isArray(s.members)) {
-        this.deps.log(`ensemble set file ${f} does not hold an ensemble set; left as it is, not restored`);
-        continue;
-      }
+    /** A set as saved: an id and its members; any other file is not restored. */
+    const isSet = (v: unknown): v is EnsembleSet =>
+      !!v && typeof v === 'object' && !!(v as EnsembleSet).id && Array.isArray((v as EnsembleSet).members);
+    const noun = { one: 'ensemble set', a: 'an ensemble set', many: 'ensemble sets' };
+    for (const s of loadJsonFiles(this.dir, noun, isSet, this.deps.log)) {
       this.sets.set(s.id, s);
       s.members.forEach((m, k) => {
         if (!m.job_id) return;

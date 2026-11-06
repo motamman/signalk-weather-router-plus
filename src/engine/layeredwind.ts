@@ -197,6 +197,7 @@ export class LayeredWind implements WindSource {
     return Float64Array.from(lons, (lon, k) => this.base.wavesAt(lon, lats[k], time)?.swh ?? NaN);
   }
 
+  /** The waves at each point and time, from the base forecast (regional runs hold wind only): all at once when it can. */
   wavesFullAtManyAt(
     lons: Float64Array,
     lats: Float64Array,
@@ -212,6 +213,7 @@ export class LayeredWind implements WindSource {
   }
 }
 
+/** The waves at each point and time, one wavesAt each, for a source that cannot sample many at once: NaN where none. */
 function wavesFullFallback(
   w: WindSource,
   lons: Float64Array,

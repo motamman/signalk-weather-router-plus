@@ -116,6 +116,10 @@ var signalk_weather_router_plus = (function () {
       onKeyDown: function (e) { if (e.key === 'Enter') commit(); } });
   }
 
+  /**
+   * The plugin's configuration panel in the Signal K Admin UI: the configuration's fields, quantities shown and edited
+   * in the Signal K user's units, saved with `props.save`.
+   */
   function Panel(props) {
     var h = React.createElement;
     var initial = props.configuration || {};

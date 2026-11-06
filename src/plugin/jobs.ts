@@ -1,7 +1,9 @@
 /**
  * Job manager: queue of route requests, one running at a time in the
  * worker, with an event log per job for Server-Sent Events (resumable
- * via Last-Event-ID) and on-disk persistence of finished jobs.
+ * via Last-Event-ID) and on-disk persistence of finished jobs. A file that
+ * cannot be saved, read or removed is the job's to carry (saveError) or
+ * is reported (log); it never stops the queue.
  */
 
 import { EventEmitter } from 'node:events';
@@ -10,6 +12,7 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { JobProgress, JobStatus, RouteRequest, RouteSummary } from './protocol';
 import type { JobLinks, JobPublic } from './response_schema';
+import { loadJsonFiles, removeJson, saveJson } from './jsonfiles';
 
 export interface JobEvent {
   id: number;
@@ -39,6 +42,8 @@ export interface Job {
   /** The ensemble set this job is one member's route of (ensembles.ts); listed and trimmed with its set, as windows' are. */
   ensembleSetId?: string;
   publishError?: string;
+  /** Why the job's file on disk is behind it (its last save failed); absent once a save succeeds. */
+  saveError?: string;
   events: JobEvent[];
   nextEventId: number;
 }
@@ -60,7 +65,9 @@ export class JobManager extends EventEmitter {
   constructor(
     dataDir: string,
     private keepJobs: number,
-    private readonly basePath: string
+    private readonly basePath: string,
+    /** Where a failure a job carries, or a file that cannot be read or removed, is reported. */
+    private readonly log: (msg: string) => void
   ) {
     super();
     this.dir = path.join(dataDir, 'jobs');
@@ -68,44 +75,54 @@ export class JobManager extends EventEmitter {
     this.loadPersisted();
   }
 
+  /**
+   * The jobs saved before a restart (loadJsonFiles): one that was queued or running is failed, and a window's or set's
+   * job is released (its results are in the file it was read from).
+   */
   private loadPersisted(): void {
-    let files: string[];
-    try {
-      files = fs.readdirSync(this.dir).filter(f => f.endsWith('.json'));
-    } catch {
-      return;
-    }
-    for (const f of files) {
-      try {
-        const j = JSON.parse(fs.readFileSync(path.join(this.dir, f), 'utf8')) as Job;
-        if (j.status === 'running' || j.status === 'queued') {
-          j.status = 'failed';
-          j.error = 'plugin restarted while the job was in progress';
-        }
-        j.events = j.events ?? [];
-        j.nextEventId = j.nextEventId ?? j.events.length + 1;
-        this.jobs.set(j.id, j);
-        if (j.windowId || j.ensembleSetId) this.release(j);
-      } catch {
-        // ignore corrupt file
+    /** A job as saved: an id, a status and its request; any other file is not restored. */
+    const isJob = (v: unknown): v is Job =>
+      !!v && typeof v === 'object' && typeof (v as Job).id === 'string' && typeof (v as Job).status === 'string' && !!(v as Job).request;
+    const noun = { one: 'route job', a: 'a route job', many: 'route jobs' };
+    for (const j of loadJsonFiles(this.dir, noun, isJob, this.log)) {
+      if (j.status === 'running' || j.status === 'queued') {
+        j.status = 'failed';
+        j.error = 'plugin restarted while the job was in progress';
       }
+      j.events = j.events ?? [];
+      j.nextEventId = j.nextEventId ?? j.events.length + 1;
+      this.jobs.set(j.id, j);
+      // Its results are in the file it was read from.
+      if (j.windowId || j.ensembleSetId) this.release(j);
     }
     this.trim();
   }
 
+  /**
+   * Save a finished job's file: how it outlives a restart and, for a departure window's or an ensemble set's job,
+   * where its route results are kept once they leave memory (release, only once they are saved). A save that fails is
+   * the job's to carry: `saveError` says why its file is behind (the API shows it), the failure is reported, its
+   * results stay in memory, and a later change (a publish) saves it again. It never throws into the worker's answer,
+   * a request or the queue.
+   */
   private persist(job: Job): void {
     if (job.status === 'queued' || job.status === 'running') return;
+    delete job.saveError;
     // A released job's results are only in its file: written back with it, not lost.
     const full = this.full(job.id) ?? job;
-    const tmp = path.join(this.dir, `${job.id}.json.tmp`);
     // Frontier events are display-only and large: streamed live, not kept.
-    fs.writeFileSync(tmp, JSON.stringify({ ...full, events: full.events.filter(e => e.event !== 'frontier') }));
-    fs.renameSync(tmp, path.join(this.dir, `${job.id}.json`));
+    const why = saveJson(path.join(this.dir, `${job.id}.json`), { ...full, events: full.events.filter(e => e.event !== 'frontier') });
+    if (why) {
+      job.saveError = `its file could not be saved: ${why}`;
+      this.log(`route job ${job.id}: ${job.saveError}`);
+      return;
+    }
+    if ((job.windowId || job.ensembleSetId) && !this.released.has(job.id)) this.release(job);
   }
 
   /**
-   * Drop a finished departure-window job's route results from memory; they
-   * stay in its file. A window keeps up to WINDOW_LIMITS.maxDepartures jobs
+   * Drop a finished departure-window job's route results from memory once
+   * they are saved in its file (persist). A window keeps up to WINDOW_LIMITS.maxDepartures jobs
    * and WINDOW_LIMITS.keep windows, all exempt from the keepJobs trim, and
    * once a departure is done the window needs only its metrics (windows.ts),
    * taken from the 'done' event before this runs. Ordinary jobs keep theirs.
@@ -122,7 +139,8 @@ export class JobManager extends EventEmitter {
 
   /**
    * The job with its route results: a released one's are read from its file,
-   * for this answer only (without them if the file cannot be read).
+   * for this answer only. A file that cannot be read is reported, and the job
+   * is answered without them.
    */
   full(id: string): Job | undefined {
     const job = this.jobs.get(id);
@@ -130,7 +148,8 @@ export class JobManager extends EventEmitter {
     let stored: Partial<Job>;
     try {
       stored = JSON.parse(fs.readFileSync(path.join(this.dir, `${id}.json`), 'utf8')) as Partial<Job>;
-    } catch {
+    } catch (err) {
+      this.log(`route job ${id}: its file cannot be read (${(err as Error).message}); answered without its route results`);
       return job;
     }
     const out = { ...job } as Record<string, unknown>;
@@ -144,6 +163,7 @@ export class JobManager extends EventEmitter {
     this.trim();
   }
 
+  /** Finished jobs beyond `keepJobs`, oldest first, deleted; a window's or a set's jobs go with their window or set. */
   private trim(): void {
     const finished = [...this.jobs.values()]
       .filter(j => j.status !== 'queued' && j.status !== 'running' && !j.windowId && !j.ensembleSetId)
@@ -193,6 +213,7 @@ export class JobManager extends EventEmitter {
       error: job.error,
       resource_id: job.resourceId,
       publish_error: job.publishError,
+      save_error: job.saveError,
       window_id: job.windowId,
       ensemble_set_id: job.ensembleSetId,
       links: this.links(job.id),
@@ -219,6 +240,7 @@ export class JobManager extends EventEmitter {
     return this.running;
   }
 
+  /** Queue a route request (a window's departure or a set's member with its id), started at once when none is running. */
   submit(request: RouteRequest, windowId?: string, ensembleSetId?: string): Job {
     const job: Job = {
       id: randomUUID(),
@@ -314,7 +336,6 @@ export class JobManager extends EventEmitter {
   private finish(job: Job): void {
     if (this.running === job.id) this.running = null;
     this.persist(job);
-    if (job.windowId || job.ensembleSetId) this.release(job);
     this.trim();
     this.pump();
   }
@@ -332,6 +353,7 @@ export class JobManager extends EventEmitter {
     return null;
   }
 
+  /** Delete a job and its file (a queued one leaves the queue); a running one is not deleted (false). */
   delete(id: string): boolean {
     const job = this.jobs.get(id);
     if (!job) return false;
@@ -339,11 +361,9 @@ export class JobManager extends EventEmitter {
     this.queue = this.queue.filter(q => q !== id);
     this.jobs.delete(id);
     this.released.delete(id);
-    try {
-      fs.unlinkSync(path.join(this.dir, `${id}.json`));
-    } catch {
-      // not persisted
-    }
+    // A file that cannot be removed stays: the job comes back after a restart.
+    const why = removeJson(path.join(this.dir, `${id}.json`));
+    if (why) this.log(`route job ${id}: its file could not be deleted (${why}); it comes back after a restart`);
     return true;
   }
 

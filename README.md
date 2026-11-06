@@ -2097,7 +2097,10 @@ the SSE endpoint replays.
 - Finished jobs (`done`, `failed`, `cancelled`) are saved to disk
   (`jobs/<id>.json` in the plugin data directory) and survive a restart.
   Only the newest are kept: the `routing.keepJobs` setting ("finished
-  routes kept", default 50, 1–500); older ones are deleted.
+  routes kept", default 50, 1–500); older ones are deleted. A job file
+  that cannot be read at start-up, or does not hold a job, is left as it
+  is, not restored, and named in the Signal K log; so is one whose delete
+  fails (it comes back after a restart).
 - A job that was `queued` or `running` when the plugin stopped is
   loaded as `failed` with `error` "plugin restarted while the job was in
   progress". If the route worker crashes or exits, the running job fails
@@ -2136,7 +2139,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `no_currents` | boolean | | false | ignore every current source |
 | `wind_model` | string | | `auto` | `auto`: regional wind from signalk-grib-downloader where finer and covering, ECMWF elsewhere; `ecmwf`: ECMWF only |
 | `avoid_areas` | boolean | | true | treat the areas marked on Signal K notes (`properties.avoid.radius_m` around the note's position) as land |
-| `forecast_member` | `{model, member, cycle?}` | | none | route on one ensemble member's forecast instead of the main one (no regional wind): `model` `"ifs-ens"` or `"aifs-ens"` (downloaded, else `400`), `member` 0..50 on disk (0 = the control), `cycle` (yyyymmddHH) refused when it is no longer the ensemble's cycle in use. Refused (`400`) with `no_forecast`, and an ensemble set refuses a route with `no_forecast`. Ensemble sets send it per member; `summary.forecast_member` names it |
+| `forecast_member` | `{model, member, cycle?}` | | none | route on one ensemble member's forecast instead of the main one (no regional wind): `model` `"ifs-ens"` or `"aifs-ens"` (downloaded, else `400`), `member` 0..50 on disk (0 = the control), `cycle` (yyyymmddHH) refused when it is no longer the ensemble's cycle in use. Refused (`400`) with `no_forecast`, and an ensemble set refuses a route with `no_forecast`. A departure window's route with `forecast_member` is checked the same way before the window starts (`400 {error: "route: forecast_member: …"}`). Ensemble sets send it per member; `summary.forecast_member` names it |
 | `vessel` | object | | the vessel settings | per-route overrides; absent keys use the settings ([Configuration](#configuration)) |
 | `vessel.name` | string | | | ignored (accepted so older clients still validate); the vessel name is Signal K's `vessels.self.name` |
 | `vessel.motor_speed_ms` | number | m/s | setting (3.087) | 0.01..50 |
@@ -2220,6 +2223,7 @@ found"}`.
 | `error` | string | `failed` / `cancelled` only |
 | `resource_id` | string | Resources API id once published (equal to the job id) |
 | `publish_error` | string | the last publishing error, when publishing failed |
+| `save_error` | string | only while the job's file could not be saved (a full or read-only disk): why. The job is answered from memory but would not survive a restart; a departure window's or ensemble set's job keeps its route in memory until it is saved. The failure is in the Signal K log, and a later save (a publish) clears this |
 | `links` | object | as in the `202` of `POST /api/routes` |
 
 Progress entry:

@@ -91,6 +91,10 @@ export async function runEnsembleDecodeTask(
   });
 }
 
+/**
+ * The child's forecast pass: cycle `t.cycle` downloaded and decoded to disk as a run of its own, its log lines and
+ * steps sent as events. A pass that fails removes its unfinished run and throws.
+ */
 export async function runForecastDecodeTask(
   t: ForecastDecodeTask,
   emit: (e: ForecastDecodeEvent) => void,

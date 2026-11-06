@@ -32,7 +32,9 @@ uses [Semantic Versioning](https://semver.org/).
   use (`current.json`), from the members complete on disk; a record it
   cannot read is reported in the log. A set whose file cannot be saved
   carries `save_error` (as a departure window does, below), and
-  `forecast_member` is refused with `no_forecast`.
+  `forecast_member` is refused with `no_forecast`, and refused (`400`)
+  when that ensemble or member is not on disk, for a route and a
+  departure window alike.
   On the test box (Pi 5), 72 h: 5 IFS ENS members downloaded
   350,757,112 B (2026-11-05; arithmetic: about 70 MB a member), and a
   decoded IFS ENS member takes 519,126,603 B on disk (`du -sb`,
@@ -106,6 +108,17 @@ uses [Semantic Versioning](https://semver.org/).
   the next change saves it again and clears it. A window file that
   cannot be read at start-up, or does not hold a window, and a delete
   that fails, are reported in the log instead of passing silently.
+- **A route job whose file cannot be saved says so, and the queue goes
+  on.** A full or read-only disk made the job's save throw when it
+  finished, before the next job was started, so the queue stopped. The
+  job now carries `save_error`, the failure goes to the Signal K log, a
+  departure window's job keeps its route in memory until it is saved
+  (it was dropped from memory as if saved), and the next job starts. A
+  job file that cannot be read at start-up was skipped silently; it is
+  reported now, as is a delete that fails and a saved route that cannot
+  be read back. Jobs, departure windows and ensemble sets save their
+  files one way (`src/plugin/jsonfiles.ts`): a save that fails also says
+  when its partial copy could not be removed.
 
 ## [0.2.1] - 2026-11-02
 

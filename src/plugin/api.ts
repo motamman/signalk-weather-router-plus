@@ -180,6 +180,10 @@ function num(s: unknown, def: number, min: number, max: number, name: string): n
   return v;
 }
 
+/**
+ * Register the plugin's HTTP API on `router`: the routes that only read under Signal K's readonly access, the others
+ * under readwrite, where the server has access levels (else both on `router`).
+ */
 export function registerApi(router: IRouter, deps: ApiDeps): void {
   const r = router as AccessRouter;
   const ro: IRouter = typeof r.access === 'function' ? r.access('readonly') : router;
@@ -740,7 +744,10 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     json(res, 413, { error: `route request too large (over ${MAX_ROUTE_REQUEST_BYTES / 1024} KB)` });
     return true;
   };
-  // Check local files before queuing. Managed tokens are resolved by the capture before dispatch (index.ts).
+  /**
+   * A polar token that names a local file not in the library is refused before queuing (400; 503 before the plugin
+   * has started); managed tokens are resolved by the capture before dispatch (index.ts). True when refused.
+   */
   const badPolar = (res: Response, polar: string | undefined, field: string): boolean => {
     if (!polar || polar === 'auto' || polar === ACTIVE_POLAR_TOKEN) return false;
     try {
@@ -751,6 +758,25 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       else json(res, 400, { error: `${field}: ${(e as Error).message}: ${polar} (a token from /api/polars)` });
       return true;
     }
+  };
+
+  /**
+   * A route on one ensemble member (forecast_member) needs that ensemble and member on disk now: checked before
+   * queuing, for a route and for each departure of a window alike, so neither fails later on what is not there.
+   * True when refused (the 400 is sent).
+   */
+  const badMember = (res: Response, fm: RouteRequest['forecast_member'], field: string): boolean => {
+    if (!fm) return false;
+    const have = deps.ensembles().find(e => e.model === fm.model);
+    if (!have) {
+      json(res, 400, { error: `${field}: ${fm.model} is not downloaded (plugin config: Ensemble downloads)` });
+      return true;
+    }
+    if (!have.members.includes(fm.member)) {
+      json(res, 400, { error: `${field}: ${have.name} member ${fm.member} is not on disk` });
+      return true;
+    }
+    return false;
   };
 
   rw.post('/api/routes', (req: Request, res: Response) => {
@@ -768,18 +794,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       return;
     }
     if (badPolar(res, body.vessel?.polar, 'vessel.polar')) return;
-    if (body.forecast_member) {
-      const fm = body.forecast_member;
-      const have = deps.ensembles().find(e => e.model === fm.model);
-      if (!have) {
-        json(res, 400, { error: `forecast_member: ${fm.model} is not downloaded (plugin config: Ensemble downloads)` });
-        return;
-      }
-      if (!have.members.includes(fm.member)) {
-        json(res, 400, { error: `forecast_member: ${have.name} member ${fm.member} is not on disk` });
-        return;
-      }
-    }
+    if (badMember(res, body.forecast_member, 'forecast_member')) return;
     if (jobs.queueLength >= 16) {
       json(res, 429, { error: 'job queue is full' });
       return;
@@ -1012,7 +1027,9 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       json(res, 400, { error: err });
       return;
     }
-    if (badPolar(res, (req.body as WindowRequest).route.vessel?.polar, 'route: vessel.polar')) return;
+    const route = (req.body as WindowRequest).route;
+    if (badPolar(res, route.vessel?.polar, 'route: vessel.polar')) return;
+    if (badMember(res, route.forecast_member, 'route: forecast_member')) return;
     if (windows.running >= WINDOW_LIMITS.maxRunning) {
       json(res, 429, { error: `${windows.running} departure windows are being computed; wait for one to finish, or cancel it` });
       return;

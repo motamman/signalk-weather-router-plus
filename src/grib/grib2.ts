@@ -185,6 +185,11 @@ export function parseGrib2Message(msg: Uint8Array): Grib2Message {
   return parseMessage(msg, 0);
 }
 
+/**
+ * Read one GRIB2 message (`absOffset`: where it starts in its file, for the errors): where each section starts, then
+ * its identification, grid, product (templates 4.0, 4.1 and 4.8), data representation and bit map, and its data,
+ * unpacked only when asked (decode). Throws on a section that is missing, of unknown number or too short, and on a template it does not read.
+ */
 function parseMessage(m: Uint8Array, absOffset: number): Grib2Message {
   const discipline = u8(m, 6);
   const length = u64(m, 8);

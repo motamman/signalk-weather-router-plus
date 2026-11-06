@@ -521,6 +521,10 @@ const ROUTE_PARAMS = ['10u', '10v', 'swh', 'mwp', 'mwd', 'mp2'];
  */
 const ROUTE_FORECAST_MARGIN_DEG = 5;
 
+/**
+ * Compute route job `id` from `request` in the route worker, its progress and its result or error sent to the main
+ * thread; the avoid areas, the boat's design (Signal K) and a managed polar come with the request from there.
+ */
 export async function route(
   st: WorkerState,
   id: string,
@@ -777,6 +781,10 @@ export async function route(
     // worker), layered over ECMWF; counted for the log and the summary.
     const layers: LayeredWind[] = [];
     const regionalNames = new Map<string, string>();
+    /**
+     * The regional wind runs over `area` layered over ECMWF for this route (none with wind_model ecmwf, nor on an
+     * ensemble member), each read for the area when the memory allows; `what` names the area in the progress lines.
+     */
     const loadRegional = async (area: BBox, what: string): Promise<RegionalWind[]> => {
       // An ensemble member's wind is never layered with another model's.
       if (request.wind_model === 'ecmwf' || member) return [];
@@ -829,6 +837,11 @@ export async function route(
     // the chunks of the layout it would choose for the leg box alone may never
     // have been downloaded.
     let smocLeg: { area: BBox; steps: number[]; as: { res: ArcoResolution; layout: ArcoLayout } | null } | null = null;
+    /**
+     * The forecast and currents route area `bbox` (`what` in the progress lines) is searched with: the forecast's fields
+     * over it plus a margin, read from the decoded run (the member's on a member route) or, before there is one, decoded
+     * from the GRIB cache; the SMOC currents over it when the resident area does not cover it.
+     */
     const loadAreas = async (bbox: BBox, what: string): Promise<LegWind | null> => {
       if (useForecast) {
         // The route area of the forecast: the corridor box plus a margin, the
@@ -915,6 +928,7 @@ export async function route(
       st.send({ type: 'forecast-memory', memory: { ...st.forecastMemory } });
     };
 
+    /** Route one leg; on a route of several legs its error names the leg (not a cancel). */
     const legOne = async (plan: LegPlan, legStart: [number, number], legDeparture: Date, arriving: LegArrival | null): Promise<Route> => {
       try {
         return await legRoute(plan, legStart, legDeparture, arriving);

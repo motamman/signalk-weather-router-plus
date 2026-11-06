@@ -316,7 +316,7 @@ async function downloadModel(
   members: number[],
   ladder: number[]
 ): Promise<{ steps: number[]; downloaded: number; bytes: number }> {
-  // The members a step file holds that still have a message to fetch from it (none: every one is cached).
+  /** The members a step file holds that still have a message to fetch from it (none: every one is cached). */
   const toGet = (file: EnsembleModel['files'][number], stream: string, params: readonly string[], step: number): number[] => {
     const inFile = members.filter(m => (m === 0) === file.control);
     const cachedAll = inFile.every(m => params.every(p => isGribFile(ensembleGribPath(o.cacheRoot, model.id, name, m, stream, step, p))));

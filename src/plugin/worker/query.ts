@@ -455,6 +455,10 @@ function reportStatus(st: WorkerState, kind: string): void {
   }
 }
 
+/**
+ * The data worker's status for the main thread: the forecast run in use, its decode and memory, currents, RTOFS, land,
+ * tides, regional runs, checks, connectivity and ensembles. The currents' and tides' revisions sent are noted.
+ */
 export function dataStatus(st: WorkerState): DataStatus {
   st.reportedSmocRev = st.smoc ? st.smoc.revision : -1;
   st.reportedTidesRev = st.tides ? st.tides.revision : -1;

@@ -1,7 +1,7 @@
 /**
- * The route API's checks before a job is queued (a request too large, a polar not in the library), the event
- * stream's replay when Last-Event-ID is not a number, a departure window's route read back from disk, and what
- * the deletes of a window and of its routes wait for.
+ * The route API's checks before a job is queued (a request too large, a polar not in the library, an ensemble member
+ * not on disk), the event stream's replay when Last-Event-ID is not a number, a departure window's route read back
+ * from disk, what the deletes of a window and of its routes wait for, and the ensemble sets' endpoints.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import { registerApi, type ApiDeps } from './api';
 import { JobManager } from './jobs';
 import { WindowManager } from './windows';
+import { EnsembleSetManager } from './ensembles';
 
 type Handler = (req: unknown, res: unknown) => unknown;
 interface Answer {
@@ -22,7 +23,8 @@ interface Answer {
 function api(
   jobs: Record<string, unknown>,
   polarsDir: string,
-  windows?: Record<string, unknown>
+  windows?: Record<string, unknown>,
+  more: Record<string, unknown> = {}
 ): (key: string, req: Record<string, unknown>) => Promise<Answer> {
   const routes = new Map<string, Handler>();
   const reg = (m: string) => (p: string | string[], h: Handler) => {
@@ -38,6 +40,7 @@ function api(
       jobs,
       windows,
       polarLibrary: () => ({ polarFile: path.join(polarsDir, 'a.csv'), polarsDir }),
+      ...more,
     } as unknown as ApiDeps
   );
   return async (key, req) => {
@@ -126,7 +129,7 @@ test('GET /api/routes/:id/events: a Last-Event-ID that is not a number replays e
 test("GET /api/routes/:id/result, /signalk, /events: a departure window's route comes from its file", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
   try {
-    const jobs = new JobManager(dir, 50, '/x');
+    const jobs = new JobManager(dir, 50, '/x', m => assert.fail(`unexpected log: ${m}`));
     const job = jobs.submit({ ...ROUTE, departure: '2026-11-02T00:00:00.000Z' }, 'w1');
     const geo = {
       type: 'FeatureCollection',
@@ -193,7 +196,7 @@ test('POST /api/windows: no body is 400, too large 413 and a polar not in the li
 test("DELETE /api/routes/:id: a departure window's job is 409; DELETE /api/windows/:id: 409 until a cancelled departure has stopped", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
   try {
-    const jobs = new JobManager(dir, 50, '/x');
+    const jobs = new JobManager(dir, 50, '/x', m => assert.fail(`unexpected log: ${m}`));
     const stopping: string[] = [];
     const windows = new WindowManager(
       jobs,
@@ -290,4 +293,110 @@ test('a list limit that is not a whole number from 1 is refused, not read as the
   assert.equal((await call('GET /api/routes', { query: { limit: '9999' } })).status, 200);
   assert.equal((await call('GET /api/routes', { query: { limit: '7' } })).status, 200);
   assert.deepEqual(asked, [50, 500, 7]);
+});
+
+test('a route or a departure window on an ensemble member is refused (400) unless that ensemble and member are on disk', async () => {
+  const submitted: unknown[] = [];
+  const created: unknown[] = [];
+  const call = api(
+    {
+      queueLength: 0,
+      submit: (b: unknown) => (submitted.push(b), { id: 'j1', status: 'queued' }),
+      links: () => ({ self: '/x/api/routes/j1' }),
+    },
+    os.tmpdir(),
+    {
+      running: 0,
+      create: (b: unknown) => (created.push(b), { id: 'w1', status: 'running', departures: [{}] }),
+      links: () => ({ self: '/x/api/windows/w1' }),
+    },
+    { ensembles: () => [{ model: 'ifs-ens', name: 'ECMWF IFS ENS', members: [1, 2, 3] }] }
+  );
+  const from = '2026-11-02T00:00:00.000Z';
+  const to = '2026-11-02T12:00:00.000Z';
+  for (const [fm, error] of [
+    [{ model: 'aifs-ens', member: 0 }, 'aifs-ens is not downloaded (plugin config: Ensemble downloads)'],
+    [{ model: 'ifs-ens', member: 9 }, 'ECMWF IFS ENS member 9 is not on disk'],
+  ] as const) {
+    const r = await call('POST /api/routes', { body: { ...ROUTE, forecast_member: fm } });
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error, `forecast_member: ${error}`);
+    const w = await call('POST /api/windows', { body: { route: { ...ROUTE, forecast_member: fm }, from, to } });
+    assert.equal(w.status, 400);
+    assert.equal(w.body.error, `route: forecast_member: ${error}`);
+  }
+  assert.equal(submitted.length + created.length, 0, 'nothing queued');
+  const fm = { model: 'ifs-ens', member: 2 };
+  assert.equal((await call('POST /api/routes', { body: { ...ROUTE, forecast_member: fm } })).status, 202);
+  assert.equal((await call('POST /api/windows', { body: { route: { ...ROUTE, forecast_member: fm }, from, to } })).status, 202);
+  assert.equal(submitted.length + created.length, 2);
+});
+
+test('ensemble sets: create (400 off disk, 429 at the limit), list (a bad limit 400), get, cancel, and delete only once stopped', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-api-'));
+  try {
+    const jobs = new JobManager(dir, 50, '/x', m => assert.fail(`unexpected log: ${m}`));
+    const stopping: string[] = [];
+    const sets = new EnsembleSetManager(
+      jobs,
+      dir,
+      {
+        cancelRunning: id => stopping.push(id),
+        onDisk: model => (model === 'ifs-ens' ? { cycle: '2026-11-06T00:00:00.000Z', members: [1, 2, 3, 4, 5, 6] } : null),
+        log: m => assert.fail(`unexpected log: ${m}`),
+      },
+      '/x'
+    );
+    const call = api(jobs as unknown as Record<string, unknown>, dir, undefined, { ensembleSets: sets });
+    const body = { route: ROUTE, model: 'ifs-ens', members: 5 };
+    const off = await call('POST /api/ensemble-sets', { body: { ...body, model: 'aifs-ens' } });
+    assert.equal(off.status, 400);
+    assert.match(String(off.body.error), /^ECMWF AIFS ENS is not on disk/);
+    const first = await call('POST /api/ensemble-sets', { body });
+    const second = await call('POST /api/ensemble-sets', { body });
+    assert.deepEqual([first.status, second.status], [202, 202]);
+    const third = await call('POST /api/ensemble-sets', { body });
+    assert.equal(third.status, 429);
+    assert.match(String(third.body.error), /^2 ensemble sets are being computed/);
+    const a = sets.get(String(first.body.id))!;
+    const b = sets.get(String(second.body.id))!;
+
+    for (const limit of ['abc', '0', '2.5']) {
+      const r = await call('GET /api/ensemble-sets', { query: { limit } });
+      assert.equal(r.status, 400, limit);
+      assert.match(String(r.body.error), /^limit must be a whole number from 1 \(at most 12 are listed\)/);
+    }
+    const listed = await call('GET /api/ensemble-sets', {});
+    assert.equal(listed.status, 200);
+    assert.equal((listed.body as unknown as unknown[]).length, 2);
+    assert.equal((await call('GET /api/ensemble-sets/:id', { params: { id: 'nosuch' } })).status, 404);
+    const got = await call('GET /api/ensemble-sets/:id', { params: { id: a.id } });
+    assert.equal(got.status, 200);
+    assert.equal(got.body.id, a.id);
+
+    // A set's route, waiting in the queue: it goes with its set, not on its own.
+    const queued = b.members[0].job_id!;
+    assert.equal(jobs.get(queued)!.status, 'queued');
+    const delRoute = await call('DELETE /api/routes/:id', { params: { id: queued } });
+    assert.equal(delRoute.status, 409);
+    assert.match(String(delRoute.body.error), /^an ensemble set's route: delete the set \(DELETE \/x\/api\/ensemble-sets\//);
+
+    // Running: 409. Cancelled, its member still stopping: 409. Stopped: 204, and the set is gone.
+    const running = await call('DELETE /api/ensemble-sets/:id', { params: { id: a.id } });
+    assert.equal(running.status, 409);
+    assert.equal(running.body.error, 'cancel the set before deleting it');
+    const cancelled = await call('POST /api/ensemble-sets/:id/cancel', { params: { id: a.id } });
+    assert.deepEqual([cancelled.status, cancelled.body], [202, { id: a.id, status: 'cancelled' }]);
+    assert.deepEqual(stopping, [a.members[0].job_id]);
+    const early = await call('DELETE /api/ensemble-sets/:id', { params: { id: a.id } });
+    assert.equal(early.status, 409);
+    assert.match(String(early.body.error), /^a cancelled member is still stopping/);
+    jobs.onError(a.members[0].job_id!, 'cancelled', true);
+    assert.equal((await call('DELETE /api/ensemble-sets/:id', { params: { id: a.id } })).status, 204);
+    assert.equal((await call('GET /api/ensemble-sets/:id', { params: { id: a.id } })).status, 404);
+    assert.equal(jobs.runningId, queued, "the next set's member computes now");
+    sets.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

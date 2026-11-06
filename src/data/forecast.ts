@@ -619,6 +619,10 @@ export class ForecastStore implements WindSource {
     return { speed, dir };
   }
 
+  /**
+   * The waves at a point and time: swh, mwp and mp2 blended linearly between the two steps around `time`, mwd through
+   * its unit vector; mp2 NaN where the run has none. Null without wave fields, or where swh is not a number (land).
+   */
   wavesAt(lon: number, lat: number, time: Date): WaveConditions | null {
     if (!this.hasWaves) return null;
     const [i0, i1, a] = this.timeBlend(time);

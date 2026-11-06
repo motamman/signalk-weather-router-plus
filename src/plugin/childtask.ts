@@ -258,6 +258,7 @@ export async function rmtree(dir: string): Promise<RmtreeResult> {
   return c;
 }
 
+/** Run the task the parent sent (ChildTask), its module loaded only now; what it answers goes back to the parent. */
 async function runTask(t: ChildTask): Promise<unknown> {
   switch (t.task) {
     case 'rmtree':

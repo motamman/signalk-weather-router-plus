@@ -29,7 +29,7 @@ function summary(hours: number): RouteSummary {
 
 function harness(onDisk: number[] | null = [0, 1, 2, 3, 4, 5, 6]) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
-  const jobs = new JobManager(dir, 50, '/p');
+  const jobs = new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`));
   const started: Job[] = [];
   jobs.on('start', (j: Job) => started.push(j));
   const cancelled: string[] = [];
@@ -128,7 +128,7 @@ test('the main forecast route named in the request is reported with its metrics 
 test('a set whose file cannot be saved carries it: its member still reaches the worker, the set says why, and the next save clears it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
   try {
-    const jobs = new JobManager(dir, 50, '/p');
+    const jobs = new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`));
     const started: Job[] = [];
     jobs.on('start', (j: Job) => started.push(j));
     const logged: string[] = [];
@@ -159,7 +159,7 @@ test('a set whose file cannot be saved carries it: its member still reaches the 
   }
 });
 
-test('a set found running at start-up that cannot be saved still loads, failed, and says why; its file stays as it was', () => {
+test('a set found running at start-up that cannot be saved, nor its partial copy removed, still loads, failed, and says why', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
   const store = path.join(dir, 'ensemble-sets');
   try {
@@ -175,22 +175,21 @@ test('a set found running at start-up that cannot be saved still loads, failed, 
     };
     const file = path.join(store, 'set-1.json');
     fs.writeFileSync(file, JSON.stringify(running));
-    // A read-only folder: the recovered set cannot be saved.
-    fs.chmodSync(store, 0o500);
+    // A folder where the save writes its copy (on every OS): the write fails, and so does removing that copy.
+    fs.mkdirSync(path.join(store, 'set-1.json.tmp', 'inside'), { recursive: true });
     const logged: string[] = [];
     const sets = new EnsembleSetManager(
-      new JobManager(dir, 50, '/p'),
+      new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`)),
       dir,
       { cancelRunning: () => undefined, onDisk: () => null, log: m => logged.push(m) },
       '/p'
     );
     const s = sets.get('set-1');
     assert.equal(s?.status, 'failed');
-    assert.match(s?.save_error ?? '', /^its file could not be saved: /);
-    assert.equal(logged.length, 1);
+    assert.match(s?.save_error ?? '', /^its file could not be saved: .*; its partial copy set-1\.json\.tmp could not be removed: /);
+    assert.deepEqual(logged, [`ensemble set set-1: ${s?.save_error}`]);
     assert.equal((JSON.parse(fs.readFileSync(file, 'utf8')) as { status: string }).status, 'running', 'the file is as it was');
   } finally {
-    fs.chmodSync(store, 0o700);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -203,7 +202,7 @@ test('a set file that cannot be read at start-up is reported and left as it is; 
     fs.writeFileSync(path.join(store, 'broken.json'), '{"id": "broken", "memb');
     fs.writeFileSync(path.join(store, 'other.json'), JSON.stringify({ hello: 'world' }));
     const logged: string[] = [];
-    const jobs = new JobManager(dir, 50, '/p');
+    const jobs = new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`));
     const sets = new EnsembleSetManager(
       jobs,
       dir,
@@ -213,20 +212,23 @@ test('a set file that cannot be read at start-up is reported and left as it is; 
     assert.ok(logged.some(m => /^ensemble set file broken\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
     assert.ok(logged.includes('ensemble set file other.json does not hold an ensemble set; left as it is, not restored'));
     assert.ok(fs.existsSync(path.join(store, 'broken.json')), 'left as it is');
-    // A finished set whose folder became read-only: deleted from the list, its file stays, and that is said.
+    // A finished set whose file is a folder now (on every OS, not one that is missing): deleted from the list, the
+    // folder stays, and that is said.
     const s = sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 });
     sets.cancel(s.id);
     // The member computing stops when its route worker answers (here at once).
     const stopping = jobs.runningId;
     if (stopping) jobs.onError(stopping, 'cancelled', true);
-    fs.chmodSync(store, 0o500);
+    const file = path.join(store, `${s.id}.json`);
+    fs.rmSync(file);
+    fs.mkdirSync(path.join(file, 'inside'), { recursive: true });
     assert.equal(sets.delete(s.id), true);
     assert.equal(sets.get(s.id), undefined);
     assert.ok(
       logged.some(m => m.startsWith(`ensemble set ${s.id}: its file could not be deleted (`) && m.endsWith('it comes back after a restart'))
     );
+    assert.ok(fs.existsSync(file));
   } finally {
-    fs.chmodSync(store, 0o700);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

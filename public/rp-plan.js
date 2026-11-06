@@ -98,9 +98,11 @@ function _mapFitPadding() {
   return pad;
 }
 
-// Draw a route (GeoJSON from GET /api/routes/{id}/result): the pins, the
-// legs coloured by tack, where the forecast runs out, the snap connectors,
-// the result strip and the itinerary.
+/**
+ * Draw a route (GeoJSON from GET /api/routes/{id}/result): the pins, the
+ * legs coloured by tack, where the forecast runs out, the snap connectors,
+ * the result strip and the itinerary.
+ */
 function displayRoute(geojson) {
   setSelectedRouteFeature(null);
   routeSource.clear();
@@ -191,13 +193,15 @@ function _placeRoutePins(pts, snapProps) {
   refreshFindRouteEnabled();
 }
 
-// Leg colouring: each point learns its outgoing course and the next leg's
-// conditions; a sailing leg is coloured by tack (TACK_COLOR), a motoring
-// leg amber (MOTOR_COLOR), a leg past the forecast's last step dashed. Each leg
-// carries what it is (kind 'leg', `leg`, `beyond`) for the route legend. Dateline legs
-// are split at ±180 so they render the short way.
 // Longitude difference b − a in (−180, 180]: the short way, across the antimeridian.
 function _dLon(a, b) { return ((b - a + 540) % 360) - 180; }
+/**
+ * Leg colouring: each point learns its outgoing course and the next leg's
+ * conditions; a sailing leg is coloured by tack (TACK_COLOR), a motoring
+ * leg amber (MOTOR_COLOR), a leg past the forecast's last step dashed. Each leg
+ * carries what it is (kind 'leg', `leg`, `beyond`) for the route legend. Dateline legs
+ * are split at ±180 so they render the short way.
+ */
 function _drawRouteLegs(pts) {
   // Set outgoing_cog on each point. Map x wraps at ±180°: across the
   // antimeridian the next point's x is on the opposite edge of the world,
@@ -290,9 +294,11 @@ function _markForecastEnd(pts, snapProps) {
   }
 }
 
-// Maroon dashed connectors from each drawn point that was on land to the
-// water it was moved to (start, end and waypoints), and the warning
-// lines for the result strip. Returns the warnings.
+/**
+ * Maroon dashed connectors from each drawn point that was on land to the
+ * water it was moved to (start, end and waypoints), and the warning
+ * lines for the result strip. Returns the warnings.
+ */
 function _drawSnapConnectors(p) {
   // Maroon dashed connector(s): intent → anchor where the server
   // snapped an unnavigable endpoint to the nearest navigable cell.
@@ -485,8 +491,11 @@ function _clearRouteTime() {
   if (timeOverride()) { setTimeOverride(null); _reloadTimedOverlays(); }
 }
 
-// `computed`: a route that has just finished computing (resumed after a reload, or its stream lost), not one opened
-// from Saved: no "Recompute?" banner, and the job stays remembered for a reload until its route has loaded.
+/**
+ * Open route job `id` (`given`: its row, else found in the history). `computed`: a route that has just finished
+ * computing (resumed after a reload, or its stream lost), not one opened from Saved: no "Recompute?" banner, and the
+ * job stays remembered for a reload until its route has loaded.
+ */
 function _loadRouteJob(id, given, { computed = false } = {}) {
   if (!id) return;
   // A route the user opens wins over a remembered computation this page is not following (its startup lookup failed):
@@ -558,6 +567,7 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
   _loadFronts(id);
 }
 
+/** Take the route off the map and the page, as after Reset: its legs, guide, fronts, pins, strip, name and ensemble. */
 function _clearDisplayedRoute() {
   _currentRouteJobId = null;
   _currentRouteName = '';
@@ -1825,6 +1835,7 @@ function _depthCheckLine(dc) {
   else if (coast.length) parts.push('partly or wholly on coastline data');
   return onMesh > 0 || parts.length ? '<div class="rs-notes">Chart depth checked' + (parts.length ? ': ' + parts.join(' · ') : '') + '</div>' : '';
 }
+/** The result strip: route `p`'s distance, time, arrival, sailing and motoring, and the warnings `navWarns`; empty without a route. */
 function renderResultStrip(p, navWarns) {
   const el = document.getElementById('routeInfo');
   _lastRouteProps = p; _lastNavWarns = navWarns;
@@ -1904,9 +1915,11 @@ function renderResultStrip(p, navWarns) {
   copy();
 })();
 
-// Called when route computation starts: clear the stale log and
-// itinerary, start the phase progress in Find Route's place, show
-// Cancel. The user's tab is left alone.
+/**
+ * Called when route computation starts: clear the stale log and
+ * itinerary, start the phase progress in Find Route's place, show
+ * Cancel. The user's tab is left alone.
+ */
 function showModal() {
   modalLog.innerHTML = '';
   modalItinerary.innerHTML = '';
@@ -1977,8 +1990,10 @@ function _warningCardIndex(w, lonlats) {
   });
   return Math.sqrt(bestD) * 111000 < 300 ? best : -1;   // within 300 m
 }
-// A warning's kind in words. The two the router reports about its own work say what they mean: a stretch whose
-// search failed and that follows the chart's route instead, and a beat with no room to tack, motored.
+/**
+ * A warning's kind in words. The two the router reports about its own work say what they mean: a stretch whose
+ * search failed and that follows the chart's route instead, and a beat with no room to tack, motored.
+ */
 function _warningKind(w) {
   if (w.violation === 'search_failed')
     return "search failed: this stretch follows the chart's route instead, so it may be slower, with many short tacks";
@@ -2505,6 +2520,7 @@ function _limitSI(id) {
   const v = parseFloat(el.value);
   return Number.isFinite(v) ? c.inv(v) : null;
 }
+/** The inputs of _LIMITS (wind and wave limits, cruise speed) in the user's units (none known: disabled, "—"), each filled from its saved SI value unless typed in. */
 function _initLimitInputs() {
   for (const id of Object.keys(_LIMITS)) {
     const el = /** @type {HTMLInputElement} */ (document.getElementById(id));
@@ -2954,6 +2970,7 @@ function _backToEarlierRoute() {
 }
 // Counts the attachments: an answer meant for an earlier one, even of the same job, is dropped (_jobOnError).
 let _attachSeq = 0;
+/** Follow route job `id` (`jobRow`: its row when known) as it computes, from its event stream: progress, then its route. */
 function attachToJob(id, jobRow) {
   // A reconnect to the same job keeps what was on the map before it.
   const reconnect = _activeJobId === id;
@@ -3123,8 +3140,10 @@ function _jobOnDone(job, d) {
   loadPluginStatus();
 }
 
-// `event: error` from the server (failed or cancelled), or a dropped
-// connection: when the browser gave up, check the job's status once.
+/**
+ * `event: error` from the server (failed or cancelled), or a dropped
+ * connection: when the browser gave up, check the job's status once.
+ */
 function _jobOnError(job, ev) {
   const { id, es, statusEl } = job;
   if (ev && ev.data) {
@@ -4396,6 +4415,7 @@ function _winBest(w, sortId) {
   return best;
 }
 
+/** Show the departure window: its status line, Cancel while it runs, and its departures' table. */
 function _winRender() {
   const w = _win;
   const status = document.getElementById('windowStatus');
