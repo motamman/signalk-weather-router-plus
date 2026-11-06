@@ -53,8 +53,9 @@ export type { JobPublic };
 
 /**
  * A finished job's route results: saved once, when it finishes, in a file of their own (results/<id>.json), and never
- * written again. The job's own file (<id>.json) holds the rest and is saved at each change; it never holds these, so
- * no save of the job can lose them. A departure window's or ensemble set's job keeps them only in that file (release).
+ * written again. The job's own file (<id>.json) holds the rest and is saved at each change; it holds these only while
+ * their own file is not saved, so no save of the job can lose them. A departure window's or ensemble set's job keeps
+ * them only in their file (release).
  */
 const RESULT_KEYS = ['geojson', 'skRoute', 'skeleton', 'fronts', 'events', 'progress'] as const;
 type JobResults = Pick<Job, (typeof RESULT_KEYS)[number]>;
@@ -148,8 +149,8 @@ export class JobManager extends EventEmitter {
 
   /**
    * Save a finished job: its results once (their file is never written again), then its own file, at each change.
-   * A window's or set's job leaves memory (release) only once its results are saved. A save that fails is the job's
-   * to carry: `saveError` says what is behind (the API shows it), the failure is reported, unsaved results stay in
+   * A window's or set's job leaves memory (release) only once its results are saved; until then the job's own file
+   * holds them too. A save that fails is the job's to carry: `saveError` says what is behind (the API shows it), the failure is reported, unsaved results stay in
    * memory, and the next change saves again. It never throws into the worker's answer, a request or the queue.
    */
   private persist(job: Job): void {
@@ -164,7 +165,10 @@ export class JobManager extends EventEmitter {
         if (job.windowId || job.ensembleSetId) this.release(job);
       }
     }
-    const why = saveJson(path.join(this.dir, `${job.id}.json`), stateOf(job));
+    // While its results have no file of their own, the job's file holds them, as it did before they had one: nothing
+    // on disk is ever without them (loadPersisted moves them out at the next start).
+    const own = this.resultsUnsaved.has(job.id) ? { ...stateOf(job), ...resultsOf(job) } : stateOf(job);
+    const why = saveJson(path.join(this.dir, `${job.id}.json`), own);
     if (why) failed.push(`its file could not be saved: ${why}`);
     if (!failed.length) return;
     job.saveError = failed.join('; ');

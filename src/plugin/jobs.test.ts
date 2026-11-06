@@ -174,3 +174,44 @@ test('a job file that cannot be read at start-up is reported and left as it is; 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('an old job file keeps its results while their own file cannot be saved, and a later start moves them', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jobs-'));
+  const store = path.join(dir, 'jobs');
+  try {
+    fs.mkdirSync(store, { recursive: true });
+    const old = {
+      id: 'old-1',
+      status: 'done',
+      request: ROUTE,
+      createdAt: '2026-11-06T12:00:00.000Z',
+      finishedAt: '2026-11-06T12:05:00.000Z',
+      summary: SUMMARY,
+      windowId: 'win-1',
+      geojson: GEOJSON,
+      skRoute: {},
+      skeleton: null,
+      fronts: null,
+      progress: [],
+      events: [{ id: 1, event: 'done', data: { status: 'done' } }],
+      nextEventId: 2,
+    };
+    const file = path.join(store, 'old-1.json');
+    fs.writeFileSync(file, JSON.stringify(old));
+    const blocked = path.join(store, 'results', 'old-1.json.tmp');
+    folderAt(blocked);
+    const logged: string[] = [];
+    const jobs = new JobManager(dir, 50, '/p', m => logged.push(m));
+    assert.match(jobs.get('old-1')?.saveError ?? '', /^its route results could not be saved: /);
+    assert.equal(logged.length, 1);
+    assert.deepEqual(jobs.full('old-1')?.geojson, GEOJSON, 'in memory');
+    assert.deepEqual((JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>).geojson, GEOJSON, 'still in its file');
+    // A later start, the way clear: moved.
+    fs.rmSync(blocked, { recursive: true });
+    const again = new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`));
+    assert.deepEqual(again.full('old-1')?.geojson, GEOJSON);
+    assert.ok(!('geojson' in (JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

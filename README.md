@@ -2225,7 +2225,7 @@ found"}`.
 | `error` | string | `failed` / `cancelled` only |
 | `resource_id` | string | Resources API id once published (equal to the job id) |
 | `publish_error` | string | the last publishing error, when publishing failed |
-| `save_error` | string | only while the job's last save failed (a full or read-only disk): why. The job is answered from memory. When its first save failed, it would not survive a restart; when a later one failed (a publish), a restart brings back the job as last saved, without that change. Its route results are saved once, in a file of their own that no later save rewrites (`jobs/results/<id>.json`); until they are, they stay in memory (a departure window's or ensemble set's job too). The failure is in the Signal K log, and the next save clears this |
+| `save_error` | string | only while the job's last save failed (a full or read-only disk): why. The job is answered from memory. When its first save failed, it would not survive a restart; when a later one failed (a publish), a restart brings back the job as last saved, without that change. Its route results are saved once, in a file of their own that no later save rewrites (`jobs/results/<id>.json`); until they are, they stay in memory and in the job's own file (a departure window's or ensemble set's job too). The failure is in the Signal K log, and the next save clears this |
 | `links` | object | as in the `202` of `POST /api/routes` |
 
 Progress entry:
