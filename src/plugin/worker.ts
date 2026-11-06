@@ -153,6 +153,26 @@ if (role === 'data') setNetworkObserver((state, reason) => noteNetwork(st, state
  * answer from what is on disk, and it starting to hold stops the forecast
  * decode under way.
  */
+/**
+ * The ensemble pass (worker/forecast.ts refreshEnsembles), started by a refresh round after the forecast and not waited
+ * for: a pass downloads and decodes for many minutes, and the round's own status (forecast, SMOC, tides, regional) and
+ * the next round must not wait behind it. One pass at a time; a round that finds one running leaves it, and the next
+ * round after it ends starts what is still missing. The status goes out at each change the pass makes and at its end.
+ */
+let ensemblePass: Promise<void> | null = null;
+let ensembleUserPass = false;
+function startEnsembles(st: WorkerState, offline: string | null, held: () => string | null, user: boolean): void {
+  if (ensemblePass) return;
+  ensembleUserPass = user;
+  const changed = (): void => st.send({ type: 'data-status', status: dataStatus(st) });
+  ensemblePass = refreshEnsembles(st, offline, held, changed)
+    .catch(err => st.log('error', `ensembles: ${(err as Error).message}`))
+    .finally(() => {
+      ensemblePass = null;
+      changed();
+    });
+}
+
 export async function refresh(st: WorkerState, force: boolean, user = false): Promise<void> {
   const networkAllowed = st.role === 'data';
   const t0 = Date.now();
@@ -168,8 +188,8 @@ export async function refresh(st: WorkerState, force: boolean, user = false): Pr
     sendCurrents(st);
     if (st.role === 'data') {
       await refreshForecast(st, force, offline(), held);
-      // The ensembles of the run in use, after it and never in its way.
-      await refreshEnsembles(st, offline(), held).catch(err => st.log('error', `ensembles: ${(err as Error).message}`));
+      // The ensembles of the run in use: started after it, not waited for (startEnsembles).
+      startEnsembles(st, offline(), held, user);
       // After the forecast, so a first boot is not held up by the SMOC resident download.
       await refreshSmoc(st, offline());
       sendCurrents(st);
@@ -396,6 +416,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
     }
     case 'shutdown':
       st.decodeAbort?.abort();
+      st.ensembleAbort?.abort();
       if (st.gridBuilder) await st.gridBuilder.terminate();
       process.exit(0);
   }
@@ -442,6 +463,8 @@ port.on('message', (msg: MainToWorker) => {
     st.internetHold = msg.hold;
     // A background round's decode stops, its download with it; the owner's round goes on.
     if (msg.hold && st.backgroundRound) st.decodeAbort?.abort();
+    // So does an ensemble pass a background round started.
+    if (msg.hold && !ensembleUserPass) st.ensembleAbort?.abort();
     return;
   }
   // Initialised first (its own message chain); the rest of the data worker's network work beside the queries.

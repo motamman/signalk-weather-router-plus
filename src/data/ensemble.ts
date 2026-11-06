@@ -219,13 +219,15 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
         r.downloaded = dl.downloaded;
         r.downloadedBytes = dl.bytes;
         const t = Date.now();
-        for (const m of todo) {
+        for (const [k, m] of todo.entries()) {
           try {
             decodeMember(o, model, name, m, dl.steps, horizonHours);
           } catch (err) {
             r.failed.push({ member: m, error: (err as Error).message });
             log(`${model.name} ${memberDir(m)}: not decoded (${(err as Error).message})`);
           }
+          // After the steps downloaded (downloadModel counts those), each member decoded.
+          o.onProgress?.(dl.steps.length + k + 1, ladder.length + todo.length);
         }
         r.decodeMs = Date.now() - t;
       } catch (err) {

@@ -2515,47 +2515,64 @@ window.addEventListener('rp:units', _initLimitInputs);
 
 // ── Ensemble ─────────────────────────────────────────────────────────
 // A route checked against an ensemble (POST /api/routes `ensemble`; plugin/worker/route.ts ensembleCheck): found on the
-// main forecast as always, then sailed leg by leg in each member's weather. The controls show only while the plugin has
-// an ensemble on disk (status `ensembles`: those with a run and at least the fewest members a request may ask for); the
-// Plan tab ticks it on, Options picks the ensemble and how many of its members on disk (the server takes the first that
-// many, the control first). Remembered per browser and Signal K user (rp-prefs.js).
+// main forecast as always, then sailed leg by leg in each member's weather. The controls, on the Plan tab above Find
+// Route, show whenever ensembles are on in the plugin configuration (status `ensembles`, one entry per ensemble chosen
+// there), with what each is doing; they can be used once one is on disk (a run, and at least the fewest members a request
+// may ask for): on or off, which ensemble, how many of its members on disk (the server takes the first that many, the
+// control first). Remembered per browser and Signal K user (rp-prefs.js).
 const ENSEMBLE_MIN_MEMBERS = 5;   // request_schema.ts ENSEMBLE_MEMBERS_RANGE
-let _ensembles = [];              // status `ensembles` on disk: [{ model, name, cycle, members (how many) }]
+let _ensembleStatus = [];         // status `ensembles`, as the server sends them
+let _ensembles = [];              // those on disk: [{ model, name, cycle, members (how many) }]
 function _ensembleChosen() {
   const sel = /** @type {HTMLSelectElement} */ (document.getElementById('ensembleModel'));
   return sel ? _ensembles.find(e => e.model === sel.value) || null : null;
 }
+// What each ensemble chosen in the plugin configuration has, and is doing, in words.
+function _ensembleStateText() {
+  return _ensembleStatus.map(x => {
+    const n = Array.isArray(x.members) ? x.members.length : 0;
+    const have = x.cycle ? n + ' members of the run of ' + _shortUtc(x.cycle) : 'none on disk yet';
+    const doing = x.loading
+      ? '; downloading the run of ' + _shortUtc(x.loading.cycle) + (x.loading.total ? ' (' + x.loading.done + ' of ' + x.loading.total + ')' : '')
+      : '';
+    return x.name + ': ' + have + doing + (x.error ? '; ' + unitText(x.error) : '');
+  }).join(' · ');
+}
 function _ensembleLabel() {
   const slider = /** @type {HTMLInputElement} */ (document.getElementById('ensembleMembers'));
+  if (!slider) return;
   const e = _ensembleChosen();
-  if (!slider || !e) return;
-  document.getElementById('ensembleMembersLabel').textContent = slider.value;
-  document.getElementById('ensembleMembersHint').textContent = 'Of ' + e.members + ' on disk, from the run of ' + _shortUtc(e.cycle) + '.';
-  document.getElementById('ensembleRowHint').textContent = e.name + ', ' + slider.value + ' members (Options → Ensemble).';
+  const state = _ensembleStateText();
+  document.getElementById('ensembleMembersLabel').textContent = e ? slider.value + ' of ' + e.members : '—';
+  document.getElementById('ensembleRowHint').textContent = e ? state : 'Not ready: ' + state;
 }
 function _ensembleRender() {
   const row = document.getElementById('ensembleRow');
-  const section = document.getElementById('ensembleSection');
   const sel = /** @type {HTMLSelectElement} */ (document.getElementById('ensembleModel'));
   const slider = /** @type {HTMLInputElement} */ (document.getElementById('ensembleMembers'));
   const on = /** @type {HTMLInputElement} */ (document.getElementById('ensembleOn'));
-  if (!row || !section || !sel || !slider || !on) return;
-  row.hidden = section.hidden = !_ensembles.length;
-  if (!_ensembles.length) return;
+  if (!row || !sel || !slider || !on) return;
+  // Ensembles off in the plugin configuration: nothing shown, as before ensembles existed.
+  row.hidden = !_ensembleStatus.length;
+  if (!_ensembleStatus.length) return;
+  on.checked = prefs.get('routeVar:ensembleOn') === 'true';
+  const ready = _ensembles.length > 0;
+  on.disabled = sel.disabled = slider.disabled = !ready;
   const ids = _ensembles.map(e => e.model).join(',');
   if (sel.dataset.ids !== ids) {
     sel.innerHTML = _ensembles.map(e => '<option value="' + escapeHtml(e.model) + '">' + escapeHtml(e.name) + '</option>').join('');
     sel.dataset.ids = ids;
   }
-  const want = prefs.get('routeVar:ensembleModel');
-  sel.value = _ensembles.some(e => e.model === want) ? want : _ensembles[0].model;
-  const e = _ensembleChosen();
-  slider.max = String(e.members);
-  // The members remembered, at most those on disk now (a choice above that stays remembered for a run that has them);
-  // nothing remembered: all of them.
-  const saved = Number(prefs.get('routeVar:ensembleMembers'));
-  slider.value = String(Number.isInteger(saved) && saved >= ENSEMBLE_MIN_MEMBERS ? Math.min(saved, e.members) : e.members);
-  on.checked = prefs.get('routeVar:ensembleOn') === 'true';
+  if (ready) {
+    const want = prefs.get('routeVar:ensembleModel');
+    sel.value = _ensembles.some(e => e.model === want) ? want : _ensembles[0].model;
+    const e = _ensembleChosen();
+    slider.max = String(e.members);
+    // The members remembered, at most those on disk now (a choice above that stays remembered for a run that has
+    // them); nothing remembered: all of them.
+    const saved = Number(prefs.get('routeVar:ensembleMembers'));
+    slider.value = String(Number.isInteger(saved) && saved >= ENSEMBLE_MIN_MEMBERS ? Math.min(saved, e.members) : e.members);
+  }
   _ensembleLabel();
 }
 /** The request's `ensemble`, or null: not ticked, or no ensemble on disk. */
@@ -2577,8 +2594,9 @@ function _ensembleRequest() {
 window.addEventListener('rp:status', (/** @type {CustomEvent} */ e) => {
   const st = e.detail;
   if (!st) return;
+  _ensembleStatus = Array.isArray(st.ensembles) ? st.ensembles : [];
   // `members` there is the member numbers on disk (0 = the control); here, how many.
-  _ensembles = (Array.isArray(st.ensembles) ? st.ensembles : [])
+  _ensembles = _ensembleStatus
     .filter(x => x.cycle && Array.isArray(x.members) && x.members.length >= ENSEMBLE_MIN_MEMBERS)
     .map(x => ({ model: x.model, name: x.name, cycle: x.cycle, members: x.members.length }));
   _ensembleRender();

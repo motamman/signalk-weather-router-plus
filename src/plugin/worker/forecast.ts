@@ -354,7 +354,12 @@ function ensembleKeep(
  * main forecast: a failure, a hold or a lack of disk is recorded for the status (st.ensembles) and the ensemble in use
  * stays. Ensembles off: whatever an earlier setting left on disk is removed.
  */
-export async function refreshEnsembles(st: WorkerState, offline: string | null, held: () => string | null): Promise<void> {
+export async function refreshEnsembles(
+  st: WorkerState,
+  offline: string | null,
+  held: () => string | null,
+  changed: () => void = () => undefined
+): Promise<void> {
   const { config: cfg } = requireInit(st);
   const e = cfg.forecast.ensemble;
   if (!e.models.length) {
@@ -374,6 +379,7 @@ export async function refreshEnsembles(st: WorkerState, offline: string | null, 
   const pending = Object.fromEntries(missing.map(m => [m, cycle])) as Partial<Record<EnsembleModelId, string>>;
   const note = (m: EnsembleModelId, s: Partial<NonNullable<WorkerState['ensembles'][EnsembleModelId]>>): void => {
     st.ensembles[m] = { loading: null, error: null, checkedAt: new Date().toISOString(), ...st.ensembles[m], ...s };
+    changed();
   };
   for (const m of e.models) if (!missing.includes(m)) note(m, { loading: null, error: null });
   if (!missing.length) {
@@ -406,7 +412,7 @@ export async function refreshEnsembles(st: WorkerState, offline: string | null, 
     return;
   }
   for (const m of missing) note(m, { loading: { cycle: st.run.cycleTime.toISOString(), done: 0, total: null }, error: null });
-  st.decodeAbort = new AbortController();
+  st.ensembleAbort = new AbortController();
   try {
     const results = await runChildTask(
       {
@@ -419,7 +425,7 @@ export async function refreshEnsembles(st: WorkerState, offline: string | null, 
         members: e.members,
       },
       null,
-      st.decodeAbort.signal,
+      st.ensembleAbort.signal,
       ev => {
         if (ev.event === 'decode-step')
           for (const m of missing) note(m, { loading: { cycle: st.run!.cycleTime.toISOString(), done: ev.done, total: ev.total } });
@@ -433,11 +439,11 @@ export async function refreshEnsembles(st: WorkerState, offline: string | null, 
     }
   } catch (err) {
     const h = held();
-    const text = h && st.decodeAbort?.signal.aborted ? `stopped: ${h}` : (err as Error).message;
+    const text = h && st.ensembleAbort?.signal.aborted ? `stopped: ${h}` : (err as Error).message;
     for (const m of missing) note(m, { loading: null, error: `cycle ${cycle} not downloaded: ${text}` });
     st.log('info', `ensembles: cycle ${cycle} not downloaded (${text})`);
   } finally {
-    st.decodeAbort = null;
+    st.ensembleAbort = null;
   }
   const removed = pruneEnsembles(st.cacheRoot, ensembleKeep(st, cfg, pending));
   if (removed.length) st.log('debug', `ensembles: removed ${removed.join(', ')}`);

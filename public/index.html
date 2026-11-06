@@ -979,10 +979,14 @@
   <input type="range" id="sailThresh" min="0" max="5.2" step="0.1" value="2.6" aria-label="Minimum sailing speed">
   </div>
 
-  <!-- Ensemble check (rp-plan.js, Ensemble): shown only while the plugin has an ensemble on disk (the Signal K plugin
-       configuration, Ensemble downloads). Which ensemble and how many members: Options → Ensemble. -->
+  <!-- Ensemble check (rp-plan.js, Ensemble): shown while ensembles are on in the Signal K plugin configuration
+       (Ensemble downloads), usable once one is on disk: on or off, which ensemble, how many of its members. -->
   <div id="ensembleRow" hidden>
     <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="The route is found on the main forecast as always, then sailed leg by leg in each ensemble member's wind and waves: when it would arrive in each, and how many go over the wind or wave limit."><input type="checkbox" id="ensembleOn">Check the route against an ensemble</label>
+    <div style="display:flex;gap:var(--s-2);align-items:flex-end;">
+      <div style="flex:1;"><label for="ensembleModel">Ensemble</label><select id="ensembleModel" aria-label="Ensemble"></select></div>
+      <div style="flex:1;"><label for="ensembleMembers">Members: <span id="ensembleMembersLabel">—</span></label><input type="range" id="ensembleMembers" min="5" max="5" step="1" value="5" aria-label="Ensemble members"></div>
+    </div>
     <div id="ensembleRowHint" class="ctl-hint"></div>
   </div>
 
@@ -1076,22 +1080,6 @@
   <div class="ctl-hint" id="limitStrengthHint" hidden>How hard the route tries to stay under a limit set to Avoid. Higher means it will sail further out of its way to avoid it. 0 means it never detours, it only warns.</div>
   <label>Comfort: <input type="range" id="comfortWeight" min="0" max="3" step="0.1" value="1" style="width:8em;vertical-align:middle;" aria-label="Comfort"> <span id="comfortWeightValue"></span> <button type="button" class="srv-reset" id="comfortWeightReset" hidden>Use server setting</button></label>
   <div class="ctl-hint">How much the route avoids rough water, as the boat meets it (head seas count more than following seas). Higher means it gives up more time for a smoother passage. 0 turns comfort off. Needs wave data in the forecast.</div>
-
-  </div>
-  </details>
-
-  <!-- Ensemble: which one and how many members the Plan tab's ensemble check uses (rp-plan.js). Shown only while the
-       plugin has an ensemble on disk. -->
-  <details class="subsection" id="ensembleSection" hidden>
-  <summary>Ensemble</summary>
-  <div class="subsection-body">
-
-  <div class="ctl-hint">With "Check the route against an ensemble" ticked on the Plan tab, the route found on the main forecast is sailed again in each member's weather. Members are the ensemble's other possible weathers; the control (member 0) is the ensemble's own unperturbed run, used first.</div>
-  <label for="ensembleModel">Ensemble</label>
-  <select id="ensembleModel" aria-label="Ensemble"></select>
-  <label>Members: <span id="ensembleMembersLabel">—</span></label>
-  <input type="range" id="ensembleMembers" min="5" max="5" step="1" value="5" aria-label="Ensemble members">
-  <div id="ensembleMembersHint" class="ctl-hint"></div>
 
   </div>
   </details>

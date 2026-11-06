@@ -176,9 +176,9 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   strongest wind and highest waves met, or where it could not be sailed;
   in all: the 10th, 50th and 90th percentile arrival over the members
   that arrive, and how many go over each limit or cannot sail it. In the
-  webapp: Route → Plan, *Check the route against an ensemble*, with the
-  ensemble and the number of members (5 to those on disk) in Route →
-  Options → Ensemble; the result strip carries the summary and the
+  webapp: Route → Plan, above Find Route: *Check the route against an
+  ensemble*, the ensemble, and the number of members (5 to those on
+  disk); the result strip carries the summary and the
   Itinerary tab a table of the members. Over the API: the request's
   `ensemble`, and `GET /api/routes/{id}/ensemble`.
 

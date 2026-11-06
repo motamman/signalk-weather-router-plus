@@ -102,6 +102,8 @@ export interface WorkerState {
   currentsUnread: string[];
   /** Kills the forecast decode child process (plugin stopped). */
   decodeAbort: AbortController | null;
+  /** Kills the ensemble download and decode child process (plugin stopped, a hold); null while none runs. */
+  ensembleAbort?: AbortController | null;
   /** The ensembles' last pass (data worker, worker/forecast.ts refreshEnsembles): what it is doing, or why it could not. */
   ensembles: Partial<
     Record<

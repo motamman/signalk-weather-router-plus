@@ -20,8 +20,8 @@ uses [Semantic Versioning](https://semver.org/).
   the limits, strongest wind and highest waves, or where it could not be
   sailed; in all the 10/50/90 % arrival and the counts
   (`summary.ensemble`, `GET /api/routes/{id}/ensemble`, `/api/status`
-  `ensembles`). Webapp: a toggle on Route → Plan, the ensemble and the
-  members in Route → Options → Ensemble, a line in the result strip and
+  `ensembles`). Webapp: on Route → Plan, above Find Route, the toggle,
+  the ensemble and the members; a line in the result strip and
   a members table in the Itinerary. Measured on the test box at 72 h:
   about 70 MB to download and 519 MB on disk per IFS ENS member.
 
