@@ -116,6 +116,18 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The route legend draws each mark as the map does.** The legend typed
+  its own copy of every route layer's colours and dashes, and three had
+  drifted: the line from a point on land to its water (dashed 4 4 in the
+  legend, 6 6 on the map), the arrival circle of an approximate waypoint
+  (3 2 against 6 4) and a leg past the forecast (grey, dashed 6 4; on the
+  map the leg's own colour, dashed 10 7). The layers and the legend now
+  read one table (`ROUTE_STYLE`, `rp-core.js`).
+- **A GRIB message that cannot be renamed into the cache fails its
+  fetch.** When the rename failed and any file was at the cached path, the
+  failure was taken for another writer's success, so a message cut short
+  on disk stayed there unsaid and was fetched again every round. It is now
+  taken only when a whole message is there (`isGribFile`).
 - **A failed row no longer hides the numbers of an ensemble set's table or
   a departure window's.** A failed member's or departure's message sat on
   one line in a cell across the five number columns (the tables' cells do

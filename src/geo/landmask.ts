@@ -287,8 +287,8 @@ export class LandMask implements LandTest {
    * first (isLand, legCrossesRaster), as this mask's own patches do. Each patch must start on a base cell's west and
    * south edges and have a cell size the base's is a whole multiple of, so it covers whole base cells (the walk of a
    * move descends into a patch by the base cell's centre, pieceHitsRaster); a patch may end short of a base cell only
-   * where the base's last cell runs past the data (its east or north edge). Throws otherwise. No polygons: the exact
-   * tests answer from the rasters. `outside`: what is beyond the base raster (see `outside`): 'land' for the chart
+   * where the base's last cell runs past the data (its east or north edge). Throws otherwise. No polygons: isLand and
+   * the leg tests answer from the rasters; isLandExact does not (it finds no polygon: water). `outside`: what is beyond the base raster (see `outside`): 'land' for the chart
    * meshes' area (mesh/area.ts, whose base covers the search's whole world), 'unknown' for land known only where its
    * data covers. The chart meshes' area is made so.
    */

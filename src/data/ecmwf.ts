@@ -17,7 +17,7 @@
  */
 
 import * as fs from 'node:fs';
-import { fetchWithRetry, isOffline, sleep } from './http';
+import { fetchBodyWithRetry, isOffline, sleep } from './http';
 import { MINUTE_MS, HOUR_MS, HOUR_S } from '../geo/units';
 import * as path from 'node:path';
 
@@ -78,10 +78,12 @@ export interface EnsembleModel {
   files: { kind: string; control: boolean }[];
   /** Hours between steps up to 144 h (6 h after it for every model). */
   stepHours: number;
+  /** The members besides the control (numbered 1 to this): what a setting and a set may ask for at most. */
+  members: number;
 }
 
 export const ENSEMBLES: Record<EnsembleModelId, EnsembleModel> = {
-  'ifs-ens': { id: 'ifs-ens', name: 'ECMWF IFS ENS', path: 'ifs/0p25', files: [{ kind: 'ef', control: false }], stepHours: 3 },
+  'ifs-ens': { id: 'ifs-ens', name: 'ECMWF IFS ENS', path: 'ifs/0p25', files: [{ kind: 'ef', control: false }], stepHours: 3, members: 50 },
   'aifs-ens': {
     id: 'aifs-ens',
     name: 'ECMWF AIFS ENS',
@@ -91,6 +93,7 @@ export const ENSEMBLES: Record<EnsembleModelId, EnsembleModel> = {
       { kind: 'pf', control: false },
     ],
     stepHours: 6,
+    members: 50,
   },
 };
 
@@ -105,8 +108,11 @@ export const ENSEMBLE_PARAMS = { enfo: ['10u', '10v'], waef: ['swh', 'mwp', 'mwd
  */
 export const ENSEMBLE_OPTIONAL_PARAMS = { enfo: [], waef: ['mp2'] } as const;
 
-/** The number of members a setting may ask for: 5 to 50 in fives. */
-export const ENSEMBLE_MEMBER_CHOICES = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50] as const;
+/** The number of members a setting may ask for: in fives, up to the fewest members a model has (ENSEMBLES). */
+export const ENSEMBLE_MEMBER_CHOICES: readonly number[] = Array.from(
+  { length: Math.floor(Math.min(...Object.values(ENSEMBLES).map(m => m.members)) / 5) },
+  (_, i) => 5 * (i + 1)
+);
 
 export type EcmwfParam =
   | (typeof ATM_PARAMS)[number]
@@ -312,7 +318,10 @@ function writeCached(cached: string, msg: Uint8Array): void {
     fs.renameSync(tmp, cached);
   } catch (err) {
     fs.rmSync(tmp, { force: true });
-    if (!fs.existsSync(cached)) throw err;
+    // Another writer's whole message there meanwhile is this one's answer; anything else (none, or a message cut short
+    // that the rename should have replaced) is the failure (until 2026-11-07 any file there was taken for an answer, so
+    // a cut-short one stayed in the cache unsaid).
+    if (!isGribFile(cached)) throw err;
   }
 }
 
@@ -361,29 +370,27 @@ export class EcmwfClient {
    * over for the rest of the session. 404/403 are returned as-is. No
    * connection at all (OfflineError) is thrown at once, mirrors untried.
    * The body is read inside the attempt, under its timeout (http.ts
-   * readBody): a download that stalls is a timed-out attempt, retried and
+   * fetchBodyWithRetry): a download that stalls is a timed-out attempt, retried and
    * failed over like a dead connection, so no request of this client
    * waits without end (until 2026-11-07 the callers read the body after
    * the attempt had returned, outside any timeout, and the ensemble
    * child, which has no deadline of its own, could hang on one stalled
-   * message; PR #7 review).
+   * message).
    */
   private async request(pathSuffix: string, init: RequestInit = {}): Promise<{ status: number; body: Uint8Array }> {
     let lastErr: unknown;
     for (let m = 0; m < this.mirrors.length; m++) {
       const url = this.baseUrl + pathSuffix;
       try {
-        const r = await fetchWithRetry(url, init, {
+        const r = await fetchBodyWithRetry(url, init, {
           timeoutMs: this.timeoutMs,
           retries: this.retries,
           fetchImpl: this.fetchImpl,
           sleepImpl: this.sleepImpl,
           log: this.log,
           makeError: msg => new EcmwfError(msg),
-          readBody: true,
         });
-        // readBody: every answer fetchWithRetry returns carries its body.
-        return { status: r.status, body: r.body! };
+        return { status: r.status, body: r.body };
       } catch (err) {
         // No connection at all: another mirror is no more reachable.
         if (isOffline(err)) throw err;

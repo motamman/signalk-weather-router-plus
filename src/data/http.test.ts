@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchWithRetry, OfflineError, parseRetryAfterMs, setNetworkObserver } from './http';
+import { fetchBodyWithRetry, fetchWithRetry, OfflineError, parseRetryAfterMs, setNetworkObserver } from './http';
 
 function responder(
   answers: (number | Error)[],
@@ -161,4 +161,15 @@ test('parseRetryAfterMs: seconds and HTTP dates', () => {
   const now = Date.parse('2026-10-01T00:00:00Z');
   assert.equal(parseRetryAfterMs('Thu, 01 Oct 2026 00:00:30 GMT', now), 30000);
   assert.equal(parseRetryAfterMs('garbage'), null);
+});
+
+test('fetchBodyWithRetry: the answer carries its body, read inside the attempt; fetchWithRetry reads it only when asked', async () => {
+  const opts = { timeoutMs: 1000, retries: 2, sleepImpl: async () => undefined };
+  const withBody = await fetchBodyWithRetry('http://x/y', {}, { ...opts, fetchImpl: responder([200], 'payload').fetchImpl });
+  assert.equal(new TextDecoder().decode(withBody.body), 'payload');
+  const without = await fetchWithRetry('http://x/y', {}, { ...opts, fetchImpl: responder([200], 'payload').fetchImpl });
+  assert.equal(without.body, null);
+  const asked = await fetchWithRetry('http://x/y', {}, { ...opts, readBody: true, fetchImpl: responder([200], 'payload').fetchImpl });
+  assert.ok(asked.body);
+  assert.equal(new TextDecoder().decode(asked.body), 'payload');
 });

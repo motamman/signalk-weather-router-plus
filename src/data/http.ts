@@ -98,7 +98,30 @@ export function parseRetryAfterMs(value: string | null, now = Date.now()): numbe
   return null;
 }
 
-export async function fetchWithRetry(url: string, init: RequestInit, o: RetryOptions): Promise<RetryResult> {
+/** The body of an answer, read whole (inside the attempt, under its timeout). */
+const readAll = async (res: Response): Promise<Uint8Array> => new Uint8Array(await res.arrayBuffer());
+
+/** A request with the retry policy above; its body read inside the attempt when `readBody` is set, else null. */
+export function fetchWithRetry(url: string, init: RequestInit, o: RetryOptions): Promise<RetryResult> {
+  return attempts(url, init, o, o.readBody ? readAll : async () => null);
+}
+
+/** fetchWithRetry with the body always read inside the attempt: every answer it returns carries its body, by its type. */
+export function fetchBodyWithRetry(
+  url: string,
+  init: RequestInit,
+  o: Omit<RetryOptions, 'readBody'>
+): Promise<RetryResult & { body: Uint8Array }> {
+  return attempts(url, init, o, readAll);
+}
+
+/** The attempts of one request (the policy above); `read` takes an answer's body inside its attempt. */
+async function attempts<B extends Uint8Array | null>(
+  url: string,
+  init: RequestInit,
+  o: Omit<RetryOptions, 'readBody'>,
+  read: (res: Response) => Promise<B>
+): Promise<RetryResult & { body: B }> {
   const fetchImpl = o.fetchImpl ?? fetch;
   const sleepImpl = o.sleepImpl ?? sleep;
   const log = o.log ?? (() => undefined);
@@ -114,8 +137,7 @@ export async function fetchWithRetry(url: string, init: RequestInit, o: RetryOpt
       networkObserver?.('ok', null);
       const retriable = res.status === 408 || res.status === 429 || res.status >= 500;
       if (!retriable) {
-        const body = o.readBody ? new Uint8Array(await res.arrayBuffer()) : null;
-        return { status: res.status, headers: res.headers, body, response: res };
+        return { status: res.status, headers: res.headers, body: await read(res), response: res };
       }
       retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
       lastErr = makeError(`HTTP ${res.status} for ${url}`);

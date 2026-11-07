@@ -35,7 +35,11 @@ export function writeCropRun(root: string, jobId: string, crop: ForecastStore, h
     throw err;
   }
   const { run, problem } = openDecodedRun(writer.finalDir);
-  if (!run) throw new Error(`the route's forecast crop written for the chart mesh is not usable (${problem})`);
+  if (!run) {
+    // Not the route's yet (meshForecast keeps only a run that opened): the crop written goes here, not at the worker's next start.
+    removeCropRun(root, jobId);
+    throw new Error(`the route's forecast crop written for the chart mesh is not usable (${problem})`);
+  }
   return run;
 }
 

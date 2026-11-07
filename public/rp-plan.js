@@ -4,7 +4,7 @@
 // result strip, itinerary, route library, waypoint and conditions popups,
 // Live mode with the Signal K vessel.
 
-import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, abortRouteRequests, ROUTE_OPEN_CHANNEL, ROUTE_SKELETON_CHANNEL, ROUTE_FRONTS_CHANNEL, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
+import { olStroke, ROUTE_STYLE, oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, abortRouteRequests, ROUTE_OPEN_CHANNEL, ROUTE_SKELETON_CHANNEL, ROUTE_FRONTS_CHANNEL, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { prefs } from './rp-prefs.js';
 import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats, watchEnsembleLegend } from './rp-layers.js';
@@ -270,7 +270,7 @@ function _drawRouteLegs(pts) {
         beyond,
       });
       segLine.setStyle(new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: segColor, width: 3, lineDash: beyond ? [10, 7] : undefined })
+        stroke: new ol.style.Stroke({ color: segColor, width: ROUTE_STYLE.legWidth, lineDash: beyond ? ROUTE_STYLE.beyondDash : undefined })
       }));
       routeSource.addFeature(segLine);
     }
@@ -302,11 +302,7 @@ function _markForecastEnd(pts, snapProps) {
 function _drawSnapConnectors(p) {
   // Maroon dashed connector(s): intent → anchor where the server
   // snapped an unnavigable endpoint to the nearest navigable cell.
-  const _dashedStyle = new ol.style.Style({
-    stroke: new ol.style.Stroke({
-      color: '#7F0000', width: 2, lineDash: [6, 6]
-    })
-  });
+  const _dashedStyle = new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.snap) });
   if (p.start_original && p.start_anchor && p.start_snap_distance_m > 0) {
     const f = new ol.Feature({
       geometry: new ol.geom.LineString([
@@ -2660,12 +2656,9 @@ const _ensSource = new ol.source.Vector();
 const _ENS_STYLE = {
   // The route opened: a white band with a dark edge, under its legs (no route colour is white: a yellow band hid the
   // amber motoring legs).
-  open: [
-    new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(0, 0, 0, 0.45)', width: 13 }) }),
-    new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(255, 255, 255, 0.9)', width: 11 }) }),
-  ],
-  main: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#1f6b8d', width: 2 }) }),
-  member: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#00b8d4', width: 3.5, lineDash: [1, 7], lineCap: 'round' }) }),
+  open: ROUTE_STYLE.ensOpen.map(s => new ol.style.Style({ stroke: olStroke(s) })),
+  main: new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.ensMain) }),
+  member: new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.ensMember) }),
 };
 map.addLayer(new ol.layer.Vector({
   source: _ensSource,
@@ -2679,8 +2672,8 @@ const _ensCorridorSource = new ol.source.Vector();
 map.addLayer(new ol.layer.Vector({
   source: _ensCorridorSource,
   zIndex: 3,
-  opacity: 0.15,
-  style: new ol.style.Style({ fill: new ol.style.Fill({ color: '#00b8d4' }) }),
+  opacity: ROUTE_STYLE.ensCorridor.opacity,
+  style: new ol.style.Style({ fill: new ol.style.Fill({ color: ROUTE_STYLE.ensCorridor.fill }) }),
 }));
 // The route legend (rp-layers.js) names what of the set is on the map, as the layer changes.
 watchEnsembleLegend(_ensSource, () => {

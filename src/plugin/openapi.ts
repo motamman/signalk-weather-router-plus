@@ -647,7 +647,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           responses: {
             204: { description: 'Deleted' },
             404: { description: 'Not found' },
-            409: { description: "Job is running, or a departure window's (deleted with its window)" },
+            409: { description: "Job is running, or a departure window's or an ensemble set's route (deleted with its window or set)" },
             503: { description: 'Plugin not started' },
           },
         },

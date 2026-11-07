@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import { HOUR_S } from '../geo/units';
 import assert from 'node:assert/strict';
-import { availableSteps, cycleFor } from './ecmwf';
+import { availableSteps, cycleFor, ENSEMBLE_MEMBER_CHOICES, ENSEMBLES } from './ecmwf';
 import { buildStep, cropField, nanFillLimited, sampleField, ForecastStore, type FieldGrid } from './forecast';
 import type { Grib2Grid, Grib2Message } from '../grib/grib2';
 
@@ -17,6 +17,17 @@ test('cycle naming and stream selection', () => {
   assert.equal(c06.atmStream, 'oper');
   assert.equal(c06.waveStream, 'wave');
   assert.equal(c06.maxStep, 144);
+});
+
+test('the ensemble member choices are in fives up to the members each model has', () => {
+  assert.deepEqual(
+    Object.values(ENSEMBLES).map(m => [m.id, m.members]),
+    [
+      ['ifs-ens', 50],
+      ['aifs-ens', 50],
+    ]
+  );
+  assert.deepEqual([...ENSEMBLE_MEMBER_CHOICES], [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]);
 });
 
 test('published step lists', () => {
@@ -159,6 +170,8 @@ test('ForecastStore blends steps in time and reports wind FROM direction', () =>
 
 import * as os from 'node:os';
 import * as fs from 'node:fs';
+// The module object itself, to replace one of its functions in a test: a namespace import is read-only getters over it.
+import nodeFs from 'node:fs';
 import * as path from 'node:path';
 import { EcmwfClient, latestExpectedCycle, nextCycle, parseRetryAfterMs, publishedAt } from './ecmwf';
 import { isOffline } from './http';
@@ -408,6 +421,40 @@ test('the cache gate (hasCached, the loader’s): a whole message is read with n
   assert.deepEqual(await client.fetchField(cycle, 'oper', 0, '10u'), whole);
   assert.equal(calls.length, 2, 'the index and the message');
   assert.equal(fs.statSync(f).size, 64, 'written over');
+});
+
+test('a fetched message whose rename into the cache fails fails the fetch, unless a whole message is there', async () => {
+  const dir = tmpDir();
+  const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
+  const whole = gribShell(64);
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 64 };
+  const fetchImpl = (async (url: string | URL | Request) =>
+    String(url).endsWith('.index')
+      ? new Response(`${JSON.stringify(rec)}\n`, { status: 200 })
+      : new Response(whole, { status: 206 })) as unknown as typeof fetch;
+  const client = new EcmwfClient({ baseUrl: 'https://x', fallbackUrls: [], cacheDir: dir, fetchImpl, sleepImpl: async () => undefined });
+  const f = client.cachePath(cycle, 'oper', 0, '10u');
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  // A message cut short on disk, and a rename over it that fails (Windows: a reader holding the file open).
+  fs.writeFileSync(f, whole.subarray(0, 40));
+  const busy = (): never => {
+    throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+  };
+  const rename = mock.method(nodeFs, 'renameSync', busy);
+  try {
+    await assert.rejects(client.fetchField(cycle, 'oper', 0, '10u'), /EPERM/);
+    assert.equal(fs.statSync(f).size, 40, 'the cut-short file is left, and said');
+    assert.deepEqual(fs.readdirSync(path.dirname(f)), [path.basename(f)], 'no temporary file left');
+    // Another writer put the whole message in place meanwhile: that is this fetch's answer.
+    rename.mock.mockImplementation((...a: unknown[]) => {
+      fs.writeFileSync(f, whole);
+      fs.rmSync(String(a[0]));
+      busy();
+    });
+    assert.deepEqual(await client.fetchField(cycle, 'oper', 0, '10u'), whole);
+  } finally {
+    rename.mock.restore();
+  }
 });
 
 test('buildStep converts tprate from kg m⁻² s⁻¹ to a depth rate in m/s at ingestion', () => {

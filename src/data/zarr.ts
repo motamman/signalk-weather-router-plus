@@ -16,7 +16,7 @@
 
 import { bloscDecompress } from './blosc';
 import { MINUTE_MS } from '../geo/units';
-import { fetchWithRetry } from './http';
+import { fetchBodyWithRetry } from './http';
 
 export interface ZarrArrayMeta {
   shape: number[];
@@ -229,7 +229,7 @@ export interface ZarrHttpOptions {
 
 /** GET with timeout, retries, backoff and Retry-After (data/http.ts). */
 export async function httpGet(url: string, opts: ZarrHttpOptions = {}): Promise<HttpResult> {
-  const r = await fetchWithRetry(
+  const r = await fetchBodyWithRetry(
     url,
     {},
     {
@@ -240,10 +240,9 @@ export async function httpGet(url: string, opts: ZarrHttpOptions = {}): Promise<
       log: opts.log,
       tag: opts.tag ?? 'zarr',
       makeError: msg => new ZarrError(msg),
-      readBody: true,
     }
   );
-  return { status: r.status, body: r.body!, headers: r.headers };
+  return { status: r.status, body: r.body, headers: r.headers };
 }
 
 export interface ConsolidatedStore {

@@ -278,6 +278,44 @@ export function tackSide(cogDeg, windFromDeg) {
 export const TACK_COLOR = { starboard: '#2E7D32', port: '#D32F2F' };
 // A motoring leg and the marks at its start (rp-plan.js _drawRouteLegs, rp-layers.js routeLayer and the route legend).
 export const MOTOR_COLOR = '#fc4';
+/**
+ * How the map draws the route's marks, for their layers and the route legend alike (rp-layers.js _routeLegendRow), so
+ * a legend item is always drawn as its layer is: a line is { color, width, dash, cap }. Until 2026-11-07 the legend
+ * typed its own copies, and three had drifted from the map (the snap line's and the arrival circle's dashes, and a
+ * leg past the forecast).
+ */
+export const ROUTE_STYLE = {
+  /** A leg: its tack's or MOTOR_COLOR, this wide; past the end of the forecast, dashed so (rp-plan.js _drawRouteLegs). */
+  legWidth: 3,
+  beyondDash: [10, 7],
+  /** The ring and heading of the arrival (the last waypoint; the others take their next leg's colour). */
+  arrival: '#88f',
+  /** Where the forecast runs out along the route: a diamond. */
+  forecastEnd: { fill: '#f9a825', stroke: '#fff' },
+  /** From a drawn point on land to the water it was moved to (rp-plan.js _drawSnapConnectors). */
+  snap: { color: '#7F0000', width: 2, dash: [6, 6] },
+  /** The arrival circle of an approximate waypoint (ringLayer), and its fill. */
+  arrivalCircle: { color: 'rgba(255,152,0,0.95)', width: 2, dash: [6, 4], fill: 'rgba(255,152,0,0.10)' },
+  /** The search's best path so far, and the coarse A* guide (the search layers). */
+  best: { color: 'rgba(120,40,160,0.9)', width: 2.5, dash: [6, 6] },
+  skeleton: { color: '#2060cc', width: 2, dash: [8, 4] },
+  /** Live and Simulate: a re-plan proposed, the track sailed, the routes followed before. */
+  proposed: { color: 'rgba(142, 36, 170, 0.75)', width: 4, dash: [10, 6] },
+  track: { color: 'rgba(0, 150, 170, 0.9)', width: 3 },
+  past: { color: 'rgba(120, 120, 120, 0.55)', width: 2, dash: [6, 6] },
+  /** An ensemble set (rp-plan.js): the main forecast's route, a member's, the band under the one opened, the corridor. */
+  ensMain: { color: '#1f6b8d', width: 2 },
+  ensMember: { color: '#00b8d4', width: 3.5, dash: [1, 7], cap: 'round' },
+  ensOpen: [
+    { color: 'rgba(0, 0, 0, 0.45)', width: 13 },
+    { color: 'rgba(255, 255, 255, 0.9)', width: 11 },
+  ],
+  ensCorridor: { fill: '#00b8d4', opacity: 0.15 },
+};
+/** An OpenLayers stroke drawing a ROUTE_STYLE line. */
+export function olStroke(s) {
+  return new ol.style.Stroke({ color: s.color, width: s.width, lineDash: s.dash, lineCap: s.cap });
+}
 
 // ─── Exclusive heatmap layer group ───────────────────────────────────
 // Only one full-map heatmap may be visible at a time. Wind barbs,

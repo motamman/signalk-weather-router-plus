@@ -1607,7 +1607,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       query,
       tiles: () => tiles,
       regionalRuns: () => (dataStatus?.regional ?? []).map(r => ({ name: r.source, cycle: r.cycle })),
-      /** From the data worker's last status: each ensemble with a cycle in use, and its members on disk. */
+      /** Each chosen ensemble's record on disk (ensembleNow): its cycle in use and its members. */
       ensembles: ensemblesOnDisk,
       chartGroups: () => charts.groups(),
       chartRows: () => charts.chartRows(),
