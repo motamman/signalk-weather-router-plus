@@ -116,6 +116,46 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A leg on a chart mesh is planned before the first decoded forecast
+  run.** Until the data worker has decoded a run, a route reads its area's
+  forecast from the GRIB cache into memory; a leg on a chart mesh is
+  planned in a child process that reads the forecast from a decoded run's
+  files only, so it was refused. The route's crop is now written as a run
+  of its own for that process (the same files and index, the crop's grid,
+  under `route-forecast/`), with every value the route holds, and removed
+  with the route's areas; what a stop leaves is removed when the route
+  worker starts. Measured on the test box (a Pi 5, 2026-11-07, the 06Z run
+  from the GRIB cache, `loadForecastForBBox` then `writeCropRun`): 4.6 MB in 520 files
+  written in 302 ms for a leg off Block Island, 9.7 MB in 315 ms for one
+  from Chesapeake Bay to Cape Cod.
+- **An ensemble set's cycle stays on disk until the set ends.** A set
+  routes every member on the cycle it was made on, but a newer cycle's
+  download pruned the older one, so members still waiting failed with their
+  data gone. A set now pins its cycle and members on disk when it is made
+  (`forecast-ens/<model>/pins/<set>.json`; a set that cannot write its pin
+  is refused), prune keeps what a pin names, and the pin goes when the set
+  has finished, failed or been cancelled. Pins left by a stop are cleared
+  at start.
+- **A route on one ensemble member is checked against the record on disk.**
+  `POST /api/routes` with `forecast_member` checked the member against the
+  data worker's last status, which is behind the ensemble's record
+  (`current.json`) between a new cycle's recording and the next status: a
+  member just recorded was refused as not on disk, and one just dropped was
+  accepted and then failed in the worker. The check and an ensemble set now
+  read the record, one helper for both.
+- **The minimum members of an ensemble set is the server's.** The page
+  held its own copy (5, twice in the script and once in the slider); it now
+  reads `ensemble_members_min` from `/api/status`, taken from the request
+  rule itself.
+- **The page no longer keeps one request handle per land-mask view.** The
+  land mask was fetched on a channel named for its box, and a channel keeps
+  its request until the next one on it, so every map view and resize added
+  an entry for the session. It is fetched on no channel; its cache already
+  answers a box asked twice.
+- **A route's finer coast stays the route's.** With no land buffer the route
+  drew its band's finer coast into the worker's cached land mask, where it
+  stayed after the route until the next route on the same box. Each route
+  now refines a view of its own (`LandMask.routeView`), which goes with it.
 - **An ensemble set is pinned to the cycle on disk when it is made.** The
   set read the ensemble's cycle in use from the data worker's last status,
   which is behind the record on disk from the moment a new cycle is

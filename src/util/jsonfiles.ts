@@ -11,11 +11,13 @@ import * as path from 'node:path';
 /**
  * Save `value` as `file`: written beside it and renamed over it, so a reader never sees half a file. Null when saved,
  * else why not; a partial copy left by the failed write is removed, or the answer also says why it could not be.
+ * `indent`: for a file people read and edit by hand, the spaces per level, the file ending with a newline; absent,
+ * one line.
  */
-export function saveJson(file: string, value: unknown): string | null {
+export function saveJson(file: string, value: unknown, indent?: number): string | null {
   const tmp = `${file}.tmp`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(value));
+    fs.writeFileSync(tmp, indent === undefined ? JSON.stringify(value) : `${JSON.stringify(value, null, indent)}\n`);
     fs.renameSync(tmp, file);
     return null;
   } catch (err) {

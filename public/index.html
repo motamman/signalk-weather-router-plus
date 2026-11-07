@@ -988,7 +988,7 @@
     <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Find Route computes the route on the main forecast as always, and then a route of its own on each chosen ensemble member's forecast (one after the other on the server): where each goes and when it arrives. On the map they show dotted, with the corridor they all lie in shaded under them; on the Itinerary tab, in a table."><input type="checkbox" id="ensembleOn">Route each ensemble member too</label>
     <div style="display:flex;gap:var(--s-2);align-items:flex-end;">
       <div style="flex:1;"><label for="ensembleModel">Ensemble</label><select id="ensembleModel" aria-label="Ensemble"></select></div>
-      <div style="flex:1;"><label for="ensembleMembers">Members: <span id="ensembleMembersLabel">—</span></label><input type="range" id="ensembleMembers" min="5" max="5" step="1" value="5" aria-label="Ensemble members"></div>
+      <div style="flex:1;"><label for="ensembleMembers">Members: <span id="ensembleMembersLabel">—</span></label><input type="range" id="ensembleMembers" step="1" aria-label="Ensemble members"></div>
     </div>
     <div id="ensembleRowHint" class="ctl-hint"></div>
   </div>

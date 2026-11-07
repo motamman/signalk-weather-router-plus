@@ -107,5 +107,5 @@ export function meshAreaLand(tiles: readonly TileExtent[], world: BBox, exact: C
     ny: g.ny,
     cells: g.cells,
   });
-  return LandMask.fromCellMasks(mask(base), [mask(patch)]);
+  return LandMask.fromCellMasks(mask(base), [mask(patch)], 'land');
 }

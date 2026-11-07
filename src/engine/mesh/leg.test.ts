@@ -24,6 +24,7 @@ import { meshAreaLand } from './area';
 import { type MeshLegLand, runMeshLeg } from './legrun';
 import type { MeshRouteResult } from './route';
 import type { LegWind } from '../horizon';
+import type { Route } from '../route';
 
 const T0 = new Date('2026-01-01T00:00:00Z');
 const BOAT = makeVessel({ motorSpeedMs: 3, draughtM: 2, airDraftM: 18 });
@@ -225,6 +226,87 @@ test('routeFromMeshPath: segments timed at motor speed, totals and metadata set,
   assert.equal(routeFromMeshPath(path, T0, BOAT, null, new NoWind(), foul, SIM), null);
 });
 
+/** A route as [lon, lat] or [lon, lat, role] per waypoint. */
+type RouteRow = [number, number] | [number, number, string];
+
+/**
+ * The route `r` is `want`, waypoint by waypoint: each within 1e-9° (a hundredth of a millimetre: the arithmetic's own
+ * rounding, not a margin), each role as given. The routes below are the search's own for their fixtures, recorded on
+ * brain on 2026-11-07 (the same on two runs: the search is deterministic for a fixed input), so a change to the search
+ * or to how a stretch is planned shows here. (From 2026-10-30, when the stretches were first searched under motor
+ * too, until 2026-11-07 these tests checked only the ends and one point; PR #7 review.)
+ */
+function assertRoute(r: Route, want: RouteRow[]): void {
+  const got = r.waypoints.map(w => [w.lon, w.lat, w.role ?? null]);
+  const say = JSON.stringify(got);
+  assert.equal(got.length, want.length, say);
+  want.forEach((w, i) => {
+    assert.ok(Math.abs((got[i][0] as number) - w[0]) < 1e-9 && Math.abs((got[i][1] as number) - w[1]) < 1e-9, `waypoint ${i}: ${say}`);
+    assert.equal(got[i][2], w[2] ?? null, `waypoint ${i}'s role: ${say}`);
+  });
+}
+
+// The routes of the three tests below that plan a stretch on the mesh with the search (assertRoute).
+const MESH_OPEN_ROUTE: RouteRow[] = [
+  [0, 0.5],
+  [0.08498185900229596, 0.5004633393612317],
+  [0.1699637240102934, 0.5009266782128198],
+  [0.25494559502959, 0.5013900165547546],
+  [0.33992747206558016, 0.5018533543870263],
+  [0.42490938172581727, 0.5013960316606154],
+  [0.509891285452717, 0.5009387094372448],
+  [0.5948731832517752, 0.5004813877169096],
+  [0.6798550751282842, 0.5000240664996243],
+  [0.7648369610877404, 0.49956674578536386],
+  [0.849819929669131, 0.4997242861699405],
+  [0.9348029023124715, 0.49988072722749594],
+  [1, 0.5],
+];
+
+const MESH_CIRCLE_ROUTE: RouteRow[] = [
+  [0, 0.5],
+  [0.08333219328046554, 0.5166695164109273],
+  [0.16666460872099625, 0.5333390151909531],
+  [0.24999725337621506, 0.5500084963400022],
+  [0.33333013430074493, 0.5666779598580104],
+  [0.4165510907021935, 0.5838986227151969],
+  [0.5003226120543101, 0.5982045507414039, 'via'],
+  [0.5836571058069749, 0.5815408532621078],
+  [0.6669913570787309, 0.5648771734084385],
+  [0.750325372920028, 0.5482135111802666],
+  [0.8337675962162556, 0.532101565615582],
+  [0.9172093836599563, 0.5159884915713538],
+  [1, 0.5],
+];
+
+const MESH_TRANSFER_ROUTE: RouteRow[] = [
+  [0, 0.5],
+  [0.041666365253698504, 0.5041681734426869],
+  [0.08333275729072076, 0.508336345783221],
+  [0.12499917633161914, 0.5125045170215993],
+  [0.16666562259694606, 0.5166726871578197],
+  [0.20833209630725386, 0.5208408561918801],
+  [0.24999859768299318, 0.525009024123788],
+  [0.29166512694481816, 0.5291771909535313],
+  [0.33333198787, 0.5333423212547982],
+  [0.37499890518595835, 0.5375071695114401],
+  [0.4166658793293197, 0.5416717335204666],
+  [0.45833291073650717, 0.5458360110790268],
+  [0.5, 0.55],
+  [0.5416669760934938, 0.5458348805144415],
+  [0.5833339234401985, 0.5416697621302515],
+  [0.625000842260432, 0.5375046448474368],
+  [0.6666677327744412, 0.5333395286659961],
+  [0.7083345952024733, 0.5291744135859284],
+  [0.7500014297647754, 0.5250092996072335],
+  [0.7916682366815943, 0.5208441867299103],
+  [0.8333346977809264, 0.5166758914295736],
+  [0.8750011042070833, 0.5125073229032322],
+  [0.9166674563978112, 0.5083384833557624],
+  [0.958333754790856, 0.5041693749921704],
+  [1, 0.5],
+];
+
 test('pipeline: a covered motoring leg is routed on the mesh, the coastline search is not run', async () => {
   const path: [number, number][] = [
     [0, 0.5],
@@ -248,10 +330,7 @@ test('pipeline: a covered motoring leg is routed on the mesh, the coastline sear
   assert.equal(boxes.length, 1);
   assert.ok(boxes[0].west <= -2 && boxes[0].east >= 3 && boxes[0].south <= -1.5 && boxes[0].north >= 2.5, JSON.stringify(boxes[0]));
   // The open stretch is searched under motor as under sail (2026-10-30), from the mesh route's start to its end.
-  const first = r.waypoints[0];
-  const last = r.waypoints[r.waypoints.length - 1];
-  assert.deepEqual([first.lon, first.lat], path[0]);
-  assert.ok(Math.abs(last.lon - 1) < 1e-6 && Math.abs(last.lat - 0.5) < 1e-6);
+  assertRoute(r, MESH_OPEN_ROUTE);
   assert.ok(
     messages.some(m => /segment 1\/1: open water, .* the isochrone search made it \d+ waypoints/.test(m)),
     messages.join('\n')
@@ -697,7 +776,7 @@ test('pipeline: a leg through waypoint circles inside the mesh is planned on the
     const via = r.waypoints.filter(w => w.role === 'via');
     assert.equal(via.length, 1);
     // The circle is the searched stretch's via (under motor too, 2026-10-30): the route is marked where it enters it.
-    assert.ok(haversineDistanceM(via[0].lon, via[0].lat, 0.5, 0.6) <= 300 + 1, `${via[0].lon}, ${via[0].lat}`);
+    assertRoute(r, MESH_CIRCLE_ROUTE);
     const warned = messages.some(m => /^WARNING: chart mesh: waypoint 1: no water the boat can use within \{length:300\} of it/.test(m));
     assert.equal(warned, movedM > 300, messages.join('\n'));
   }
@@ -827,13 +906,8 @@ test("pipeline: a leg the charts' plan splits is planned stretch by stretch, on 
     ]);
     assert.deepEqual(meshIds, ['A', 'B']);
     // Each stretch is searched on its mesh (under motor too, 2026-10-30): from the start, through the transfer point, to the end.
-    const pts = r.waypoints.map(w => [w.lon, w.lat] as [number, number]);
-    assert.deepEqual(pts[0], start);
-    assert.ok(
-      pts.some(p => Math.abs(p[0] - at[0]) < 1e-9 && Math.abs(p[1] - at[1]) < 1e-9),
-      `the transfer point is a waypoint: ${JSON.stringify(pts)}`
-    );
-    assert.ok(Math.abs(pts[pts.length - 1][0] - end[0]) < 1e-6 && Math.abs(pts[pts.length - 1][1] - end[1]) < 1e-6);
+    assertRoute(r, MESH_TRANSFER_ROUTE);
+    assert.deepEqual(MESH_TRANSFER_ROUTE[12], at, 'the transfer point is a waypoint');
     assert.deepEqual(r.legSources, ['mesh']);
     assert.ok(!messages.some(m => /^skeleton/.test(m)), 'the coastline search did not run: ' + messages.join('\n'));
   }

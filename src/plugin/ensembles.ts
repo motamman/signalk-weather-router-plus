@@ -18,6 +18,7 @@ import { RouteRequestSchema, validateRouteRequest, ENSEMBLE_MEMBERS_RANGE } from
 import { DepartureMetricsSchema, departureMetrics, JobSeries, type SeriesDeps, type SeriesItem } from './jobseries';
 import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
 import { cycleName } from '../data/decoded';
+import { clearEnsemblePins, pinEnsembleCycle, unpinEnsembleCycle } from '../data/ensemble';
 
 export const ENSEMBLE_SET_LIMITS = {
   /** Finished sets kept (with their route jobs). */
@@ -160,7 +161,8 @@ export interface EnsembleSetDeps extends SeriesDeps {
 export class EnsembleSetManager extends JobSeries<EnsembleSet> {
   constructor(
     jobs: JobManager,
-    dataDir: string,
+    /** The plugin data directory: the sets' files, and the ensembles' runs their pins hold (data/ensemble.ts). */
+    private readonly dataDir: string,
     private readonly setDeps: EnsembleSetDeps,
     basePath = ''
   ) {
@@ -178,6 +180,8 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
       },
       basePath
     );
+    // No set runs now (one that ran at the stop ended failed: jobseries.ts loadPersisted): no pin holds a cycle.
+    for (const p of clearEnsemblePins(dataDir)) setDeps.log(`ensemble sets: a pin left from before could not be removed: ${p}`);
   }
 
   /**
@@ -200,6 +204,15 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
       cycle: disk.cycle,
       members: disk.members.slice(0, req.members).map(member => ({ member, job_id: null, status: 'pending' })),
     };
+    // The set's cycle and members held on disk until it has settled (settled), so a newer cycle does not prune them.
+    const why = pinEnsembleCycle(
+      this.dataDir,
+      req.model,
+      s.id,
+      cycleName(new Date(s.cycle)),
+      s.members.map(m => m.member)
+    );
+    if (why) return { refused: `${name}: its run could not be held on disk while the set routes on it (${why})` };
     this.start(s);
     return { set: s };
   }
@@ -222,6 +235,12 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
 
   protected items(s: EnsembleSet): SeriesItem[] {
     return s.members;
+  }
+
+  /** Ended, none of its routes running: its pin goes, and the prune may remove its cycle once it is not in use. */
+  protected settled(s: EnsembleSet): void {
+    const why = unpinEnsembleCycle(this.dataDir, s.request.model, s.id);
+    if (why) this.setDeps.log(`ensemble set ${s.id}: its pin could not be removed (${why}); its run stays until the next start`);
   }
 
   protected holds(v: unknown): v is EnsembleSet {

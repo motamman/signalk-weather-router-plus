@@ -350,10 +350,10 @@ test('refine: a finer patch opens a channel the base raster closes and answers i
   // Two land blocks with a 0.012° channel between them (lon 0.494–0.506).
   const shapes = [poly([0, 0.3, 0.494, 0.3, 0.494, 0.7, 0, 0.7]), poly([0.506, 0.3, 1, 0.3, 1, 0.7, 0.506, 0.7])];
   const m = LandMask.fromPolygons(shapes, { west: 0, south: 0, east: 1, north: 1 }, 0.01);
-  const across = (): boolean => {
+  const across = (mask: LandMask = m): boolean => {
     for (let k = 0; k <= 200; k++) {
       const lon = 0.49 + (k / 200) * 0.02;
-      if (!m.isLand(lon, 0.5)) return true;
+      if (!mask.isLand(lon, 0.5)) return true;
     }
     return false;
   };
@@ -371,8 +371,14 @@ test('refine: a finer patch opens a channel the base raster closes and answers i
     const base = m.raster[m.cellIndex(lon, lat)];
     if (!base) assert.equal(m.isLand(lon, lat), false);
   }
-  // A covered request is a no-op; clearPatches restores the base.
+  // A covered request is a no-op.
   assert.equal(m.refine({ west: 0.46, south: 0.3, east: 0.54, north: 0.7 }, 0.0025), null);
-  m.clearPatches();
-  assert.equal(across(), false);
+  // A route's view of a mask (routeView: a worker's cached mask) draws its own patches; the mask it views gains none.
+  const cached = LandMask.fromPolygons(shapes, { west: 0, south: 0, east: 1, north: 1 }, 0.01);
+  const view = cached.routeView();
+  assert.ok(view.refine({ west: 0.45, south: 0.25, east: 0.55, north: 0.75 }, 0.0025));
+  assert.equal(across(view), true, 'open in the view');
+  assert.equal(cached.patches.length, 0);
+  assert.equal(across(cached), false, 'the cached mask as it was');
+  assert.equal(cached.routeView().patches.length, 0, "the next route's view starts with none");
 });

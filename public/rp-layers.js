@@ -1157,13 +1157,15 @@ function _heatmapCanvasSize() {
 // Land mask at canvas resolution from the plugin's coastline, so a drawn
 // layer stops exactly at the shore instead of at the data grid's land
 // flags. Bytes, 1 = land, row 0 north, same pixel mapping as the canvas.
-// Keyed by box and size; the browser also caches the response.
+// Keyed by box and size; the browser also caches the response. No channel: a request for a box is never
+// superseded by another (the cache answers the same box), and a channel per box would keep each box's controller in
+// rp-core.js's channel map for the session (PR #7 review).
 const _landMaskCache = new Map();
 function fetchLandMask(bbox, W, H) {
   const key = bbox.join(',') + '|' + W + 'x' + H;
   if (_landMaskCache.has(key)) return _landMaskCache.get(key);
   const url = API + '/land-mask?bbox=' + bbox.join(',') + '&w=' + W + '&h=' + H;
-  const p = authFetch(url, {}, 'land-mask-' + key)
+  const p = authFetch(url, {}, null)
     .then(r => r.ok ? r.arrayBuffer() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(buf => {
       const bytes = new Uint8Array(buf);

@@ -28,6 +28,19 @@ test('saveJson: saved whole, with no copy left beside it; a save that fails says
   }
 });
 
+test('saveJson with an indent: the file as people read it, each level indented, ending with a newline', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jsonfiles-'));
+  try {
+    const file = path.join(dir, 'options.json');
+    const value = { forecast: { mirror: 'aws' }, mesh: { downloads: ['01CGD'] } };
+    assert.equal(saveJson(file, value, 2), null);
+    assert.equal(fs.readFileSync(file, 'utf8'), `${JSON.stringify(value, null, 2)}\n`);
+    assert.deepEqual(fs.readdirSync(dir), ['options.json']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('removeJson: removed, or never saved, is null; a file that cannot be removed says why', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jsonfiles-'));
   try {

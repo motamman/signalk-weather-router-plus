@@ -2558,7 +2558,7 @@ window.addEventListener('rp:units', _initLimitInputs);
 // there), with what each is doing; they can be used once one is on disk (a run, and at least the fewest members a request
 // may ask for): on or off, which ensemble, how many of its members on disk (the server takes the first that many, the
 // control first). Remembered per browser and Signal K user (rp-prefs.js).
-const ENSEMBLE_MIN_MEMBERS = 5;   // request_schema.ts ENSEMBLE_MEMBERS_RANGE
+let _ensembleMinMembers = null;   // status `ensemble_members_min`: the fewest members a set may ask for (request_schema.ts)
 let _ensembleStatus = [];         // status `ensembles`, as the server sends them
 let _ensembles = [];              // those on disk: [{ model, name, cycle, members (how many) }]
 /** The ensemble picked in the Ensemble list, as on disk ({ model, name, cycle, members }), or null. */
@@ -2611,11 +2611,12 @@ function _ensembleRender() {
     const want = prefs.get('routeVar:ensembleModel');
     sel.value = _ensembles.some(e => e.model === want) ? want : _ensembles[0].model;
     const e = _ensembleChosen();
+    slider.min = String(_ensembleMinMembers);
     slider.max = String(e.members);
     // The members remembered, at most those on disk now (a choice above that stays remembered for a run that has
     // them); nothing remembered: all of them.
     const saved = Number(prefs.get('routeVar:ensembleMembers'));
-    slider.value = String(Number.isInteger(saved) && saved >= ENSEMBLE_MIN_MEMBERS ? Math.min(saved, e.members) : e.members);
+    slider.value = String(Number.isInteger(saved) && saved >= _ensembleMinMembers ? Math.min(saved, e.members) : e.members);
   }
   _ensembleLabel();
 }
@@ -2639,9 +2640,10 @@ window.addEventListener('rp:status', (/** @type {CustomEvent} */ e) => {
   const st = e.detail;
   if (!st) return;
   _ensembleStatus = Array.isArray(st.ensembles) ? st.ensembles : [];
+  _ensembleMinMembers = st.ensemble_members_min;
   // `members` there is the member numbers on disk (0 = the control); here, how many.
   _ensembles = _ensembleStatus
-    .filter(x => x.cycle && Array.isArray(x.members) && x.members.length >= ENSEMBLE_MIN_MEMBERS)
+    .filter(x => x.cycle && Array.isArray(x.members) && x.members.length >= _ensembleMinMembers)
     .map(x => ({ model: x.model, name: x.name, cycle: x.cycle, members: x.members.length }));
   _ensembleRender();
 });

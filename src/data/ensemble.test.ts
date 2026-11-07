@@ -15,16 +15,42 @@ import { asEnsembleMember, gribShell } from '../grib/grib2fixture';
 import {
   ENSEMBLE_DECODED_DIR,
   ENSEMBLE_GRIB_DIR,
+  clearEnsemblePins,
   ensembleCurrentFile,
   ensembleGribPath,
+  ensembleInUse,
   ensembleMembers,
   ensembleSteps,
   memberDir,
   memberRecords,
+  pinEnsembleCycle,
+  pinnedMembers,
   pruneEnsembles,
   readEnsembleCurrent,
+  recordEnsembleCycle,
   runEnsembleCycle,
+  unpinEnsembleCycle,
 } from './ensemble';
+
+test('ensembleInUse: the record as it is on disk now: none, its cycle and members, the next cycle once recorded, or its problem', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-inuse-'));
+  try {
+    assert.equal(ensembleInUse(root, 'ifs-ens'), null, 'no record');
+    fs.mkdirSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens'), { recursive: true });
+    const t1 = new Date(Date.UTC(2026, 10, 6, 6));
+    assert.equal(recordEnsembleCycle(root, 'ifs-ens', t1, [1, 2, 3], 72), null);
+    assert.deepEqual(ensembleInUse(root, 'ifs-ens'), { cycle: t1.toISOString(), members: [1, 2, 3] });
+    // A new cycle recorded: the next answer is it, with no status in between.
+    const t2 = new Date(Date.UTC(2026, 10, 6, 12));
+    assert.equal(recordEnsembleCycle(root, 'ifs-ens', t2, [1, 2, 3, 4], 72), null);
+    assert.deepEqual(ensembleInUse(root, 'ifs-ens'), { cycle: t2.toISOString(), members: [1, 2, 3, 4] });
+    fs.writeFileSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json'), '{"model": "ifs-ens"');
+    const bad = ensembleInUse(root, 'ifs-ens');
+    assert.ok(bad && 'problem' in bad && /^current\.json is not JSON: /.test(bad.problem), JSON.stringify(bad));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('members: the control first where the model publishes one (AIFS ENS), then 1 to n', () => {
   assert.deepEqual(ensembleMembers(ENSEMBLES['ifs-ens'], 5), [1, 2, 3, 4, 5]);
@@ -151,6 +177,54 @@ function fakeClient(
   } as unknown as EcmwfClient;
   return { client, indexed, fetched: () => fetched };
 }
+
+test("pins: a running set's cycle and members stay through a prune; unpinned, they go; clearing removes every pin", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-pins-'));
+  try {
+    const mk = (...p: string[]) => fs.mkdirSync(path.join(root, ...p), { recursive: true });
+    const has = (...p: string[]) => fs.existsSync(path.join(root, ...p));
+    // The cycle in use is 2026110512 with members 1 and 2; a set started on 2026110500 routes on its members 1 and 3.
+    mk(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110500');
+    mk(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm03', '2026110500');
+    mk(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110512');
+    mk(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm02', '2026110512');
+    assert.equal(pinEnsembleCycle(root, 'ifs-ens', 'set-1', '2026110500', [1, 3]), null);
+    const logged: string[] = [];
+    assert.deepEqual(
+      pinnedMembers(root, 'ifs-ens', '2026110500', m => logged.push(m)),
+      [1, 3]
+    );
+    assert.equal(
+      pinnedMembers(root, 'ifs-ens', '2026110512', m => logged.push(m)),
+      null,
+      'no set pins the cycle in use'
+    );
+    const keep = { 'ifs-ens': { members: [1, 2], cycles: ['2026110512'], pending: null } };
+    const first = pruneEnsembles(root, keep);
+    assert.deepEqual(first.problems, []);
+    assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110500'), "the set's cycle stays");
+    assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm03', '2026110500'), "the set's member stays, though no longer wanted");
+    assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'pins', 'set-1.json'), 'the pin itself stays');
+    // The set has ended: its pin goes, and the next prune removes what only it held.
+    assert.equal(unpinEnsembleCycle(root, 'ifs-ens', 'set-1'), null);
+    assert.equal(unpinEnsembleCycle(root, 'ifs-ens', 'set-1'), null, 'the same done twice');
+    const second = pruneEnsembles(root, keep);
+    assert.deepEqual(second.problems, []);
+    assert.ok(!has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110500'));
+    assert.ok(!has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm03'));
+    assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110512') && has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm02', '2026110512'));
+    // A pin file that holds no pin is reported and left; clearing removes every pin.
+    pinEnsembleCycle(root, 'ifs-ens', 'set-2', '2026110512', [1]);
+    fs.writeFileSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'pins', 'broken.json'), '{"id": "broken"}');
+    const third = pruneEnsembles(root, keep);
+    assert.deepEqual(third.problems, ['ifs-ens pin file broken.json does not hold a pin; left as it is, not restored']);
+    assert.deepEqual(clearEnsemblePins(root), []);
+    assert.ok(!has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'pins'));
+    assert.deepEqual(logged, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('prune: a folder that cannot be read is reported and left, and the rest is still pruned', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-prune-'));

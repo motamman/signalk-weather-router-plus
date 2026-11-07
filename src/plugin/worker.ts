@@ -61,6 +61,7 @@ import {
 import { makeSeaLevelClient, refreshTides, tideSettings } from './worker/tides';
 import { refreshRegional } from './worker/regional';
 import { route } from './worker/route';
+import { clearCropRuns, ROUTE_CROP_DIR } from './worker/routecrop';
 import { refreshQueue } from './worker/refreshqueue';
 import { buildTile, dataStatus, query } from './worker/query';
 import type { WorkerState } from './worker/state';
@@ -117,6 +118,7 @@ const st: WorkerState = {
   reportedLandBuilds: 0,
   reportedSmocRev: -1,
   cacheRoot: '',
+  cropRoot: '',
   regional: new Map(),
   seaLevelClient: null,
   tides: null,
@@ -205,6 +207,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
     case 'init': {
       st.config = msg.config;
       st.cacheRoot = msg.cacheDir;
+      st.cropRoot = path.join(msg.cacheDir, ROUTE_CROP_DIR);
       st.client = new EcmwfClient({
         baseUrl: ECMWF_MIRRORS[st.config.forecast.mirror],
         cacheDir: path.join(msg.cacheDir, 'ecmwf'),
@@ -243,6 +246,8 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
       } else st.harmonic = [];
       rebuildStack(st);
       if (st.role === 'route') {
+        // What a stop left of a route's forecast crop written for the chart mesh process (worker/routecrop.ts).
+        clearCropRuns(st.cropRoot);
         try {
           prepareWaterGrid(st, st.config);
         } catch (err) {

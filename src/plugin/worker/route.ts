@@ -68,7 +68,8 @@ import { localMeshes, meshesToOpen, readyMeshDirs } from '../meshes';
 import { beamFor, DEFAULT_SEARCH } from '../../engine/search/presets';
 import { ENSEMBLE_OPTIONAL_PARAMS, ENSEMBLE_PARAMS, ENSEMBLES, type EnsembleModelId } from '../../data/ecmwf';
 import { type DecodedRun, openDecodedRun } from '../../data/decoded';
-import { memberRunDir, readEnsembleCurrent } from '../../data/ensemble';
+import { memberRunDir, pinnedMembers, readEnsembleCurrent } from '../../data/ensemble';
+import { removeCropRun, writeCropRun } from './routecrop';
 
 /** One opened chart mesh (one cluster of a multi-cluster mesh): its name, folder and index. */
 export type OpenMesh = { name: string; dir: string; store: MeshStore };
@@ -168,10 +169,6 @@ async function ensureRoughCut(
   return file;
 }
 
-/** Why a mesh leg cannot be planned while the worker has no decoded forecast run (meshLegRunner leg). */
-export const NO_DECODED_RUN_FOR_MESH =
-  'no decoded forecast run yet: the chart mesh process reads the forecast from a decoded run only (the forecast status says what the data worker is doing with the first forecast)';
-
 /**
  * The meshes as the leg pipeline's runner, or undefined when there are
  * none. A leg is covered when one mesh covers all its points, and that leg
@@ -189,8 +186,12 @@ export function meshLegRunner(
   stores: OpenMesh[],
   /** The SMOC area and steps loadAreas loaded for the current leg; the mesh process asks for exactly these. */
   smocLeg: () => { area: BBox; steps: number[]; as: { res: ArcoResolution; layout: ArcoLayout } | null } | null,
-  /** The forecast run the route reads: the run in use, or an ensemble member's (forecastRunFor). */
-  run: DecodedRun | null
+  /**
+   * The forecast run the mesh process reads, asked for once the leg's areas are loaded (a route that reads the
+   * forecast only): the run in use, an ensemble member's, or before there is a decoded run the route's crop written
+   * as one (routecrop.ts).
+   */
+  forecastRun: () => DecodedRun
 ): MeshLegRunner | undefined {
   if (!stores.length) return undefined;
   const meshFor = (points: [number, number][]): (typeof stores)[number] | undefined => stores.find(s => meshCovers(s.store, points));
@@ -298,11 +299,6 @@ export function meshLegRunner(
       }
     },
     leg: async (a: MeshLegArgs) => {
-      // The child reads the forecast from the decoded run's files; without one it would plan the leg with no wind.
-      // What is said is what this worker knows: there is no decoded run (the first forecast is still being decoded, or
-      // its download failed and is retried; the forecast status says which), not when one will be (until 2026-11-07
-      // the refusal said "still being decoded, try again shortly" in both cases; PR #7 review).
-      if (useForecast && !run) return { refused: NO_DECODED_RUN_FOR_MESH };
       // The mesh the plan named; else the one holding the leg's points (a handover leg, with one end outside every
       // mesh: the one holding either).
       const m = a.meshId
@@ -320,6 +316,8 @@ export function meshLegRunner(
         if (typeof map !== 'string') return map;
         // The forecast area: the reach's tiles when there is one (the search may run far from the ends), else the ends.
         const bbox = a.reach ? a.reach.box : bboxFromLonLat([a.legStart[0], a.plan.end[0]], [a.legStart[1], a.plan.end[1]], 0.5);
+        // The child reads the forecast from a decoded run's files (the pipeline loaded the leg's areas before the leg).
+        const run = useForecast ? forecastRun() : null;
         const task: MeshLegTask = {
           task: 'mesh-leg',
           dir: m.dir,
@@ -346,10 +344,10 @@ export function meshLegRunner(
           boundaryFile: boundaryFile(map),
           ...(a.reach ? { aims: a.reach.aims } : {}),
           arriving: a.arriving ?? null,
-          forecast: useForecast ? { runDir: run!.dir, area: expandBBox(bbox, ROUTE_FORECAST_MARGIN_DEG), params: ROUTE_PARAMS } : null,
+          forecast: run ? { runDir: run.dir, area: expandBBox(bbox, ROUTE_FORECAST_MARGIN_DEG), params: ROUTE_PARAMS } : null,
           regional:
-            useForecast && request.wind_model !== 'ecmwf' && !request.forecast_member
-              ? { root: path.join(st.cacheRoot, REGIONAL_DIR), globalDLon: run?.index.grid.dLon ?? GLOBAL_DLON_DEG }
+            run && request.wind_model !== 'ecmwf' && !request.forecast_member
+              ? { root: path.join(st.cacheRoot, REGIONAL_DIR), globalDLon: run.index.grid.dLon }
               : null,
           currents: request.no_currents
             ? null
@@ -555,6 +553,14 @@ export async function route(
   // The flag is cleared by the main thread before it posts the route (index.ts dispatchRoute).
   const shouldCancel = (): boolean => Atomics.load(st.cancelFlag, 0) === 1;
   const progress = (stage: number, total: number, message: string): void => st.send({ type: 'progress', id, stage, total, message });
+  // Before there is a decoded run: the route's crop written as one for the chart mesh process (routecrop.ts), with the
+  // crop it was written from; removed with the route's areas.
+  let cropRun: { from: ForecastStore; run: DecodedRun } | null = null;
+  const dropCropRun = (): void => {
+    if (!cropRun) return;
+    cropRun = null;
+    removeCropRun(st.cropRoot, id);
+  };
   try {
     validateRequest(request);
     const start: [number, number] = [request.start.lon, request.start.lat];
@@ -793,6 +799,32 @@ export async function route(
     const member = request.forecast_member && useForecast ? memberRun(st, request.forecast_member) : null;
     const forecastRun = member ? member.run : st.run;
     if (member) progress(0, 0, `forecast: ${member.name} member ${member.member} (run ${member.cycle}), no regional wind`);
+    /**
+     * The run the chart mesh process reads for a leg, after the leg's areas are loaded: the route's run, else the crop
+     * loadAreas decoded from the GRIB cache, written as a run once per crop.
+     */
+    const meshForecast = (): DecodedRun => {
+      if (forecastRun) return forecastRun;
+      const crop = st.routeWindow;
+      if (!crop) throw new Error("the chart mesh leg was started before the route's forecast area was loaded");
+      let c = cropRun;
+      if (!c || c.from !== crop) {
+        const t0 = Date.now();
+        let run: DecodedRun;
+        try {
+          run = writeCropRun(st.cropRoot, id, crop, cfg.forecast.horizonS / HOUR_S);
+        } catch (err) {
+          throw new RouteError(`the route's forecast could not be written for the chart mesh process (${(err as Error).message})`);
+        }
+        c = cropRun = { from: crop, run };
+        progress(
+          0,
+          0,
+          `forecast: the route's crop written as a run for the chart mesh process: {dataSize:${run.index.bytes}} in {time:${(Date.now() - t0) / 1000}}`
+        );
+      }
+      return c.run;
+    };
     let wind: ForecastStore | null = null;
     let cycleLabel: string | undefined;
     // Regional wind (signalk-grib-downloader runs decoded by the data
@@ -938,6 +970,7 @@ export async function route(
         st.routeWindow = null;
       }
       releaseRegional();
+      dropCropRun();
       wind = null;
       smocLeg = null;
       if (st.smoc) st.smoc.trimOnDemand(0);
@@ -963,14 +996,16 @@ export async function route(
     const pipeline: LegPipelineInputs = {
       waterGrid: st.waterGrid,
       router,
-      mesh: meshLegRunner(st, cfg, id, request, meshes, () => smocLeg, forecastRun),
+      mesh: meshLegRunner(st, cfg, id, request, meshes, () => smocLeg, meshForecast),
       avoidAreas: avoid.map(a => ({ lon: a.lon, lat: a.lat, radiusM: a.radiusM })),
       meshBufferM: cfg.routing.navigableBufferM,
       drawbridges: request.drawbridges ?? cfg.routing.drawbridges,
       bridgeWaitS: cfg.routing.bridgeWaitS,
       allowCanals: cfg.routing.allowCanals,
       landFor: (b, band) => {
-        const m = landMaskFor(st, b, cfg.routing.landRasterMaxCells, cfg.landShapefiles).withBuffer(cfg.routing.landBufferM);
+        // A view for this route (LandMask.routeView): the band's patches below, and the corridor's, are the route's and
+        // go with it; the worker's cached mask gains none.
+        const m = landMaskFor(st, b, cfg.routing.landRasterMaxCells, cfg.landShapefiles).withBuffer(cfg.routing.landBufferM).routeView();
         // The band along the route at its own cell size inside the coarser world (LandMask.refineBand): on the
         // buffered mask, so the patches keep the buffer and are not lost with the unbuffered cached one.
         if (band) {
@@ -1177,6 +1212,12 @@ export async function route(
     }
     for (const s2 of st.routeRegional) releaseWindow(st, s2);
     st.routeRegional = [];
+    try {
+      dropCropRun();
+    } catch (err) {
+      // The route has already ended (its result or error is sent); a crop left behind is removed at the worker's next start.
+      st.log('error', `job ${id}: the route's forecast crop for the chart mesh could not be removed (${(err as Error).message})`);
+    }
     if (st.smoc) st.smoc.trimOnDemand(0);
     rebuildStack(st);
     releaseMemory();
@@ -1185,22 +1226,34 @@ export async function route(
 }
 
 /**
- * An ensemble member's decoded run for a route (request.forecast_member): of the ensemble's cycle in use (its
- * current.json), refused when that ensemble or member is not on disk.
+ * An ensemble member's decoded run for a route (request.forecast_member): of the cycle a running set pins
+ * (data/ensemble.ts pinEnsembleCycle: the set's own, also after a newer cycle is recorded), else of the ensemble's
+ * cycle in use (its current.json); refused when that ensemble, cycle or member is not on disk.
  */
 export function memberRun(
   st: WorkerState,
   want: NonNullable<RouteRequest['forecast_member']>
 ): { run: DecodedRun; model: EnsembleModelId; name: string; cycle: string; member: number } {
   const model = ENSEMBLES[want.model];
-  const cur = readEnsembleCurrent(st.cacheRoot, want.model);
-  if (!cur) throw new RouteError(`${model.name}: no ensemble on disk yet (it downloads after each forecast cycle)`);
-  if (want.cycle && want.cycle !== cur.cycle)
-    throw new RouteError(`${model.name}: the run of ${want.cycle} is no longer on disk (now ${cur.cycle}); start the ensemble again`);
-  if (!cur.members.includes(want.member)) throw new RouteError(`${model.name}: member ${want.member} is not on disk`);
-  const { run, problem } = openDecodedRun(memberRunDir(st.cacheRoot, want.model, want.member, cur.cycle));
+  const log = (m: string): void => st.log('error', `ensembles: ${m}`);
+  const pinned = want.cycle ? pinnedMembers(st.cacheRoot, want.model, want.cycle, log) : null;
+  let cycle: string;
+  let members: number[];
+  if (want.cycle && pinned) {
+    cycle = want.cycle;
+    members = pinned;
+  } else {
+    const cur = readEnsembleCurrent(st.cacheRoot, want.model);
+    if (!cur) throw new RouteError(`${model.name}: no ensemble on disk yet (it downloads after each forecast cycle)`);
+    if (want.cycle && want.cycle !== cur.cycle)
+      throw new RouteError(`${model.name}: the run of ${want.cycle} is no longer on disk (now ${cur.cycle}); start the ensemble again`);
+    cycle = cur.cycle;
+    members = cur.members;
+  }
+  if (!members.includes(want.member)) throw new RouteError(`${model.name}: member ${want.member} is not on disk`);
+  const { run, problem } = openDecodedRun(memberRunDir(st.cacheRoot, want.model, want.member, cycle));
   if (!run) throw new RouteError(`${model.name} member ${want.member}: not usable (${problem})`);
-  return { run, model: want.model, name: model.name, cycle: new Date(cur.cycleTimeMs).toISOString(), member: want.member };
+  return { run, model: want.model, name: model.name, cycle: new Date(run.index.cycleTimeMs).toISOString(), member: want.member };
 }
 
 /** A blocked crossing in words, quantities as unit tokens (the web app writes them in its user's units). */

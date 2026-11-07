@@ -155,6 +155,49 @@ test("create refuses with the record's own problem when the ensemble's record of
   }
 });
 
+test('a set holds its cycle on disk while it routes: pinned when made, unpinned once ended with no route running', () => {
+  const h = harness();
+  const pin = (id: string) => path.join(h.dir, 'forecast-ens', 'aifs-ens', 'pins', `${id}.json`);
+  const s = made(h.sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(pin(s.id), 'utf8')), { id: s.id, cycle: '2026110512', members: [0, 1, 2, 3, 4] });
+  for (let k = 0; k < 4; k++) h.finish(100 + k);
+  assert.ok(fs.existsSync(pin(s.id)), 'still routing its last member');
+  h.finish(104);
+  assert.equal(h.sets.get(s.id)!.status, 'done');
+  assert.ok(!fs.existsSync(pin(s.id)), 'done: unpinned');
+  // Cancelled with a member still computing: the pin stays until that route has stopped.
+  const c = made(h.sets.create({ route: ROUTE, model: 'aifs-ens', members: 5 }));
+  h.finish(90);
+  const running = h.jobs.runningId!;
+  assert.ok(h.sets.cancel(c.id));
+  assert.ok(fs.existsSync(pin(c.id)), 'a member still stopping: pinned');
+  h.jobs.onError(running, 'cancelled', true);
+  assert.ok(!fs.existsSync(pin(c.id)), 'stopped: unpinned');
+});
+
+test('a pin left from before is removed at the start; a set whose cycle cannot be held is refused', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
+  try {
+    const left = path.join(dir, 'forecast-ens', 'ifs-ens', 'pins', 'old-set.json');
+    fs.mkdirSync(path.dirname(left), { recursive: true });
+    fs.writeFileSync(left, JSON.stringify({ id: 'old-set', cycle: '2026110500', members: [1] }));
+    const deps = { cancelRunning: () => undefined, onDisk: () => ({ cycle: CYCLE, members: [0, 1, 2, 3, 4, 5] }), log: () => undefined };
+    const sets = new EnsembleSetManager(new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`)), dir, deps, '/p');
+    assert.ok(!fs.existsSync(left), 'no set runs at the start: no pin');
+    // A file where the ensemble's folder belongs: its pin cannot be written.
+    fs.rmSync(path.join(dir, 'forecast-ens'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'forecast-ens'), 'not a folder');
+    const r = sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 });
+    assert.ok(
+      'refused' in r && /^ECMWF IFS ENS: its run could not be held on disk while the set routes on it \(/.test(r.refused),
+      JSON.stringify(r)
+    );
+    assert.equal(sets.list().length, 0, 'nothing started');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('cancel: members not started are cancelled, the running one is asked to stop', () => {
   const h = harness();
   const s = made(h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 }));

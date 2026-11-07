@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { memberRun } from './route';
 import type { WorkerState } from './state';
 import { RouteError } from '../../engine/errors';
-import { ENSEMBLE_DECODED_DIR } from '../../data/ensemble';
+import { ENSEMBLE_DECODED_DIR, pinEnsembleCycle } from '../../data/ensemble';
 import { decodedMember } from './ensemblefixture';
 
 const CYCLE = new Date('2026-11-06T00:00:00Z');
@@ -18,7 +18,8 @@ const CYCLE = new Date('2026-11-06T00:00:00Z');
 test('memberRun: no record, another cycle pinned, a member not on disk, a run that is not usable, and a member that is', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-member-'));
   try {
-    const st = { cacheRoot: root } as unknown as WorkerState;
+    const logged: string[] = [];
+    const st = { cacheRoot: root, log: (_l: string, m: string) => logged.push(m) } as unknown as WorkerState;
     const refused = (want: Parameters<typeof memberRun>[1], re: RegExp): void =>
       assert.throws(
         () => memberRun(st, want),
@@ -45,6 +46,18 @@ test('memberRun: no record, another cycle pinned, a member not on disk, a run th
       { model: got.model, name: got.name, cycle: got.cycle, member: got.member, dir: got.run.dir },
       { model: 'ifs-ens', name: 'ECMWF IFS ENS', cycle: CYCLE.toISOString(), member: 1, dir: decodedMember(root, 1, CYCLE) }
     );
+    // A set started on 2026110518 pins its cycle (plugin/ensembles.ts): its members route on it after the record has
+    // moved on to 2026110600, and only the members it pins.
+    const before = new Date('2026-11-05T18:00:00Z');
+    decodedMember(root, 3, before);
+    assert.equal(pinEnsembleCycle(root, 'ifs-ens', 'set-1', '2026110518', [3]), null);
+    const pinned = memberRun(st, { model: 'ifs-ens', member: 3, cycle: '2026110518' });
+    assert.deepEqual(
+      { cycle: pinned.cycle, member: pinned.member, dir: pinned.run.dir },
+      { cycle: before.toISOString(), member: 3, dir: decodedMember(root, 3, before) }
+    );
+    refused({ model: 'ifs-ens', member: 1, cycle: '2026110518' }, /^ECMWF IFS ENS: member 1 is not on disk$/);
+    assert.deepEqual(logged, []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

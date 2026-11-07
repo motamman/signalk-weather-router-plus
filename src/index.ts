@@ -34,13 +34,14 @@ import { AIR_DRAFT_M_RANGE, DRAUGHT_M_RANGE } from './vessel/vessel';
 import { mergeSettings, reloadsFor, settingsSchema, SettingsStore, SettingsValidationError } from './plugin/settings';
 import { SharedPrefsStore } from './plugin/sharedprefs';
 import { checkDecodeResources } from './plugin/memguard';
-import { siText } from './plugin/unittext';
+import { jobNotification } from './plugin/jobnotify';
 import { JobManager, type Job } from './plugin/jobs';
 import { windowNotification, WindowManager, type DepartureWindow } from './plugin/windows';
 import { EnsembleSetManager } from './plugin/ensembles';
-import type { EnsembleModelId } from './data/ecmwf';
-import { ensembleCurrentFile } from './data/ensemble';
+import { ENSEMBLES, type EnsembleModelId } from './data/ecmwf';
+import { ensembleInUse } from './data/ensemble';
 import { registerApi } from './plugin/api';
+import { ENSEMBLE_MEMBERS_RANGE } from './plugin/request_schema';
 import { NotStartedError } from './plugin/errors';
 import { TileService, TileStore, tileGenerationKeys, tileGroup } from './plugin/tiles';
 import { hasStep, TilePrebuilder } from './plugin/prebuild';
@@ -178,13 +179,23 @@ export = function plugin(app: SkApp): SignalKPlugin {
   let corridorFallbacks = 0;
   let dataStatus: DataStatus | null = null;
   /**
-   * The ensembles a route can run on now, as the data worker last reported them: each with a cycle in use and its
-   * members on disk (none when off). Route requests (api.ts) and ensemble sets (ensembles.ts) both read it.
+   * An ensemble chosen in the config as its record on disk says now (data/ensemble.ts ensembleInUse): null when it is
+   * not chosen or has no record. The one answer to "which members are on disk now" for a route's forecast_member
+   * (api.ts) and a set's members (ensembles.ts onDisk). Until 2026-11-07 both read the data worker's last status, which
+   * is behind the record between a new cycle's recording and the next status (PR #7 review).
    */
-  const ensemblesOnDisk = (): { model: EnsembleModelId; name: string; cycle: string; members: number[] }[] =>
-    (dataStatus?.ensembles ?? []).flatMap(e =>
-      e.cycle && e.members.length ? [{ model: e.model, name: e.name, cycle: e.cycle, members: [...e.members] }] : []
-    );
+  function ensembleNow(model: EnsembleModelId): ReturnType<typeof ensembleInUse> {
+    if (!config || !config.forecast.ensemble || !config.forecast.ensemble.models.includes(model)) return null;
+    return ensembleInUse(app.getDataDirPath(), model);
+  }
+  /** The chosen ensembles a route can run on now (ensembleNow): each with a cycle in use and members on disk. */
+  const ensemblesOnDisk = (): { model: EnsembleModelId; name: string; cycle: string; members: number[] }[] => {
+    if (!config || !config.forecast.ensemble) return [];
+    return config.forecast.ensemble.models.flatMap(model => {
+      const e = ensembleNow(model);
+      return e && !('problem' in e) && e.members.length ? [{ model, name: ENSEMBLES[model].name, cycle: e.cycle, members: e.members }] : [];
+    });
+  };
   /** The route worker's own current sources (its SMOC on-demand areas and memory). */
   let routeCurrents: DataStatus['currents'] | null = null;
   let refreshTimer: NodeJS.Timeout | null = null;
@@ -1083,15 +1094,9 @@ export = function plugin(app: SkApp): SignalKPlugin {
         }
         const job = jobs?.get(msg.id);
         if (job) {
-          // A departure window's routes: one notification for the window when it is done (notifyWindow). An ensemble
-          // set's member routes: none (the page follows the set itself).
-          if (!job.windowId && !job.ensembleSetId)
-            notify(
-              job,
-              'normal',
-              // SI: the client converts to its user's units.
-              `route ready: ${Math.round(msg.summary.total_distance_m)} m, ${Math.round(msg.summary.total_time_s)} s`
-            );
+          // Which job says what (jobnotify.ts): a window's and a set's routes say nothing on their own.
+          const n = jobNotification(job, { kind: 'done', summary: msg.summary });
+          if (n) notify(job, n.state, n.message);
           const wantPublish = job.request.publish ?? config?.publish.toResources ?? false;
           if (wantPublish) publish(job.id).catch(err => app.error((err as Error).message));
         }
@@ -1101,7 +1106,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
       case 'error': {
         jobs?.onError(msg.id, msg.message, msg.cancelled);
         const job = jobs?.get(msg.id);
-        if (job && !msg.cancelled && !job.windowId && !job.ensembleSetId) notify(job, 'alert', `route failed: ${siText(msg.message)}`);
+        const n = job ? jobNotification(job, { kind: 'error', message: msg.message, cancelled: !!msg.cancelled }) : null;
+        if (job && n) notify(job, n.state, n.message);
         updateStatus();
         return;
       }
@@ -1371,19 +1377,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
       dataDir,
       {
         cancelRunning: cancelRunningJob,
-        /**
-         * The ensemble's cycle in use and its members, read now from its record on disk (data/ensemble.ts), the
-         * record the members' routes read (worker/route.ts memberRun); never the data worker's last status, which
-         * is behind the record between a new cycle's recording and the next status. An ensemble not chosen in the
-         * config has none. The cycle is the record's time as the status writes it (worker/query.ts dataStatus).
-         */
-        onDisk: model => {
-          const chosen = config?.forecast.ensemble;
-          if (!chosen || !chosen.models.includes(model)) return null;
-          const { current, problem } = ensembleCurrentFile(dataDir, model);
-          if (problem) return { problem };
-          return current ? { cycle: new Date(current.cycleTimeMs).toISOString(), members: [...current.members] } : null;
-        },
+        /** The ensemble's cycle in use and its members as its record says now (ensembleNow). */
+        onDisk: ensembleNow,
         log: m => app.error(m),
       },
       BASE_PATH
@@ -1589,6 +1584,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
         energy_fields: config?.forecast.energyFields,
         // The ensembles chosen in the plugin config (data/ensemble.ts): the members in use and the last pass; empty when off.
         ensembles: dataStatus?.ensembles ?? [],
+        // The fewest members a set may ask for (request_schema.ts ENSEMBLE_MEMBERS_RANGE): the page's one source for it.
+        ensemble_members_min: ENSEMBLE_MEMBERS_RANGE[0],
       }),
       forecastInfo: async (lat, lon) => {
         if (!forecastRun) throw new Error(forecastError ? `forecast unavailable: ${forecastError}` : 'forecast not loaded yet');
