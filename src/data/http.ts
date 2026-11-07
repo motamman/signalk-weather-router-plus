@@ -151,7 +151,8 @@ async function attempts<B extends Uint8Array | null>(
       }
       retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
       lastErr = makeError(`HTTP ${res.status} for ${url}`);
-      await res.arrayBuffer().catch(() => undefined);
+      // The answer's body is not wanted: the attempt ends it, so one that stops arriving cannot hold the retry back.
+      ctrl.abort();
     } catch (err) {
       lastErr = err;
       const code = offlineCode(err);

@@ -195,8 +195,7 @@ export function meshLegRunner(
 ): MeshLegRunner | undefined {
   if (!stores.length) return undefined;
   const meshFor = (points: [number, number][]): (typeof stores)[number] | undefined => stores.find(s => meshCovers(s.store, points));
-  // A motor route reads the forecast too: its speed does not depend on the wind, but its limits and its comfort do.
-  const useForecast = !request.no_forecast;
+  const useForecast = routeUsesForecast(request);
   const roughCut = (m: OpenMesh, rules: MeshRules, tag: string, progress: MeshLegArgs['progress'], signal: AbortSignal) =>
     ensureRoughCut(st, m, rules, tag, progress, signal, stores);
   return {
@@ -510,6 +509,16 @@ export function meshLegRunner(
 }
 
 /**
+ * Whether a route reads the forecast, in this worker (route) and in the chart mesh process alike (meshLegRunner): unless
+ * it asks for calm wind (no_forecast). A motor route reads it too (until 2026-10-30 it did not, so its wind and wave
+ * limits and its comfort weight judged a calm sea and never acted): the speed under power is the same in any wind, the
+ * limits are not.
+ */
+export function routeUsesForecast(request: Pick<RouteRequest, 'no_forecast'>): boolean {
+  return !request.no_forecast;
+}
+
+/**
  * Whether a route layers the regional wind runs over ECMWF, in this worker (loadRegional) and in the chart mesh process
  * alike (meshLegRunner): not when it asks for ECMWF's wind alone (wind_model ecmwf), nor on an ensemble member, whose
  * wind is never layered with another model's.
@@ -807,9 +816,7 @@ export async function route(
         `polar: wave correction applied to the sailing speed (${waveCorrection.layers.length} height layer(s), {length:${waveCorrection.heightsM[0]}} to {length:${waveCorrection.heightsM[waveCorrection.heightsM.length - 1]}}; read with the forecast's Tm02, mp2); seas outside its table, or without a Tm02 in the forecast, are sailed uncorrected and marked on the leg`
       );
     const departureMs = request.departure ? Date.parse(request.departure) : Date.now();
-    // A motor route reads the forecast too (until 2026-10-30 it did not, so its wind and wave limits and its comfort
-    // weight judged a calm sea and never acted): the speed under power is the same in any wind, the limits are not.
-    const useForecast = !request.no_forecast;
+    const useForecast = routeUsesForecast(request);
     if (request.no_forecast) progress(0, 0, 'no_forecast set: routing with calm wind');
     // The forecast the route reads: the run in use, or one ensemble member's (ensembles.ts: one route per member).
     const member = request.forecast_member && useForecast ? memberRun(st, request.forecast_member) : null;

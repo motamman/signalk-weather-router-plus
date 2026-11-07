@@ -116,6 +116,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A server that answers "try again" cannot hold back the retry.** Its
+  answer's body was read before the next attempt; with the timeout now
+  ending when the server answers, a body that never came held the retry
+  up to fetch's own 300 s. The attempt now ends that body unread.
+- **Ensembles listed in the options file as something other than a list
+  are refused naming the setting** (`forecast.ensemble.models`), instead
+  of failing the start with a TypeError.
 - **A slow download is no longer cut off.** The data clients' per-attempt
   timeout (60 s for the ECMWF and Zarr clients) ran until a download's
   body had been read, so a download slower than that was aborted and

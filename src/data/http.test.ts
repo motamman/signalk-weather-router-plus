@@ -173,3 +173,30 @@ test('fetchBodyWithRetry: the answer carries its body, read inside the attempt; 
   assert.ok(asked.body);
   assert.equal(new TextDecoder().decode(asked.body), 'payload');
 });
+
+// The runner's own limit: without the fix the drained body never ends, and the test would wait for ever, not fail.
+test(
+  "fetchWithRetry: a retriable answer's body is not read: one that never ends does not hold the next attempt",
+  { timeout: 5000 },
+  async () => {
+    let calls = 0;
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      calls++;
+      if (calls > 1) return new Response('payload', { status: 200 });
+      // A 503 whose body never ends; as fetch does, the request's signal aborting ends it.
+      const body = new ReadableStream({
+        start(c) {
+          init?.signal?.addEventListener('abort', () => c.error(new DOMException('aborted', 'AbortError')), { once: true });
+        },
+      });
+      return new Response(body, { status: 503 });
+    }) as unknown as typeof fetch;
+    const r = await fetchWithRetry(
+      'http://x/y',
+      {},
+      { timeoutMs: 1000, retries: 2, readBody: true, fetchImpl, sleepImpl: async () => undefined }
+    );
+    assert.equal(r.status, 200);
+    assert.equal(calls, 2, 'the next attempt started');
+  }
+);

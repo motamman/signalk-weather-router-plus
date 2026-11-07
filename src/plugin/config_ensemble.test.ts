@@ -22,3 +22,13 @@ test('ensemble downloads: on, IFS ENS until another is chosen; at least one whil
 test('ensemble downloads: members 5 to 50 in fives', () => {
   for (const members of [0, 7, 55]) assert.throws(() => resolveEnsemble({ enabled: true, members }), /is not one of 5, 10/);
 });
+
+test('ensemble downloads: models that are not a list (an options file edited by hand) are refused naming the setting', () => {
+  // (Absent or null: the default, IFS ENS; that is not this case.)
+  for (const models of ['ifs-ens', {}, 7] as unknown[])
+    assert.throws(
+      () => resolveEnsemble({ enabled: true, models: models as string[], members: 5 }),
+      /^Error: config forecast\.ensemble\.models: .* is not a list of ensembles/,
+      JSON.stringify(models)
+    );
+});

@@ -230,7 +230,7 @@ test('routeFromMeshPath: segments timed at motor speed, totals and metadata set,
 type RouteRow = [number, number] | [number, number, string];
 
 /**
- * The route `r` is `want`, waypoint by waypoint: each within 1e-9° (a hundredth of a millimetre: the arithmetic's own
+ * The route `r` is `want`, waypoint by waypoint: each within 1e-9° (about a tenth of a millimetre, arithmetic: 1e-9 × 111,320 m: the arithmetic's own
  * rounding, not a margin), each role as given. The routes below are the search's own for their fixtures, recorded on
  * brain on 2026-11-07 (the same on two runs: the search is deterministic for a fixed input), so a change to the search
  * or to how a stretch is planned shows here. (From 2026-10-30, when the stretches were first searched under motor

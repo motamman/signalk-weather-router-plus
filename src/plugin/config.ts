@@ -491,9 +491,13 @@ export function ensembleMembersProblem(members: number): string | null {
     : `${String(members)} is not one of ${ENSEMBLE_MEMBER_CHOICES.join(', ')}`;
 }
 
-/** Why `models` are not ensembles this plugin downloads (the first unknown one), or null. */
-export function ensembleModelsProblem(models: readonly string[]): string | null {
-  const bad = models.find(m => !(ENSEMBLE_MODELS as readonly string[]).includes(m));
+/**
+ * Why `models` are not ensembles this plugin downloads, or null: not a list (the options file is edited by hand, and
+ * its type is only the compiler's), or the first entry that is not one of them.
+ */
+export function ensembleModelsProblem(models: unknown): string | null {
+  if (!Array.isArray(models)) return `${JSON.stringify(models)} is not a list of ensembles (${ENSEMBLE_MODELS.join(', ')})`;
+  const bad = models.find(m => !(ENSEMBLE_MODELS as readonly unknown[]).includes(m));
   return bad === undefined ? null : `${bad} is not one of ${ENSEMBLE_MODELS.join(', ')}`;
 }
 
