@@ -54,6 +54,7 @@ function state(cacheRoot: string, config: unknown): WorkerState {
     reportedLandBuilds: 0,
     reportedSmocRev: -1,
     cacheRoot,
+    cropRoot: '',
     regional: new Map(),
     seaLevelClient: null,
     tides: null,

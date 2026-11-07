@@ -116,6 +116,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A failed row no longer hides the numbers of an ensemble set's table or
+  a departure window's.** A failed member's or departure's message sat on
+  one line in a cell across the five number columns (the tables' cells do
+  not wrap), so it set their width: the headers and every other row's
+  numbers were pushed out of view to the right. The message now wraps in
+  its cell; the whole error stays in the row's tooltip.
 - **A leg on a chart mesh is planned before the first decoded forecast
   run.** Until the data worker has decoded a run, a route reads its area's
   forecast from the GRIB cache into memory; a leg on a chart mesh is

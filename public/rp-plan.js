@@ -2879,7 +2879,9 @@ function _ensRender() {
     const opened = m.job_id && m.job_id === _currentRouteJobId ? ' class="win-open"' : '';
     const who = m.who || _ensWho(m);
     if (!m.metrics) {
-      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + who + '</td><td colspan="5" style="text-align:left;">'
+      // A failed row's message wraps in its cell: on one line (the table's cells do not wrap) it set the width of the
+      // five number columns, and pushed their headers and every other row's numbers out of view.
+      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + who + '</td><td colspan="5" style="text-align:left; white-space:normal;">'
         + escapeHtml(STATUS[m.status] || m.status) + (m.error && m.status === 'failed' ? ': ' + escapeHtml(unitText(m.error)) : '') + '</td></tr>';
     }
     const x = m.metrics;
@@ -4460,7 +4462,9 @@ function _winRender() {
     const cls = [m ? 'win-row' : 'win-off', i === best ? 'win-best' : '', d.job_id && d.job_id === _winOpenJob ? 'win-open' : ''].filter(Boolean).join(' ');
     const lead = (i === best ? '★ ' : '') + '<span title="' + escapeHtml(fmtWhen(d.departure)) + '">' + escapeHtml(_winWhen(d.departure)) + '</span>';
     if (!m) {
-      html += '<tr class="' + cls + '" title="' + escapeHtml(d.error || '') + '"><td>' + lead + '</td><td colspan="5" style="text-align:left;">' + escapeHtml(_WIN_STATUS_TEXT[d.status] || d.status) + (d.error && d.status !== 'cancelled' ? ': ' + escapeHtml(unitText(d.error)) : '') + '</td></tr>';
+      // A failed row's message wraps in its cell: on one line (the table's cells do not wrap) it set the width of the
+      // five number columns, and pushed their headers and every other row's numbers out of view.
+      html += '<tr class="' + cls + '" title="' + escapeHtml(d.error || '') + '"><td>' + lead + '</td><td colspan="5" style="text-align:left; white-space:normal;">' + escapeHtml(_WIN_STATUS_TEXT[d.status] || d.status) + (d.error && d.status !== 'cancelled' ? ': ' + escapeHtml(unitText(d.error)) : '') + '</td></tr>';
       return;
     }
     html += '<tr class="' + cls + '" data-job="' + escapeHtml(d.job_id) + '" title="Arrives ' + escapeHtml(fmtWhen(m.arrival)) + '. Click to open this departure’s route' + (m.beyond_forecast ? ' (arrives after the forecast ends: its last legs ran on conditions held at the last step)' : '') + '">'
