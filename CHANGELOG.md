@@ -136,13 +136,17 @@ uses [Semantic Versioning](https://semver.org/).
   with the old horizon. A pass is started after the reload now, and a
   start while a pass runs makes one more pass after it, with the new
   settings.
-- **One rule for a cached GRIB message.** The ensemble pass skipped a
-  cached message by its header alone while the fetch checked the
-  record's length, so a message cut short on disk was never fetched
-  again and its member failed to decode every round. The one check
-  (header, and the length where the index is known) is used wherever a
-  message is taken from the cache or skipped as cached, for the main
-  forecast and the ensembles.
+- **A cached GRIB message is a whole message, by its own length.** The
+  main forecast's loader and the ensemble pass took a cached message by
+  its header alone, and the loader reads a step's index only for a
+  field it finds not cached, so the fetch's length check was never
+  reached there. A message cut short on disk was never fetched again:
+  its step failed the forecast load, or its member failed to decode,
+  every round. A cached message is now a whole GRIB2 message by its
+  indicator section, which states the message's length: that one check
+  is used wherever a message is taken from the cache or skipped as
+  cached, for the main forecast and the ensembles, and it needs no
+  index, so a cycle cached whole is still read with no network.
 - **An ensemble's `current.json` is checked whole.** Only its model,
   cycle and member list were; a record with a missing or bad cycle time
   made the status throw instead of answering. Every field is checked as
