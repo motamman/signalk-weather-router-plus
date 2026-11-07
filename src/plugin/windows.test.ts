@@ -516,6 +516,11 @@ test('a window file that cannot be read at start-up is reported and left as it i
   try {
     fs.mkdirSync(store, { recursive: true });
     fs.writeFileSync(path.join(store, 'broken.json'), '{"id": "broken", "depa');
+    // Its id and list, but none of the rest the manager reads later (its request): not one, by its schema.
+    fs.writeFileSync(
+      path.join(store, 'norequest.json'),
+      JSON.stringify({ id: 'norequest', status: 'done', created_at: '2026-11-07T00:00:00.000Z', departures: [] })
+    );
     fs.writeFileSync(path.join(store, 'other.json'), JSON.stringify({ hello: 'world' }));
     const logged: string[] = [];
     const jobs = new JobManager(dir, 50, '', m => assert.fail(`unexpected log: ${m}`));
@@ -526,6 +531,10 @@ test('a window file that cannot be read at start-up is reported and left as it i
     });
     assert.ok(logged.some(m => /^departure window file broken\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
     assert.ok(logged.includes('departure window file other.json does not hold a departure window; left as it is, not restored'));
+    assert.ok(
+      logged.includes('departure window file norequest.json does not hold a departure window; left as it is, not restored'),
+      'one without its request'
+    );
     assert.ok(fs.existsSync(path.join(store, 'broken.json')), 'left as it is');
     // A finished window whose file is a folder now (on every OS, not one that is missing): deleted from the list, the
     // folder stays, and that is said.

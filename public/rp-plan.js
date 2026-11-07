@@ -128,6 +128,8 @@ function displayRoute(geojson) {
     const p = lineFeat.getProperties();
     const navWarns = _drawSnapConnectors(p);
     _routeWarnings = Array.isArray(p.warnings) ? p.warnings : [];
+    // A route put on screen: its warnings list starts closed.
+    _warnListOpen = false;
     renderResultStrip(p, navWarns);
     const nameInput = /** @type {HTMLInputElement} */ (document.getElementById('routeNameInput'));
     if (nameInput) nameInput.value = p.name || _currentRouteName || '';
@@ -1821,6 +1823,15 @@ const RouteProgress = (function () {
 // One line of what the route is, from the LineString properties, plus
 // a badge that opens the validator's warnings.
 let _lastRouteProps = null, _lastNavWarns = null;
+// Whether the warnings list is open: the page's state, not the list element's, so a redraw of the strip (a set's
+// poll every 3 s, units, markers moved) and of its Itinerary copy keeps it; a route put on screen, or none, starts it
+// closed. Until 2026-11-07 every redraw closed it.
+let _warnListOpen = false;
+/** Open or close the warnings list, in the strip and its Itinerary copy alike. */
+function _setWarnListOpen(open) {
+  _warnListOpen = open;
+  document.querySelectorAll('#rsWarnList, #itinSummary [data-rs="list"]').forEach(list => { /** @type {HTMLElement} */ (list).hidden = !open; });
+}
 // The final depth check (worker: depth_check on the LineString): one line, totals over the legs, in the user's units.
 function _depthCheckLine(dc) {
   if (!dc || !Array.isArray(dc.legs) || !dc.legs.length) return '';
@@ -1881,7 +1892,7 @@ function renderResultStrip(p, navWarns) {
   if (navWarns && navWarns.length) html += '<div class="rs-notes">' + navWarns.join(' · ') + '</div>';
   if (_routeStale) html += '<div class="rs-stale">Markers changed since this route was computed.</div>';
   if (warns.length) {
-    html += '<div class="rs-warnlist" id="rsWarnList" hidden>' + warns.map(w => {
+    html += '<div class="rs-warnlist" id="rsWarnList"' + (_warnListOpen ? '' : ' hidden') + '>' + warns.map(w => {
       if (typeof w !== 'object' || w === null) return '<div>' + String(w) + '</div>';
       const kind = _warningKind(w);
       const where = Array.isArray(w.to) ? ' at ' + w.to[1].toFixed(4) + ', ' + w.to[0].toFixed(4) : '';
@@ -1893,7 +1904,7 @@ function renderResultStrip(p, navWarns) {
   }
   el.innerHTML = html;
   const b = /** @type {HTMLElement} */ (el.querySelector('#rsBadge')), list = /** @type {HTMLElement} */ (el.querySelector('#rsWarnList'));
-  if (b && list) b.onclick = () => { list.hidden = !list.hidden; };
+  if (b && list) b.onclick = () => { _setWarnListOpen(!_warnListOpen); };
   const toSettings = () => { showTab('srvSettingsSection'); };
   const bb = /** @type {HTMLElement} */ (el.querySelector('#rsBeyond')), bl = /** @type {HTMLElement} */ (el.querySelector('#rsBeyondLink'));
   if (bb) bb.onclick = toSettings;
@@ -1912,7 +1923,7 @@ function renderResultStrip(p, navWarns) {
       .replace(/id="rsBeyond"/g, 'data-rs="beyond"').replace(/id="rsBeyondLink"/g, 'data-rs="beyond"');
     dst.classList.toggle('stale', src.classList.contains('stale'));
     const b = /** @type {HTMLElement} */ (dst.querySelector('[data-rs="badge"]')), list = /** @type {HTMLElement} */ (dst.querySelector('[data-rs="list"]'));
-    if (b && list) b.onclick = () => { list.hidden = !list.hidden; };
+    if (b && list) b.onclick = () => { _setWarnListOpen(!_warnListOpen); };
     /** @type {NodeListOf<HTMLElement>} */ (dst.querySelectorAll('[data-rs="beyond"]')).forEach(e => { e.onclick = () => { showTab('srvSettingsSection'); }; });
   };
   new MutationObserver(copy).observe(src, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
@@ -1949,6 +1960,7 @@ function showModal() {
   _clearRouteTime();
   const nameInput = /** @type {HTMLInputElement} */ (document.getElementById('routeNameInput'));
   if (nameInput) nameInput.value = '';
+  _warnListOpen = false;
   renderResultStrip(null);
   // The set of the route before leaves the screen with it (a new request, Find Route, also cancels it).
   _ensGone(false);

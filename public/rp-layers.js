@@ -5,6 +5,9 @@
 
 import { _apiError, _apiErrorText, _fmt, API, authFetch, AuthGate, fmtPressure, fmtWhen, forecastWaiting, fromClockInput, KT_MS, MOTOR_COLOR, olStroke, ROUTE_STYLE, TACK_COLOR, tackSide, UNIT_MISSING, unitDesc } from './rp-core.js';
 
+// The colours of a pressure centre: a high and a low, on the isobar layer and in its legend alike.
+const PRESSURE_CENTRE_COLOR = { high: '#1565C0', low: '#C62828' };
+
 // --- Marker features and route sources (drawn by the layers below, placed by rp-plan.js) ---
 // --- Marker features ---
 export const startFeature = new ol.Feature({ name: 'start' });
@@ -176,8 +179,10 @@ export const routeLayer = new ol.layer.Vector({
         const windToRad = ((windDir + 180) % 360) * Math.PI / 180;
         const offsetRad = windDir * Math.PI / 180;
         const windSvg = '<svg width="16" height="28" viewBox="0 0 16 28" xmlns="http://www.w3.org/2000/svg">' +
-          '<rect x="6" y="10" width="4" height="18" fill="%231565C0"/>' +
-          '<path d="M8,0 L1,12 L8,9 L15,12 Z" fill="%231565C0"/>' +
+          // The colour as written (ROUTE_STYLE.wind), escaped once with the rest below: until 2026-11-07 it was written
+          // escaped (%23) and escaped again, which no browser reads as a colour, and the arrows drew black.
+          '<rect x="6" y="10" width="4" height="18" fill="' + ROUTE_STYLE.wind + '"/>' +
+          '<path d="M8,0 L1,12 L8,9 L15,12 Z" fill="' + ROUTE_STYLE.wind + '"/>' +
           '</svg>';
         styles.push(new ol.style.Style({
           image: new ol.style.Icon({
@@ -1537,7 +1542,7 @@ const pressureLayer = new ol.layer.Vector({
     }
     if (p.kind === 'high' || p.kind === 'low') {
       const isHigh = p.kind === 'high';
-      const color = isHigh ? '#1565C0' : '#C62828';
+      const color = isHigh ? PRESSURE_CENTRE_COLOR.high : PRESSURE_CENTRE_COLOR.low;
       return [
         new ol.style.Style({
           text: new ol.style.Text({
@@ -2216,7 +2221,7 @@ function _routeLegendRow() {
   if (forecastEnd) item(_sym('<rect x="11" y="3" width="8" height="8" transform="rotate(45 15 7)" fill="' + ROUTE_STYLE.forecastEnd.fill + '" stroke="' + ROUTE_STYLE.forecastEnd.stroke + '" stroke-width="1.5"/>'), 'forecast ends');
   if (marks) item(_ringSym(TACK_COLOR.starboard), 'waypoint, in its next leg\'s colour; the arrow is the heading');
   if (arrival) item(_ringSym(ROUTE_STYLE.arrival), 'arrival');
-  if (wind) item(_sym('<path d="M4,7 H22 M22,7 L16,3 M22,7 L16,11" stroke="#1565C0" stroke-width="2.5" fill="none"/>'), 'wind, pointing where it blows');
+  if (wind) item(_sym('<path d="M4,7 H22 M22,7 L16,3 M22,7 L16,11" stroke="' + ROUTE_STYLE.wind + '" stroke-width="2.5" fill="none"/>'), 'wind, pointing where it blows');
   if (snap) item(_styleSym(ROUTE_STYLE.snap), 'moved to the nearest water');
   const ac = ROUTE_STYLE.arrivalCircle;
   if (ringSource.getFeatures().length) item(_sym('<circle cx="15" cy="7" r="5.5" fill="' + ac.fill + '" stroke="' + ac.color + '" stroke-width="' + ac.width + '" stroke-dasharray="' + ac.dash.join(' ') + '"/>'), 'arrival circle (approximate waypoint)');
@@ -2280,7 +2285,7 @@ function updateLegends() {
     const scaled = _autoScaleStops.tide ? Object.assign({}, G.tide, { stops: _autoScaleStops.tide }) : G.tide;
     rows.push(_gradientRow(scaled) + '<div class="lg-note">scaled to the largest tide in the tiles loaded · relative to mean sea level, not chart datum · Copernicus Marine</div>' + '<div class="lg-note"><span style="display:inline-block;width:14px;height:9px;vertical-align:middle;margin-right:4px;border:1px solid #bbb;background:repeating-linear-gradient(135deg,rgba(96,96,96,.6) 0 1px,transparent 1px 5px);"></span>no model data: water narrower than the model grid (about ' + _fmt(9000, 'distance') + ')</div>' + _noteRow('tideToggle'));
   }
-  if (_on('pressureToggle')) rows.push('<div class="lg-row"><div class="lg-title">Pressure <span>(' + unitDesc('pressure').u + ')</span></div><div class="lg-note">isobars every ' + fmtPressure(400) + ' · bold every ' + fmtPressure(2000) + ' · <b style="color:#1565C0">H</b> / <b style="color:#C62828">L</b> centres</div>' + _noteRow('pressureToggle') + '</div>');
+  if (_on('pressureToggle')) rows.push('<div class="lg-row"><div class="lg-title">Pressure <span>(' + unitDesc('pressure').u + ')</span></div><div class="lg-note">isobars every ' + fmtPressure(400) + ' · bold every ' + fmtPressure(2000) + ' · <b style="color:' + PRESSURE_CENTRE_COLOR.high + '">H</b> / <b style="color:' + PRESSURE_CENTRE_COLOR.low + '">L</b> centres</div>' + _noteRow('pressureToggle') + '</div>');
   box.innerHTML = rows.join('');
   _foldLegend(box, rows.length);
 }

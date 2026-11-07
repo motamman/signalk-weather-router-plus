@@ -1,8 +1,9 @@
 /**
  * The files the plugin keeps its records in: route jobs (plugin/jobs.ts), departure windows and ensemble sets
  * (plugin/jobseries.ts), one JSON file each in a folder of their own, and each ensemble's record of its cycle in use
- * (data/ensemble.ts). They are saved, removed and read back here, the one way for all of them. A failure is never thrown: it is returned, or reported through `log`, and what it means for the
- * record (its save_error, a file left as it is) is its owner's to say.
+ * (data/ensemble.ts). They are saved, removed and read back here, the one way for all of them. A failure is never
+ * thrown: it is returned, or reported through `log`, and what it means for the record (its save_error, a file left as
+ * it is) is its owner's to say.
  */
 
 import * as fs from 'node:fs';
@@ -12,12 +13,20 @@ import * as path from 'node:path';
  * Save `value` as `file`: written beside it and renamed over it, so a reader never sees half a file. Null when saved,
  * else why not; a partial copy left by the failed write is removed, or the answer also says why it could not be.
  * `indent`: for a file people read and edit by hand, the spaces per level, the file ending with a newline; absent,
- * one line.
+ * one line. A value with no JSON form (undefined, a function, a symbol: JSON.stringify gives undefined) or that JSON
+ * cannot write (a cycle, a BigInt: it throws) is not saved, and the file is left as it is.
  */
 export function saveJson(file: string, value: unknown, indent?: number): string | null {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(value, null, indent);
+  } catch (err) {
+    return `the value cannot be written as JSON (${(err as Error).message}); nothing written`;
+  }
+  if (typeof json !== 'string') return `the value (${typeof value}) has no JSON form; nothing written`;
   const tmp = `${file}.tmp`;
   try {
-    fs.writeFileSync(tmp, indent === undefined ? JSON.stringify(value) : `${JSON.stringify(value, null, indent)}\n`);
+    fs.writeFileSync(tmp, indent === undefined ? json : `${json}\n`);
     fs.renameSync(tmp, file);
     return null;
   } catch (err) {

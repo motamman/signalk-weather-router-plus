@@ -290,6 +290,8 @@ export const ROUTE_STYLE = {
   beyondDash: [10, 7],
   /** The ring and heading of the arrival (the last waypoint; the others take their next leg's colour). */
   arrival: '#88f',
+  /** The wind arrow at each route point, pointing where the wind blows (rp-layers.js routeLayer and the legend). */
+  wind: '#1565C0',
   /** Where the forecast runs out along the route: a diamond. */
   forecastEnd: { fill: '#f9a825', stroke: '#fff' },
   /** From a drawn point on land to the water it was moved to (rp-plan.js _drawSnapConnectors). */

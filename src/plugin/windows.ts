@@ -18,6 +18,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Job, JobManager, JobSeriesOf } from './jobs';
 import { Type, type Static } from 'typebox';
+import { Value } from 'typebox/value';
 import { RouteRequestSchema, validateRouteRequest } from './request_schema';
 import type { RouteRequest } from './protocol';
 import { DepartureMetricsSchema, finiteNum, JobSeries, type SeriesDeps, type SeriesItem } from './jobseries';
@@ -213,8 +214,13 @@ export class WindowManager extends JobSeries<DepartureWindow> {
     return w.departures;
   }
 
+  /**
+   * A saved file holds a window when it is one by the window's own schema (DepartureWindowSchema), every field the
+   * manager reads later included: one that is not (a hand edit, an older format) is left as it is and not restored
+   * (until 2026-11-07 only `id` and `departures` were checked).
+   */
   protected holds(v: unknown): v is DepartureWindow {
-    return !!v && typeof v === 'object' && !!(v as DepartureWindow).id && Array.isArray((v as DepartureWindow).departures);
+    return Value.Check(DepartureWindowSchema, v);
   }
 
   protected of(w: DepartureWindow): JobSeriesOf {

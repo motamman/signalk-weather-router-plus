@@ -116,6 +116,26 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The route's wind arrows are blue again, as the legend shows them.**
+  Their colour was written already escaped and then escaped again, which
+  no browser reads as a colour: the arrows drew black (checked in Chrome
+  154, 2026-11-07: the arrow's shaft read back as 0, 0, 0). The colour is
+  now written once (`ROUTE_STYLE.wind`) and the legend reads the same
+  one; so do the pressure layer's H and L centres and their legend.
+- **A saved set or window is checked against its own schema before it is
+  restored.** Only its id and its list of routes were checked, so a file
+  without the rest (a hand edit, an older format) was restored and then
+  failed every read of its owner's sets or windows. It is now left as it
+  is and reported, as an unreadable file is.
+- **The warnings list stays open while an ensemble set computes.** Each
+  poll of the set (every 3 s) redrew the route summary, and every redraw
+  closed the list, in the summary and in its Itinerary copy. Whether the
+  list is open is now the page's state: a redraw keeps it, and a route
+  put on screen starts it closed.
+- **A record with no JSON form is not saved over its file.** Saving a
+  value JSON cannot write (undefined, a function) with indentation wrote
+  the text "undefined" over the file, which then failed to load; it is
+  now refused, and the file left as it was.
 - **A server that answers "try again" cannot hold back the retry.** Its
   answer's body was read before the next attempt; with the timeout now
   ending when the server answers, a body that never came held the retry

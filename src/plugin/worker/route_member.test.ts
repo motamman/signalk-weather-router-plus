@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { memberRun, regionalWindApplies } from './route';
+import { memberRun, regionalWindApplies, routeUsesForecast } from './route';
+import type { RouteRequest } from '../protocol';
 import type { WorkerState } from './state';
 import { RouteError } from '../../engine/errors';
 import { ENSEMBLE_DECODED_DIR, pinEnsembleCycle } from '../../data/ensemble';
@@ -67,4 +68,13 @@ test('regional wind is layered only for a route on the main forecast that does n
   assert.equal(regionalWindApplies({}), true);
   assert.equal(regionalWindApplies({ wind_model: 'ecmwf' }), false);
   assert.equal(regionalWindApplies({ forecast_member: { model: 'ifs-ens', member: 1 } }), false);
+});
+
+test('a route reads the forecast unless it asks for calm wind; a motor route reads it too (its limits and comfort weight)', () => {
+  const sail: RouteRequest = { start: { lat: 41, lon: -71 }, end: { lat: 41.1, lon: -71.1 } };
+  const motor: RouteRequest = { ...sail, mode: 'motor' };
+  assert.equal(routeUsesForecast(sail), true);
+  assert.equal(routeUsesForecast(motor), true);
+  assert.equal(routeUsesForecast({ ...sail, no_forecast: true }), false);
+  assert.equal(routeUsesForecast({ ...motor, no_forecast: true }), false);
 });

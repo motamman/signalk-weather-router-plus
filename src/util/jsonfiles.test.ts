@@ -92,3 +92,25 @@ test('loadJsonFiles: the records, and each folder or file that cannot be read, o
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('saveJson: a value with no JSON form is not saved, the file left as it is, compact or indented', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jsonfiles-'));
+  try {
+    const file = path.join(dir, 'a.json');
+    fs.writeFileSync(file, '{"id":"a"}');
+    for (const indent of [undefined, 2])
+      for (const value of [undefined, () => 1, Symbol('s')] as unknown[]) {
+        assert.match(saveJson(file, value, indent) ?? '', /^the value \((undefined|function|symbol)\) has no JSON form; nothing written$/);
+        assert.equal(fs.readFileSync(file, 'utf8'), '{"id":"a"}');
+      }
+    // One JSON cannot write (it throws): said, never thrown.
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    for (const value of [cycle, { n: 1n }])
+      assert.match(saveJson(file, value, 2) ?? '', /^the value cannot be written as JSON \([\s\S]+\); nothing written$/);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{"id":"a"}');
+    assert.deepEqual(fs.readdirSync(dir), ['a.json'], 'no partial copy');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -12,6 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { Type, type Static } from 'typebox';
+import { Value } from 'typebox/value';
 import type { Job, JobManager, JobSeriesOf } from './jobs';
 import type { RouteRequest } from './protocol';
 import { RouteRequestSchema, validateRouteRequest, ENSEMBLE_MEMBERS_RANGE } from './request_schema';
@@ -243,8 +244,13 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
     if (why) this.setDeps.log(`ensemble set ${s.id}: its pin could not be removed (${why}); its run stays until the next start`);
   }
 
+  /**
+   * A saved file holds a set when it is one by the set's own schema (EnsembleSetSchema), every field the manager reads
+   * later included: one that is not (a hand edit, an older format) is left as it is and not restored, rather than
+   * restored and failing every read of its owner's sets (until 2026-11-07 only `id` and `members` were checked).
+   */
   protected holds(v: unknown): v is EnsembleSet {
-    return !!v && typeof v === 'object' && !!(v as EnsembleSet).id && Array.isArray((v as EnsembleSet).members);
+    return Value.Check(EnsembleSetSchema, v);
   }
 
   protected of(s: EnsembleSet): JobSeriesOf {

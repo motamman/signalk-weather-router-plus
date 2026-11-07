@@ -301,6 +301,11 @@ test('a set file that cannot be read at start-up is reported and left as it is; 
   try {
     fs.mkdirSync(store, { recursive: true });
     fs.writeFileSync(path.join(store, 'broken.json'), '{"id": "broken", "memb');
+    // Its id and list, but none of the rest the manager reads later (its request): not one, by its schema.
+    fs.writeFileSync(
+      path.join(store, 'norequest.json'),
+      JSON.stringify({ id: 'norequest', status: 'done', created_at: '2026-11-07T00:00:00.000Z', members: [] })
+    );
     fs.writeFileSync(path.join(store, 'other.json'), JSON.stringify({ hello: 'world' }));
     const logged: string[] = [];
     const jobs = new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`));
@@ -312,6 +317,10 @@ test('a set file that cannot be read at start-up is reported and left as it is; 
     );
     assert.ok(logged.some(m => /^ensemble set file broken\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
     assert.ok(logged.includes('ensemble set file other.json does not hold an ensemble set; left as it is, not restored'));
+    assert.ok(
+      logged.includes('ensemble set file norequest.json does not hold an ensemble set; left as it is, not restored'),
+      'one without its request'
+    );
     assert.ok(fs.existsSync(path.join(store, 'broken.json')), 'left as it is');
     // A finished set whose file is a folder now (on every OS, not one that is missing): deleted from the list, the
     // folder stays, and that is said.

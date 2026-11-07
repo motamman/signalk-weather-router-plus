@@ -133,3 +133,47 @@ test('a row without a route: its status in words (skipped too), the reason escap
   );
   assert.equal(cell('running', null), '<td colspan="5" style="text-align:left; white-space:normal;">computing…</td>');
 });
+
+test("the warnings list stays open when the strip is drawn again (a set's poll redraws it every 3 s)", () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../public/rp-plan.js'), 'utf8');
+  const from = source.indexOf('let _lastRouteProps = null');
+  const to = source.indexOf('// The same summary at the top of the Itinerary tab');
+  assert.ok(from > 0 && to > from, 'the slice of rp-plan.js is found');
+  // The strip's element, as much of the DOM as the strip uses: its list hidden as the drawn HTML says, until toggled.
+  const badge = { onclick: (): void => assert.fail('no badge handler set') };
+  const list = { hidden: true };
+  const strip = {
+    classList: { toggle: () => undefined },
+    set innerHTML(html: string) {
+      list.hidden = /id="rsWarnList" hidden/.test(html);
+    },
+    querySelector: (q: string) => (q === '#rsBadge' ? badge : q === '#rsWarnList' ? list : null),
+  };
+  const context = {
+    document: { getElementById: () => strip, querySelectorAll: () => [list] },
+    _routeStale: false,
+    fmtDist: String,
+    fmtTime: String,
+    fmtWhen: String,
+    fmtSwh: String,
+    _ensLine: () => '',
+    _warningKind: () => 'wind over the limit',
+    _warningDetail: () => '',
+    showTab: () => undefined,
+  };
+  const render = runInNewContext(`${source.slice(from, to)}\nrenderResultStrip`, context) as (p: object, navWarns: string[]) => void;
+  const route = {
+    total_distance_m: 1000,
+    total_time_s: 3600,
+    warnings: [{ violation: 'wind_over_limit', leg_index: 0, to: [-71, 41] }],
+  };
+  render(route, []);
+  assert.equal(list.hidden, true, 'closed at first');
+  badge.onclick();
+  assert.equal(list.hidden, false, 'opened with its badge');
+  render(route, []);
+  assert.equal(list.hidden, false, 'still open after the strip is drawn again');
+  badge.onclick();
+  render(route, []);
+  assert.equal(list.hidden, true, 'closed again, and kept closed');
+});
