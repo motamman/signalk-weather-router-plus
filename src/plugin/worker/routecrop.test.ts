@@ -87,3 +87,17 @@ test("a route's crop written as a run reads back, as the mesh process reads it, 
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("a crop whose write fails leaves no folder of the job's behind", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'routecrop-'));
+  try {
+    const root = path.join(tmp, ROUTE_CROP_DIR, 'a');
+    const crop = cropStore();
+    // A field of another grid in the second step: the writer refuses it mid-run (decoded.ts writeStep).
+    crop.steps[1].fields.set('swh', { ...cropField(9, false), nLat: 3, values: new Float32Array(3 * 41) });
+    assert.throws(() => writeCropRun(root, 'job-1', crop, 72), /has a different grid/);
+    assert.equal(fs.existsSync(path.join(root, 'job-1')), false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

@@ -277,6 +277,8 @@ test('after a pass, a cycle it completed whose record cannot be written stays on
 test('EnsemblePasses: one pass at a time; a start while one runs makes one more after it, the owner’s when any start was', async () => {
   const runs: { offline: string | null; user: boolean }[] = [];
   let changes = 0;
+  // The status goes out at the end of each pass (EnsemblePasses' `changed`): the test waits on that, not on time.
+  let passEnded = (): void => undefined;
   let release!: () => void;
   const gate = new Promise<void>(r => (release = r));
   const passes = new EnsemblePasses(
@@ -284,7 +286,10 @@ test('EnsemblePasses: one pass at a time; a start while one runs makes one more 
       runs.push({ offline, user: passes.userPass });
       if (runs.length === 1) await gate;
     },
-    () => changes++,
+    () => {
+      changes++;
+      passEnded();
+    },
     () => undefined
   );
   passes.start(null, () => null, false);
@@ -294,8 +299,13 @@ test('EnsemblePasses: one pass at a time; a start while one runs makes one more 
   passes.start(null, () => null, false);
   assert.equal(passes.userPass, true, "the owner's ask makes the pass under way theirs");
   assert.equal(runs.length, 1, 'one pass runs');
+  const twoEnded = new Promise<void>(resolve => {
+    passEnded = () => {
+      if (changes === 2) resolve();
+    };
+  });
   release();
-  for (let i = 0; i < 3; i++) await new Promise(r => setTimeout(r, 0));
+  await twoEnded;
   assert.deepEqual(runs, [
     { offline: null, user: false },
     { offline: null, user: true },
@@ -303,7 +313,6 @@ test('EnsemblePasses: one pass at a time; a start while one runs makes one more 
   assert.equal(passes.active, false);
   assert.equal(passes.userPass, false);
   assert.equal(changes, 2, 'the status went out at the end of each pass');
-  // Nothing asked during the second pass: no third.
-  await new Promise(r => setTimeout(r, 0));
+  // Nothing asked during the second pass: no third (one would have started as the second ended: active).
   assert.equal(runs.length, 2);
 });

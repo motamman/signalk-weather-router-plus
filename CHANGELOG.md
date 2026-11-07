@@ -116,6 +116,30 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A slow download is no longer cut off.** The data clients' per-attempt
+  timeout (60 s for the ECMWF and Zarr clients) ran until a download's
+  body had been read, so a download slower than that was aborted and
+  retried, and on a slow link could fail every time. The timeout now ends
+  when the server answers; the body is read to its end however long it
+  takes, and one that stops arriving is ended by Node's fetch itself, after
+  300 s of silence (measured on the test box, a Pi 5, node v24.22.1,
+  2026-11-07: 300.7 s).
+- **A failed removal of a route's forecast crop no longer fails the route.**
+  Between legs it threw out of the route; it is now logged, as at the
+  route's end, and the copy is removed at the worker's next start.
+- **A failed write leaves nothing behind.** A GRIB message whose write into
+  the cache failed partway (a full disk) left its partial copy in the
+  cycle's folder, and a route's forecast crop whose write failed left the
+  job's folder, empty or with a whole copy of the crop, until the worker
+  restarted. Both now remove what they wrote.
+- **An ensemble record keeps the members it names for its cycle.** Recording
+  the same cycle again with another member wanted rewrote the record with
+  the wanted members alone, so the others dropped out and the next prune
+  removed their runs, though sets started on that cycle may route on them.
+- **One status table and one cell for a row without a route.** The
+  ensemble set's table had its own copy of the departure window's status
+  words (without "skipped") and built its no-route cell itself; both
+  tables now use one.
 - **A long ocean leg has the currents' own cells along the route.** A leg's
   SMOC currents were loaded over the whole area its search can reach; on a
   long ocean leg that is too large for the model's 1/12° grid, so the

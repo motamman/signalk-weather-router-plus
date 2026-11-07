@@ -561,12 +561,21 @@ export async function route(
   const shouldCancel = (): boolean => Atomics.load(st.cancelFlag, 0) === 1;
   const progress = (stage: number, total: number, message: string): void => st.send({ type: 'progress', id, stage, total, message });
   // Before there is a decoded run: the route's crop written as one for the chart mesh process (routecrop.ts), with the
-  // crop it was written from; removed with the route's areas.
+  // crop it was written from; removed with the route's areas (between legs, and at the route's end).
   let cropRun: { from: ForecastStore; run: DecodedRun } | null = null;
   const dropCropRun = (): void => {
     if (!cropRun) return;
     cropRun = null;
-    removeCropRun(st.cropRoot, id);
+    try {
+      removeCropRun(st.cropRoot, id);
+    } catch (err) {
+      // What a failed removal means: the copy stays on disk until the worker's next start removes it (clearCropRuns);
+      // the route has its forecast in memory and goes on.
+      st.log(
+        'error',
+        `job ${id}: the route's forecast crop for the chart mesh could not be removed (${(err as Error).message}); the worker's next start removes it`
+      );
+    }
   };
   try {
     validateRequest(request);
@@ -1220,12 +1229,7 @@ export async function route(
     }
     for (const s2 of st.routeRegional) releaseWindow(st, s2);
     st.routeRegional = [];
-    try {
-      dropCropRun();
-    } catch (err) {
-      // The route has already ended (its result or error is sent); a crop left behind is removed at the worker's next start.
-      st.log('error', `job ${id}: the route's forecast crop for the chart mesh could not be removed (${(err as Error).message})`);
-    }
+    dropCropRun();
     if (st.smoc) st.smoc.trimOnDemand(0);
     rebuildStack(st);
     releaseMemory();

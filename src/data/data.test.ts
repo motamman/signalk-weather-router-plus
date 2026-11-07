@@ -306,39 +306,53 @@ test('EcmwfClient retries 429 with backoff, honours Retry-After, then falls back
   assert.equal(client.baseUrl, 'https://secondary'); // sticks for the session
 });
 
-test('EcmwfClient: a download whose body never ends is a timed-out attempt, retried and then failed, never a wait without end', async () => {
-  let calls = 0;
-  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
-    calls++;
-    const signal = init?.signal;
-    // The headers at once, a body that never ends: only the attempt's own abort ends the read.
-    const body = new ReadableStream({
-      start(c) {
-        signal?.addEventListener('abort', () => c.error(new DOMException('the attempt timed out', 'AbortError')), { once: true });
-      },
-    });
-    return new Response(body, { status: 206 });
-  }) as unknown as typeof fetch;
-  const client = new EcmwfClient({
-    baseUrl: 'https://x',
-    fallbackUrls: [],
-    cacheDir: tmpDir(),
-    timeoutMs: 20,
-    retries: 2,
-    fetchImpl,
-    sleepImpl: async () => undefined,
-  });
+test('EcmwfClient: a download slower than the timeout that keeps arriving is read whole; one fetch ends is retried, then failed', async () => {
   const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
-  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 4 };
-  const outcome = await Promise.race([
-    client.fetchField(cycle, 'oper', 0, '10u', [rec]).then(
-      () => 'answered',
-      (e: Error) => `failed: ${e.name}`
-    ),
-    new Promise<string>(r => setTimeout(r, 3000, 'still waiting after 3 s').unref()),
-  ]);
-  assert.equal(outcome, 'failed: AbortError');
-  assert.equal(calls, 2, 'every attempt timed out and was retried');
+  const whole = gribShell(64);
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 64 };
+  const client = (fetchImpl: typeof fetch) =>
+    new EcmwfClient({
+      baseUrl: 'https://x',
+      fallbackUrls: [],
+      cacheDir: tmpDir(),
+      timeoutMs: 20,
+      retries: 2,
+      fetchImpl,
+      sleepImpl: async () => undefined,
+    });
+  // The headers at once, then the body in four pieces 15 ms apart: 60 ms in all, three times the 20 ms timeout. As fetch
+  // does, the request's signal aborting ends the body.
+  const slow = (async (_url: string | URL | Request, init?: RequestInit) =>
+    new Response(
+      new ReadableStream({
+        async start(c) {
+          init?.signal?.addEventListener('abort', () => c.error(new DOMException('aborted', 'AbortError')), { once: true });
+          for (let k = 0; k < 4 && !init?.signal?.aborted; k++) {
+            await new Promise(r => setTimeout(r, 15));
+            if (!init?.signal?.aborted) c.enqueue(whole.subarray(k * 16, (k + 1) * 16));
+          }
+          if (!init?.signal?.aborted) c.close();
+        },
+      }),
+      { status: 206 }
+    )) as unknown as typeof fetch;
+  assert.deepEqual(await client(slow).fetchField(cycle, 'oper', 0, '10u', [rec]), whole, 'read to its end');
+  // A body that stops arriving: fetch ends it (undici's body timeout, http.ts), and the attempt is retried.
+  let calls = 0;
+  const ended = (async () => {
+    calls++;
+    return new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(whole.subarray(0, 16));
+          setTimeout(() => c.error(Object.assign(new TypeError('terminated'), { cause: { code: 'UND_ERR_BODY_TIMEOUT' } })), 5);
+        },
+      }),
+      { status: 206 }
+    );
+  }) as unknown as typeof fetch;
+  await assert.rejects(client(ended).fetchField(cycle, 'oper', 0, '10u', [rec]), /terminated/);
+  assert.equal(calls, 2, 'retried as a failed connection, then failed');
 });
 
 test('EcmwfClient does not retry 404 and reports it', async () => {
@@ -456,6 +470,31 @@ test('a fetched message whose rename into the cache fails fails the fetch, unles
   } finally {
     rename.mock.restore();
   }
+});
+
+test('a fetched message whose write into the cache fails (a full disk) fails the fetch and leaves no partial copy', async () => {
+  const dir = tmpDir();
+  const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
+  const whole = gribShell(64);
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 64 };
+  const fetchImpl = (async (url: string | URL | Request) =>
+    String(url).endsWith('.index')
+      ? new Response(`${JSON.stringify(rec)}\n`, { status: 200 })
+      : new Response(whole, { status: 206 })) as unknown as typeof fetch;
+  const client = new EcmwfClient({ baseUrl: 'https://x', fallbackUrls: [], cacheDir: dir, fetchImpl, sleepImpl: async () => undefined });
+  const f = client.cachePath(cycle, 'oper', 0, '10u');
+  const write = nodeFs.writeFileSync;
+  // The temporary copy cut short by a full disk: part of it written, then the error.
+  const full = mock.method(nodeFs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: Uint8Array) => {
+    write(file, data.subarray(0, 10));
+    throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  });
+  try {
+    await assert.rejects(client.fetchField(cycle, 'oper', 0, '10u'), /ENOSPC/);
+  } finally {
+    full.mock.restore();
+  }
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), [], 'no partial copy left, and no message cached');
 });
 
 test('buildStep converts tprate from kg m⁻² s⁻¹ to a depth rate in m/s at ingestion', () => {

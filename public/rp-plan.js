@@ -2843,6 +2843,17 @@ function _ensCorridor() {
 }
 /** A table cell's number in the user's unit (`ud`: unitDesc), or — when there is none or the unit is not known (Best departure's and the ensemble's tables). */
 function _unitCell(v, ud) { return v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p); }
+/** A route job's status in words, for a row without a route (Best departure's and the ensemble's tables). */
+const _JOB_STATUS_TEXT = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled', skipped: 'skipped' };
+/**
+ * The cell across the five number columns of a row without a route (Best departure's and the ensemble's tables): its
+ * status in words and, when given, why. It wraps: on one line (the tables' cells do not wrap) a long reason set the
+ * width of the number columns, and pushed their headers and every other row's numbers out of view.
+ */
+function _noRouteCell(status, why) {
+  return '<td colspan="5" style="text-align:left; white-space:normal;">' + escapeHtml(_JOB_STATUS_TEXT[status] || status)
+    + (why ? ': ' + escapeHtml(unitText(why)) : '') + '</td>';
+}
 /** A member's name in the table: "control" for member 0, else "member N". */
 function _ensWho(m) { return m.member === 0 ? 'control' : 'member ' + m.member; }
 /** The result strip's line: how far the set is, and the arrivals of the members' routes. */
@@ -2870,18 +2881,13 @@ function _ensRender() {
   const was = el.querySelector('details');
   const open = was ? /** @type {HTMLDetailsElement} */ (was).open : true;
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
-  const STATUS = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled' };
   // The main forecast's route first, so it can be opened again after a member's.
   const main = set.main ? [{ ...set.main, who: 'main forecast' }] : [];
   const rows = main.concat(set.members).map(m => {
     const opened = m.job_id && m.job_id === _currentRouteJobId ? ' class="win-open"' : '';
     const who = m.who || _ensWho(m);
-    if (!m.metrics) {
-      // A failed row's message wraps in its cell: on one line (the table's cells do not wrap) it set the width of the
-      // five number columns, and pushed their headers and every other row's numbers out of view.
-      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + who + '</td><td colspan="5" style="text-align:left; white-space:normal;">'
-        + escapeHtml(STATUS[m.status] || m.status) + (m.error && m.status === 'failed' ? ': ' + escapeHtml(unitText(m.error)) : '') + '</td></tr>';
-    }
+    if (!m.metrics)
+      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + who + '</td>' + _noRouteCell(m.status, m.status === 'failed' ? m.error : null) + '</tr>';
     const x = m.metrics;
     return '<tr data-job="' + escapeHtml(m.job_id) + '" style="cursor:pointer;"' + opened + ' title="Click to open this member\'s route">'
       + '<td>' + (m.who ? '<b>' + who + '</b>' : who) + '</td><td title="' + escapeHtml(fmtWhen(x.arrival)) + '">' + escapeHtml(_winWhen(x.arrival)) + '</td>'
@@ -4277,7 +4283,6 @@ const _WIN_SORTS = {
   waves:    { label: 'smallest highest waves', key: m => (m.max_swh_m == null ? Infinity : m.max_swh_m) },
   upwind:   { label: 'least time close-hauled', key: m => m.upwind_time_s },
 };
-const _WIN_STATUS_TEXT = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled', skipped: 'skipped' };
 // (Its state is declared with the route state at the top: markRouteStale and _clearRoute reach it from start-up code.)
 
 // The window on screen belongs to a route that is gone (Reset, a new Find Route, another saved route opened): it leaves
@@ -4460,9 +4465,7 @@ function _winRender() {
     const cls = [m ? 'win-row' : 'win-off', i === best ? 'win-best' : '', d.job_id && d.job_id === _winOpenJob ? 'win-open' : ''].filter(Boolean).join(' ');
     const lead = (i === best ? '★ ' : '') + '<span title="' + escapeHtml(fmtWhen(d.departure)) + '">' + escapeHtml(_winWhen(d.departure)) + '</span>';
     if (!m) {
-      // A failed row's message wraps in its cell: on one line (the table's cells do not wrap) it set the width of the
-      // five number columns, and pushed their headers and every other row's numbers out of view.
-      html += '<tr class="' + cls + '" title="' + escapeHtml(d.error || '') + '"><td>' + lead + '</td><td colspan="5" style="text-align:left; white-space:normal;">' + escapeHtml(_WIN_STATUS_TEXT[d.status] || d.status) + (d.error && d.status !== 'cancelled' ? ': ' + escapeHtml(unitText(d.error)) : '') + '</td></tr>';
+      html += '<tr class="' + cls + '" title="' + escapeHtml(d.error || '') + '"><td>' + lead + '</td>' + _noRouteCell(d.status, d.status !== 'cancelled' ? d.error : null) + '</tr>';
       return;
     }
     html += '<tr class="' + cls + '" data-job="' + escapeHtml(d.job_id) + '" title="Arrives ' + escapeHtml(fmtWhen(m.arrival)) + '. Click to open this departure’s route' + (m.beyond_forecast ? ' (arrives after the forecast ends: its last legs ran on conditions held at the last step)' : '') + '">'

@@ -31,7 +31,11 @@ export function writeCropRun(root: string, jobId: string, crop: ForecastStore, h
       decodeMs: 0,
     });
   } catch (err) {
+    // The job's folder goes too: a write that failed before the run was renamed into it leaves it empty, one that failed
+    // after (finish's last fsync) a whole copy of the crop; neither is the route's yet (meshForecast keeps only a run
+    // this returns).
     writer.abort();
+    removeCropRun(root, jobId);
     throw err;
   }
   const { run, problem } = openDecodedRun(writer.finalDir);

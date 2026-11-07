@@ -115,3 +115,21 @@ test('an answer for a screen that has ended changes nothing; a set gone from the
   assert.equal(s.counts.cleared, cleared + 1, 'its routes leave the map');
   assert.ok(s.logs.some(m => /set-2 is gone from the server/.test(m)));
 });
+
+test('a row without a route: its status in words (skipped too), the reason escaped, wrapping across the number columns', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../public/rp-plan.js'), 'utf8');
+  const from = source.indexOf("/** A route job's status in words");
+  const to = source.indexOf("/** A member's name in the table");
+  assert.ok(from > 0 && to > from, 'the slice of rp-plan.js is found');
+  const escapeHtml = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const cell = runInNewContext(`${source.slice(from, to)}\n_noRouteCell`, { escapeHtml, unitText: (s: string) => s }) as (
+    status: string,
+    why: string | null
+  ) => string;
+  assert.equal(cell('skipped', null), '<td colspan="5" style="text-align:left; white-space:normal;">skipped</td>');
+  assert.equal(
+    cell('failed', 'no <water> path'),
+    '<td colspan="5" style="text-align:left; white-space:normal;">no route: no &lt;water&gt; path</td>'
+  );
+  assert.equal(cell('running', null), '<td colspan="5" style="text-align:left; white-space:normal;">computing…</td>');
+});

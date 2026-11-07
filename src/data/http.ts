@@ -4,8 +4,16 @@
  * exponential backoff 2, 4, 8, 16, 32 s capped at a minute with up to
  * 0.5 s of jitter, `Retry-After` honoured, retried only on 408 / 429 / 5xx
  * and network errors; 404 / 403 and other answers are returned as they are.
- * With `readBody` the body is read while the timer is still armed, so a
- * stalled download is retried like a failed connection.
+ * The timeout is for the server's answer: the timer stops when the headers
+ * arrive. With `readBody` the body is then read inside the attempt, so a
+ * body that fails is retried like a failed connection; a download that is
+ * slow but arriving is read to its end, however long it takes, and one
+ * that stops arriving is ended by fetch itself (undici's body timeout:
+ * a body silent for 300 s, measured on the plugin's test box, a Pi 5,
+ * node v24.22.1, 2026-11-07: UND_ERR_BODY_TIMEOUT after 300.7 s). Until
+ * 2026-11-07 the timer ran until the body had been read, so a download
+ * slower than the timeout (60 s for the ECMWF and Zarr clients) was cut
+ * off and retried, and on a slow link could never finish.
  *
  * No connection at all (no name resolves, no route to any network, the
  * interface is down) is not retried: it throws an OfflineError at once,
@@ -74,7 +82,7 @@ export interface RetryOptions {
   tag?: string;
   /** The error class for a retriable HTTP status, when a client has its own. */
   makeError?: (message: string) => Error;
-  /** Read the body inside the attempt (under the timeout); false: the caller reads it. */
+  /** Read the body inside the attempt (after the headers; a failed read is retried); false: the caller reads it. */
   readBody?: boolean;
 }
 
@@ -98,7 +106,7 @@ export function parseRetryAfterMs(value: string | null, now = Date.now()): numbe
   return null;
 }
 
-/** The body of an answer, read whole (inside the attempt, under its timeout). */
+/** The body of an answer, read whole (inside the attempt, once its headers have arrived). */
 const readAll = async (res: Response): Promise<Uint8Array> => new Uint8Array(await res.arrayBuffer());
 
 /** A request with the retry policy above; its body read inside the attempt when `readBody` is set, else null. */
@@ -134,6 +142,8 @@ async function attempts<B extends Uint8Array | null>(
     let retryAfterMs: number | null = null;
     try {
       const res = await fetchImpl(url, { ...init, signal: ctrl.signal });
+      // The server answered: the timeout is spent. The body takes as long as it arrives (the file comment).
+      clearTimeout(timer);
       networkObserver?.('ok', null);
       const retriable = res.status === 408 || res.status === 429 || res.status >= 500;
       if (!retriable) {

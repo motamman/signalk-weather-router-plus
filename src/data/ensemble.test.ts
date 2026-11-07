@@ -44,6 +44,9 @@ test('ensembleInUse: the record as it is on disk now: none, its cycle and member
     const t2 = new Date(Date.UTC(2026, 10, 6, 12));
     assert.equal(recordEnsembleCycle(root, 'ifs-ens', t2, [1, 2, 3, 4], 72), null);
     assert.deepEqual(ensembleInUse(root, 'ifs-ens'), { cycle: t2.toISOString(), members: [1, 2, 3, 4] });
+    // The same cycle again with another member wanted: the members recorded stay with it.
+    assert.equal(recordEnsembleCycle(root, 'ifs-ens', t2, [1, 2, 6], 72), null);
+    assert.deepEqual(ensembleInUse(root, 'ifs-ens'), { cycle: t2.toISOString(), members: [1, 2, 3, 4, 6] });
     fs.writeFileSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json'), '{"model": "ifs-ens"');
     const bad = ensembleInUse(root, 'ifs-ens');
     assert.ok(bad && 'problem' in bad && /^current\.json is not JSON: /.test(bad.problem), JSON.stringify(bad));

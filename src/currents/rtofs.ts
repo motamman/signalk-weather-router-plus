@@ -279,8 +279,8 @@ export class RtofsClient {
   }
 
   /**
-   * Fetch with timeout and retries. The body is read here, while the
-   * abort timer is still armed, so a stalled download or a body-read
+   * Fetch with timeout and retries. The body is read inside the attempt
+   * (data/http.ts: after the headers, the timeout spent), so a body-read
    * failure is retried like a failed connection.
    */
   private async request(url: string, init: RequestInit = {}): Promise<{ status: number; body: Uint8Array }> {

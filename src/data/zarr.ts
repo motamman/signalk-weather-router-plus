@@ -6,8 +6,8 @@
  * decoded to Float32Array / Float64Array in C order with the fill value
  * mapped to NaN.
  *
- * HTTP follows the plugin's other clients: per-request timeout (the
- * body is read while the timer is armed), up to `retries` attempts with
+ * HTTP follows the plugin's other clients: per-request timeout for the
+ * server's answer (data/http.ts), up to `retries` attempts with
  * exponential backoff 2, 4, 8 … s (capped at 60 s), `Retry-After`
  * honoured on 429/503, retries only on 408/429/5xx and network errors;
  * 404/403 are returned to the caller (a missing chunk is legal in Zarr:

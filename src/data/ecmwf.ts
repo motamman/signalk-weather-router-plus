@@ -310,14 +310,15 @@ export function isGribFile(p: string): boolean {
 /**
  * A fetched message into the GRIB cache at `cached`, through a temporary file renamed into place. The temporary name
  * is unique per writer: the data worker and the route worker (first boot, no decoded run yet) can fetch the same field
- * at once, and threads share a pid. A rename that fails takes its temporary file with it; one that fails because
- * another writer put the same message in place meanwhile has that as its answer.
+ * at once, and threads share a pid. A write or rename that fails takes its temporary file with it (a write cut short,
+ * by a full disk, left it in the cycle's folder until it was pruned); one that fails because another writer put the
+ * same message in place meanwhile has that as its answer.
  */
 function writeCached(cached: string, msg: Uint8Array): void {
   fs.mkdirSync(path.dirname(cached), { recursive: true });
   const tmp = `${cached}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  fs.writeFileSync(tmp, msg);
   try {
+    fs.writeFileSync(tmp, msg);
     fs.renameSync(tmp, cached);
   } catch (err) {
     fs.rmSync(tmp, { force: true });
@@ -372,13 +373,10 @@ export class EcmwfClient {
    * network errors. When a mirror is exhausted the next mirror takes
    * over for the rest of the session. 404/403 are returned as-is. No
    * connection at all (OfflineError) is thrown at once, mirrors untried.
-   * The body is read inside the attempt, under its timeout (http.ts
-   * fetchBodyWithRetry): a download that stalls is a timed-out attempt, retried and
-   * failed over like a dead connection, so no request of this client
-   * waits without end (until 2026-11-07 the callers read the body after
-   * the attempt had returned, outside any timeout, and the ensemble
-   * child, which has no deadline of its own, could hang on one stalled
-   * message).
+   * The body is read inside the attempt (http.ts fetchBodyWithRetry: after
+   * the headers), so a failed read is retried and failed over like a dead
+   * connection; a download that stops arriving is ended by fetch's own
+   * body timeout (http.ts), so no request of this client waits without end.
    */
   private async request(pathSuffix: string, init: RequestInit = {}): Promise<{ status: number; body: Uint8Array }> {
     let lastErr: unknown;

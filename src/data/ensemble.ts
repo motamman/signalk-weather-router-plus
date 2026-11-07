@@ -354,12 +354,16 @@ export function recordEnsembleCycle(
 ): string | null {
   const cycle = cycleName(cycleTime);
   const cur = readEnsembleCurrent(cacheRoot, model);
-  if (cur && cur.cycle === cycle && cur.horizonHours === horizonHours && wanted.every(n => cur.members.includes(n))) return null;
+  const same = cur !== null && cur.cycle === cycle && cur.horizonHours === horizonHours;
+  if (same && wanted.every(n => cur.members.includes(n))) return null;
+  // The same cycle and horizon: the members already recorded stay with the new ones (sets started on this cycle may be
+  // routing on them; prune keeps what the record names). Another cycle or horizon: the wanted members alone.
+  const members = same ? [...new Set([...cur.members, ...wanted])].sort((a, b) => a - b) : wanted;
   const record: EnsembleCurrent = {
     model,
     cycle,
     cycleTimeMs: cycleTime.getTime(),
-    members: wanted,
+    members,
     horizonHours,
     at: new Date().toISOString(),
   };
