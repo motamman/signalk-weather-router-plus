@@ -1,7 +1,7 @@
 import { mock, test } from 'node:test';
 import { HOUR_S } from '../geo/units';
 import assert from 'node:assert/strict';
-import { availableSteps, cycleFor, ENSEMBLE_MEMBER_CHOICES, ENSEMBLES } from './ecmwf';
+import { availableSteps, cycleFor, ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MEMBER_MAX, ENSEMBLES } from './ecmwf';
 import { buildStep, cropField, nanFillLimited, sampleField, ForecastStore, type FieldGrid } from './forecast';
 import type { Grib2Grid, Grib2Message } from '../grib/grib2';
 
@@ -19,7 +19,7 @@ test('cycle naming and stream selection', () => {
   assert.equal(c06.maxStep, 144);
 });
 
-test('the ensemble member choices are in fives up to the members each model has', () => {
+test('the ensemble member choices are in fives up to the members each model has; the highest member number is theirs', () => {
   assert.deepEqual(
     Object.values(ENSEMBLES).map(m => [m.id, m.members]),
     [
@@ -28,6 +28,7 @@ test('the ensemble member choices are in fives up to the members each model has'
     ]
   );
   assert.deepEqual([...ENSEMBLE_MEMBER_CHOICES], [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]);
+  assert.equal(ENSEMBLE_MEMBER_MAX, 50, 'the highest member number: every schema and the record check read it');
 });
 
 test('published step lists', () => {

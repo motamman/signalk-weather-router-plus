@@ -108,6 +108,9 @@ export const ENSEMBLE_PARAMS = { enfo: ['10u', '10v'], waef: ['swh', 'mwp', 'mwd
  */
 export const ENSEMBLE_OPTIONAL_PARAMS = { enfo: [], waef: ['mp2'] } as const;
 
+/** The highest member number of any ensemble (its members are numbered 1 to this, 0 is the control): ENSEMBLES. */
+export const ENSEMBLE_MEMBER_MAX = Math.max(...Object.values(ENSEMBLES).map(m => m.members));
+
 /** The number of members a setting may ask for: in fives, up to the fewest members a model has (ENSEMBLES). */
 export const ENSEMBLE_MEMBER_CHOICES: readonly number[] = Array.from(
   { length: Math.floor(Math.min(...Object.values(ENSEMBLES).map(m => m.members)) / 5) },

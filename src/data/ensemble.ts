@@ -26,7 +26,7 @@ import {
   type Cycle,
   cycleFor,
   type EcmwfClient,
-  ENSEMBLE_MEMBER_CHOICES,
+  ENSEMBLE_MEMBER_MAX,
   ENSEMBLE_OPTIONAL_PARAMS,
   ENSEMBLE_PARAMS,
   ENSEMBLES,
@@ -282,8 +282,7 @@ function currentRecordProblem(c: unknown, model: EnsembleModelId): string | null
   if (r.model !== model) return `model ${String(r.model)}`;
   if (typeof r.cycle !== 'string' || !/^\d{10}$/.test(r.cycle)) return `cycle ${String(r.cycle)}`;
   if (typeof r.cycleTimeMs !== 'number' || !Number.isFinite(r.cycleTimeMs)) return `cycleTimeMs ${String(r.cycleTimeMs)}`;
-  const most = ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1];
-  if (!Array.isArray(r.members) || !r.members.every(m => Number.isInteger(m) && m >= 0 && m <= most))
+  if (!Array.isArray(r.members) || !r.members.every(m => Number.isInteger(m) && m >= 0 && m <= ENSEMBLE_MEMBER_MAX))
     return `members ${JSON.stringify(r.members)}`;
   if (typeof r.horizonHours !== 'number' || !Number.isFinite(r.horizonHours)) return `horizonHours ${String(r.horizonHours)}`;
   if (typeof r.at !== 'string') return `at ${String(r.at)}`;

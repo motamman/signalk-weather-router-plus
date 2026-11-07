@@ -116,6 +116,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A route on an ensemble member whose record cannot be read says so.**
+  The check answered "not downloaded" while an ensemble set on the same
+  ensemble was told what is wrong with its record; both now read the
+  record one way and say the same.
+- **Find Route cancels an ensemble set it replaces before the set's first
+  answer.** A set whose state the page did not know yet (its first poll
+  not answered, or its polls failing) was left computing on the server,
+  its members queued ahead of the new route.
+- **The wind and wave limit hints say what an empty limit does.** They
+  said "no limit"; an empty limit uses the server's own, when it has one.
 - **The route legend draws each mark as the map does.** The legend typed
   its own copy of every route layer's colours and dashes, and three had
   drifted: the line from a point on land to its water (dashed 4 4 in the

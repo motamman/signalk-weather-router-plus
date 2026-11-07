@@ -295,7 +295,7 @@ test('a list limit that is not a whole number from 1 is refused, not read as the
   assert.deepEqual(asked, [50, 500, 7]);
 });
 
-test('a route or a departure window on an ensemble member is refused (400) unless that ensemble and member are on disk', async () => {
+test('a route or a departure window on an ensemble member is refused (400) unless that ensemble and member are on disk; a record that cannot be read is said', async () => {
   const submitted: unknown[] = [];
   const created: unknown[] = [];
   const call = api(
@@ -310,12 +310,16 @@ test('a route or a departure window on an ensemble member is refused (400) unles
       create: (b: unknown) => (created.push(b), { id: 'w1', status: 'running', departures: [{}] }),
       links: () => ({ self: '/x/api/windows/w1' }),
     },
-    { ensembles: () => [{ model: 'ifs-ens', name: 'ECMWF IFS ENS', members: [1, 2, 3] }] }
+    {
+      // IFS ENS on disk; AIFS ENS's record cannot be read (ensembleNow's answer for a record that is there but bad).
+      ensemble: (m: string) =>
+        m === 'ifs-ens' ? { cycle: '2026-11-02T00:00:00.000Z', members: [1, 2, 3] } : { problem: 'current.json: not valid JSON' },
+    }
   );
   const from = '2026-11-02T00:00:00.000Z';
   const to = '2026-11-02T12:00:00.000Z';
   for (const [fm, error] of [
-    [{ model: 'aifs-ens', member: 0 }, 'aifs-ens is not downloaded (plugin config: Ensemble downloads)'],
+    [{ model: 'aifs-ens', member: 0 }, 'ECMWF AIFS ENS: current.json: not valid JSON'],
     [{ model: 'ifs-ens', member: 9 }, 'ECMWF IFS ENS member 9 is not on disk'],
   ] as const) {
     const r = await call('POST /api/routes', { body: { ...ROUTE, forecast_member: fm } });
@@ -330,6 +334,13 @@ test('a route or a departure window on an ensemble member is refused (400) unles
   assert.equal((await call('POST /api/routes', { body: { ...ROUTE, forecast_member: fm } })).status, 202);
   assert.equal((await call('POST /api/windows', { body: { route: { ...ROUTE, forecast_member: fm }, from, to } })).status, 202);
   assert.equal(submitted.length + created.length, 2);
+  // Not chosen, or not on disk at all: not downloaded.
+  const off = api({ queueLength: 0, submit: () => assert.fail('nothing queued'), links: () => ({}) }, os.tmpdir(), undefined, {
+    ensemble: () => null,
+  });
+  const r = await off('POST /api/routes', { body: { ...ROUTE, forecast_member: { model: 'aifs-ens', member: 0 } } });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.error, 'forecast_member: aifs-ens is not downloaded (plugin config: Ensemble downloads)');
 });
 
 test('ensemble sets: create (400 off disk, 429 at the limit), list (a bad limit 400), get, cancel, and delete only once stopped', async () => {

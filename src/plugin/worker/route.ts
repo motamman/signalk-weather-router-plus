@@ -346,9 +346,7 @@ export function meshLegRunner(
           arriving: a.arriving ?? null,
           forecast: run ? { runDir: run.dir, area: expandBBox(bbox, ROUTE_FORECAST_MARGIN_DEG), params: ROUTE_PARAMS } : null,
           regional:
-            run && request.wind_model !== 'ecmwf' && !request.forecast_member
-              ? { root: path.join(st.cacheRoot, REGIONAL_DIR), globalDLon: run.index.grid.dLon }
-              : null,
+            run && regionalWindApplies(request) ? { root: path.join(st.cacheRoot, REGIONAL_DIR), globalDLon: run.index.grid.dLon } : null,
           currents: request.no_currents
             ? null
             : {
@@ -509,6 +507,15 @@ export function meshLegRunner(
       }
     },
   };
+}
+
+/**
+ * Whether a route layers the regional wind runs over ECMWF, in this worker (loadRegional) and in the chart mesh process
+ * alike (meshLegRunner): not when it asks for ECMWF's wind alone (wind_model ecmwf), nor on an ensemble member, whose
+ * wind is never layered with another model's.
+ */
+export function regionalWindApplies(request: Pick<RouteRequest, 'wind_model' | 'forecast_member'>): boolean {
+  return request.wind_model !== 'ecmwf' && !request.forecast_member;
 }
 
 /** The request as the API validated it; a job that slipped past (another caller) is refused the same way. */
@@ -837,7 +844,7 @@ export async function route(
      */
     const loadRegional = async (area: BBox, what: string): Promise<RegionalWind[]> => {
       // An ensemble member's wind is never layered with another model's.
-      if (request.wind_model === 'ecmwf' || member) return [];
+      if (!regionalWindApplies(request)) return [];
       const out: RegionalWind[] = [];
       for (const r of regionalRunsFor(
         path.join(st.cacheRoot, REGIONAL_DIR),

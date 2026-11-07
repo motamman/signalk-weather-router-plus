@@ -46,7 +46,7 @@ function screen() {
     clearTimeout: () => undefined,
   };
   // The page's own state (rp-plan.js), declared as it is there.
-  const code = `let _ens = null;\nlet _ensTimer = null;\nlet _ensScreen = { ended: false, cancel: false, pollFailing: false };\n${source.slice(from, to)}
+  const code = `let _ens = null;\nlet _ensTimer = null;\nlet _ensScreen = { ended: false, cancel: false, pollFailing: false, setId: null };\n${source.slice(from, to)}
 ({ start: _ensStart, poll: _ensPoll, gone: _ensGone, ens: () => _ens, current: () => _ensScreen })`;
   const api = runInNewContext(code, context) as {
     start: (route: object, want: { model: string; members: number }, main: string) => void;
@@ -76,6 +76,20 @@ test('a set whose screen ended before it started is cancelled once when Find Rou
     assert.equal(cancels.length, cancel ? 1 : 0, `cancel ${cancel}`);
     assert.equal(s.calls.filter(c => c.url === '/api/ensemble-sets/set-1').length, 0, 'an ended screen does not follow the set');
   }
+});
+
+test('Find Route cancels a set it follows whose first poll has not answered yet; a set that finished is not cancelled', async () => {
+  const s = screen();
+  s.poll('set-9', s.current());
+  s.gone(true);
+  assert.equal(s.calls.filter(c => c.url.endsWith('/ensemble-sets/set-9/cancel')).length, 1, 'cancelled though its state is not known yet');
+  // A set shown as done: nothing to cancel.
+  const d = screen();
+  d.poll('set-8', d.current());
+  d.calls[0].answer(answer(200, { id: 'set-8', status: 'done', members: [] }));
+  await settle();
+  d.gone(true);
+  assert.equal(d.calls.filter(c => c.url.endsWith('/cancel')).length, 0);
 });
 
 test('an answer for a screen that has ended changes nothing; a set gone from the server leaves the screen', async () => {

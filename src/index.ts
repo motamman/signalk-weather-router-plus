@@ -38,7 +38,7 @@ import { jobNotification } from './plugin/jobnotify';
 import { JobManager, type Job } from './plugin/jobs';
 import { windowNotification, WindowManager, type DepartureWindow } from './plugin/windows';
 import { EnsembleSetManager } from './plugin/ensembles';
-import { ENSEMBLES, type EnsembleModelId } from './data/ecmwf';
+import type { EnsembleModelId } from './data/ecmwf';
 import { ensembleInUse } from './data/ensemble';
 import { registerApi } from './plugin/api';
 import { ENSEMBLE_MEMBERS_RANGE } from './plugin/request_schema';
@@ -188,14 +188,6 @@ export = function plugin(app: SkApp): SignalKPlugin {
     if (!config || !config.forecast.ensemble || !config.forecast.ensemble.models.includes(model)) return null;
     return ensembleInUse(app.getDataDirPath(), model);
   }
-  /** The chosen ensembles a route can run on now (ensembleNow): each with a cycle in use and members on disk. */
-  const ensemblesOnDisk = (): { model: EnsembleModelId; name: string; cycle: string; members: number[] }[] => {
-    if (!config || !config.forecast.ensemble) return [];
-    return config.forecast.ensemble.models.flatMap(model => {
-      const e = ensembleNow(model);
-      return e && !('problem' in e) && e.members.length ? [{ model, name: ENSEMBLES[model].name, cycle: e.cycle, members: e.members }] : [];
-    });
-  };
   /** The route worker's own current sources (its SMOC on-demand areas and memory). */
   let routeCurrents: DataStatus['currents'] | null = null;
   let refreshTimer: NodeJS.Timeout | null = null;
@@ -1607,8 +1599,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
       query,
       tiles: () => tiles,
       regionalRuns: () => (dataStatus?.regional ?? []).map(r => ({ name: r.source, cycle: r.cycle })),
-      /** Each chosen ensemble's record on disk (ensembleNow): its cycle in use and its members. */
-      ensembles: ensemblesOnDisk,
+      /** Each chosen ensemble's record on disk (ensembleNow): its cycle in use and its members, or why it cannot be read. */
+      ensemble: ensembleNow,
       chartGroups: () => charts.groups(),
       chartRows: () => charts.chartRows(),
       downloadCoastline: () => coast.requestDownload(),

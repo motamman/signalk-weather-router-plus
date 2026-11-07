@@ -53,6 +53,7 @@ import { ACTIVE_POLAR_TOKEN, managedDiagram, type ManagedPolar } from './managed
 import * as fs from 'node:fs';
 import { MAX_ROUTE_REQUEST_BYTES, validateRouteRequest } from './request_schema';
 import { NotStartedError } from './errors';
+import { ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
 import { FIELD_LAYERS, isFieldLayer } from './layers';
 import { HOUR_MS } from '../geo/units';
 import * as path from 'node:path';
@@ -143,8 +144,11 @@ export interface ApiDeps {
   sharedPrefs: SharedPrefsStore;
   /** True when Signal K runs with security off (no users, no application data). */
   securityOff: () => boolean;
-  /** The ensembles a route can run on now: each downloaded model and its member numbers on disk (empty when off). */
-  ensembles: () => { model: string; name: string; members: number[] }[];
+  /**
+   * An ensemble a route can run on now, as its record on disk says (index.ts ensembleNow, the same answer an ensemble
+   * set gets): its cycle in use and members, the problem with its record, or null when it is not chosen or not on disk.
+   */
+  ensemble: (model: EnsembleModelId) => { cycle: string; members: number[] } | { problem: string } | null;
   /** Validate, persist and apply a partial settings update. */
   updateSettings: (partial: unknown) => {
     values: AppSettings;
@@ -768,13 +772,19 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
    */
   const badMember = (res: Response, fm: RouteRequest['forecast_member'], field: string): boolean => {
     if (!fm) return false;
-    const have = deps.ensembles().find(e => e.model === fm.model);
+    const have = deps.ensemble(fm.model);
+    const name = ENSEMBLES[fm.model].name;
     if (!have) {
       json(res, 400, { error: `${field}: ${fm.model} is not downloaded (plugin config: Ensemble downloads)` });
       return true;
     }
+    // Its record cannot be read: said as it is, as an ensemble set is told (ensembles.ts create), not "not downloaded".
+    if ('problem' in have) {
+      json(res, 400, { error: `${field}: ${name}: ${have.problem}` });
+      return true;
+    }
     if (!have.members.includes(fm.member)) {
-      json(res, 400, { error: `${field}: ${have.name} member ${fm.member} is not on disk` });
+      json(res, 400, { error: `${field}: ${name} member ${fm.member} is not on disk` });
       return true;
     }
     return false;

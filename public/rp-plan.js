@@ -46,7 +46,8 @@ let _ensTimer = null;
 // The set's place on the screen, and every request made for it: a set being started, polled, its lines fetched, a
 // route's set looked up, a member's route opened. Each request holds the screen it was asked for, and acts only while
 // that screen has not ended. _ensGone ends it, saying whether the set is to be cancelled; a new screen takes its place.
-let _ensScreen = { ended: false, cancel: false, pollFailing: false };
+// `setId`: the set the screen follows, from its first poll on (before any poll has answered, _ens is still null).
+let _ensScreen = { ended: false, cancel: false, pollFailing: false, setId: null };
 
 let _activeReplanES = null;
 function closeReplanStream() { if (_activeReplanES) { try { _activeReplanES.close(); } catch (_) {} _activeReplanES = null; } }
@@ -2707,6 +2708,7 @@ function _ensStart(route, want, mainJobId) {
 }
 /** Follow set `id` on `screen` (_ensScreen) while that screen lasts. */
 function _ensPoll(id, screen) {
+  screen.setId = id;
   clearTimeout(_ensTimer);
   authFetch(API + '/ensemble-sets/' + encodeURIComponent(id), { cache: 'no-store' }, 'ensemble-set')
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status })))))
@@ -2741,11 +2743,14 @@ function _ensCancel(id) {
 }
 /** The set leaves the screen; `cancel`: a set still computing, or one still being started, is cancelled on the server too. */
 function _ensGone(cancel) {
+  // The set to cancel: a running one as its last poll said, or, before any poll has answered (or while they fail), the
+  // one the screen follows; a cancel of a set that has finished meanwhile changes nothing on the server (202).
+  const id = _ens ? (_ens.status === 'running' ? _ens.id : null) : _ensScreen.setId;
   _ensScreen.ended = true;
   _ensScreen.cancel = cancel;
-  _ensScreen = { ended: false, cancel: false, pollFailing: false };
+  _ensScreen = { ended: false, cancel: false, pollFailing: false, setId: null };
   clearTimeout(_ensTimer);
-  if (cancel && _ens && _ens.status === 'running') _ensCancel(_ens.id);
+  if (cancel && id) _ensCancel(id);
   _ens = null;
   _ensSource.clear();
   _ensCorridorSource.clear();

@@ -16,7 +16,7 @@ import type { Job, JobManager, JobSeriesOf } from './jobs';
 import type { RouteRequest } from './protocol';
 import { RouteRequestSchema, validateRouteRequest, ENSEMBLE_MEMBERS_RANGE } from './request_schema';
 import { DepartureMetricsSchema, departureMetrics, JobSeries, type SeriesDeps, type SeriesItem } from './jobseries';
-import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
+import { ENSEMBLE_MEMBER_MAX, ENSEMBLE_MODELS, type EnsembleModelId, ENSEMBLES } from '../data/ecmwf';
 import { cycleName } from '../data/decoded';
 import { clearEnsemblePins, pinEnsembleCycle, unpinEnsembleCycle } from '../data/ensemble';
 
@@ -60,7 +60,7 @@ export type MemberStatus = Static<typeof MemberStatusSchema>;
 export const SetMemberSchema = Type.Object({
   member: Type.Integer({
     minimum: 0,
-    maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+    maximum: ENSEMBLE_MEMBER_MAX,
     description: '0 = the control',
   }),
   job_id: Type.Union([Type.String(), Type.Null()]),
@@ -127,7 +127,7 @@ export const EnsembleSetCreatedSchema = Type.Object({
 });
 export type EnsembleSetCreated = Static<typeof EnsembleSetCreatedSchema>;
 
-/** Why a set request is not acceptable, or null (what is on disk is checked by the API: membersOnDisk). */
+/** Why a set request is not acceptable, or null (what is on disk is checked when the set is made: EnsembleSetManager.create). */
 export function validateEnsembleSetRequest(b: unknown): string | null {
   if (!b || typeof b !== 'object' || Array.isArray(b)) return 'JSON body required: {route: {start, end, …}, model, members}';
   const r = b as Partial<EnsembleSetRequest>;

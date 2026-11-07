@@ -16,16 +16,13 @@ import { ROUTER_KINDS } from '../engine/router';
 import { SEARCH_PRESETS } from '../engine/search/presets';
 import { SETTINGS_SPEC } from './settings';
 import { AIR_DRAFT_M_RANGE, DRAUGHT_M_RANGE, OVERHEAD_M_RANGE, UKC_M_RANGE } from '../vessel/vessel';
-import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS } from '../data/ecmwf';
+import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MEMBER_MAX, ENSEMBLE_MODELS } from '../data/ecmwf';
 
 /**
  * The fewest and most members an ensemble set routes (ensembles.ts): the most is the most members downloaded plus a
  * control (AIFS ENS has one, IFS ENS none). The members on disk bound it further (api.ts).
  */
-export const ENSEMBLE_MEMBERS_RANGE = [
-  ENSEMBLE_MEMBER_CHOICES[0],
-  ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1] + 1,
-] as const;
+export const ENSEMBLE_MEMBERS_RANGE = [ENSEMBLE_MEMBER_CHOICES[0], ENSEMBLE_MEMBER_MAX + 1] as const;
 
 /** The range a setting allows, for a request field that overrides it. */
 function settingRange(key: string): { minimum: number; maximum: number } {
@@ -230,7 +227,7 @@ const FORECAST_MEMBER_FIELDS = {
   model: Type.Enum(ENSEMBLE_MODELS, { type: 'string', description: 'The ensemble (downloaded: plugin config Ensemble downloads)' }),
   member: Type.Integer({
     minimum: 0,
-    maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+    maximum: ENSEMBLE_MEMBER_MAX,
     description: 'The member (0 = the control, where the ensemble has one), on disk in its cycle in use',
   }),
   cycle: Type.Optional(
