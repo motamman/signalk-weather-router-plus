@@ -277,6 +277,29 @@ export class LandMask implements LandTest {
   }
 
   /**
+   * A mask of land from rasters of cells: `base` over its box, and `patches` finer inside it, the finest answering
+   * first (isLand, legCrossesRaster), as this mask's own patches do. Each patch must start on a base cell's west and
+   * south edges and have a cell size the base's is a whole multiple of, so it covers whole base cells (the walk of a
+   * move descends into a patch by the base cell's centre, pieceHitsRaster); a patch may end short of a base cell only
+   * where the base's last cell runs past the data (its east or north edge). Throws otherwise. No polygons: the exact
+   * tests answer from the rasters. The chart meshes' area (mesh/area.ts) is made so.
+   */
+  static fromCellMasks(base: CellMask, patches: CellMask[]): LandMask {
+    const m = new LandMask([], base.bbox, base.resolutionDeg, base.cells, { nx: base.nx, ny: base.ny });
+    for (const p of patches) {
+      const k = base.resolutionDeg / p.resolutionDeg;
+      const dx = lonOffsetFromWest(base.bbox, p.bbox.west) / base.resolutionDeg;
+      const dy = (p.bbox.south - base.bbox.south) / base.resolutionDeg;
+      const whole = (v: number): boolean => Math.abs(v - Math.round(v)) < 1e-6;
+      if (!whole(k) || !whole(dx) || !whole(dy))
+        throw new Error(`LandMask.fromCellMasks: a patch at ${p.resolutionDeg}° is not aligned to the base's ${base.resolutionDeg}° cells`);
+      m.patches.push({ bbox: p.bbox, resolutionDeg: p.resolutionDeg, nx: p.nx, ny: p.ny, raster: p.cells });
+    }
+    m.patches.sort((a, b) => a.resolutionDeg - b.resolutionDeg);
+    return m;
+  }
+
+  /**
    * This mask keeping `bufferM` metres from land: a new mask over the
    * same polygons whose raster is the base raster grown by the buffer
    * (every cell within it of a land cell is land; a local patch made
@@ -1004,24 +1027,21 @@ export class LandMask implements LandTest {
   }
 
   /**
-   * This mask with the cells of `extra` set to 1 answering as land too (part 5: the chart mesh's water, which the
-   * coastline search must not enter; a cell is the mesh's when a mesh triangle holds its centre). The four checks
-   * the router makes, and the room along a bearing, say "land" in such a cell or for a move through one (the cells a
-   * move passes are walked exactly). A view over this mask, as withAvoid.
+   * This mask with `extra` answering as land too: a raster of land beside the coast's (a cell mask through
+   * cellMaskLand: the chart meshes' water, part 5, which the coastline search must not enter; or another LandMask,
+   * whose own base and patches answer finest first, as this one's do). The four checks the router makes, and the room
+   * along a bearing, say "land" where `extra` does or for a move through it (the cells a move passes are walked
+   * exactly, by `extra`'s own walk). A view over this mask, as withAvoid.
    */
-  withExtraLand(extra: CellMask): LandMask {
+  withExtraLand(extra: ExtraLand): LandMask {
     const view = Object.create(this) as LandMask;
-    const at = (lon: number, lat: number): boolean => {
-      const c = cellOf(extra, lon, lat);
-      return c >= 0 && extra.cells[c] === 1;
-    };
-    view.isLand = (lon: number, lat: number): boolean => this.isLand(lon, lat) || at(lon, lat);
-    view.isLandExact = (lon: number, lat: number): boolean => this.isLandExact(lon, lat) || at(lon, lat);
+    view.isLand = (lon: number, lat: number): boolean => this.isLand(lon, lat) || extra.isLand(lon, lat);
+    view.isLandExact = (lon: number, lat: number): boolean => this.isLandExact(lon, lat) || extra.isLand(lon, lat);
     view.legCrossesLandExact = (lonA: number, latA: number, lonB: number, latB: number): boolean =>
-      this.legCrossesLandExact(lonA, latA, lonB, latB) || moveMeetsCells(extra, lonA, latA, lonB, latB);
+      this.legCrossesLandExact(lonA, latA, lonB, latB) || extra.legCrossesRaster(lonA, latA, lonB, latB);
     view.legsCrossLandBulk = (lonsA, latsA, lonsB, latsB): Uint8Array => {
       const out = this.legsCrossLandBulk(lonsA, latsA, lonsB, latsB);
-      for (let k = 0; k < out.length; k++) if (!out[k] && moveMeetsCells(extra, lonsA[k], latsA[k], lonsB[k], latsB[k])) out[k] = 1;
+      for (let k = 0; k < out.length; k++) if (!out[k] && extra.legCrossesRaster(lonsA[k], latsA[k], lonsB[k], latsB[k])) out[k] = 1;
       return out;
     };
     return view;
@@ -1212,6 +1232,26 @@ export interface CellMask {
   nx: number;
   ny: number;
   cells: Uint8Array;
+}
+
+/**
+ * Land added to a mask (LandMask.withExtraLand): the raster test of a point and the walk of a move's cells, as a
+ * LandMask answers them (its base raster and patches, finest first) or a cell mask does through cellMaskLand.
+ */
+export interface ExtraLand {
+  isLand(lon: number, lat: number): boolean;
+  legCrossesRaster(lonA: number, latA: number, lonB: number, latB: number): boolean;
+}
+
+/** A cell mask as extra land: a marked cell is land; outside the mask it says nothing (the mask that holds it answers). */
+export function cellMaskLand(m: CellMask): ExtraLand {
+  return {
+    isLand: (lon, lat) => {
+      const c = cellOf(m, lon, lat);
+      return c >= 0 && m.cells[c] === 1;
+    },
+    legCrossesRaster: (lonA, latA, lonB, latB) => moveMeetsCells(m, lonA, latA, lonB, latB),
+  };
 }
 
 /** The cell of a position in a cell mask, or -1 outside it. */

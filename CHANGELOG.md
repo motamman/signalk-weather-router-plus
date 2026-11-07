@@ -116,6 +116,23 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **An ensemble set is pinned to the cycle on disk when it is made.** The
+  set read the ensemble's cycle in use from the data worker's last status,
+  which is behind the record on disk from the moment a new cycle is
+  recorded until the next status; a set made then was pinned to the old
+  cycle, and every member of it failed as "no longer on disk" while the new
+  cycle was there. The set now reads the record itself (`current.json`, the
+  one the members' routes read), and a record that cannot be read refuses
+  the set with the record's own problem.
+- **Every chart mesh's water is land to the coastline search over the
+  whole world it searches.** The mask of charted water was built over the
+  leg's box alone (the route points plus a degree), while the search's
+  world is wider by the heading sweep's reach, so the charts of a mesh
+  further off were open water to the search, judged by the coastline
+  alone. The search's land now has the meshes' area over the whole world:
+  the triangles where the plan marked them, every mesh's tile extents
+  beyond (the mesh's own rule for the points it covers), the finer
+  answering first, as the land mask's own patches do.
 - **The OpenAPI document describes what `POST /api/windows` and
   `POST /api/ensemble-sets` answer.** Their 202 was a description only;
   it is a schema now (`WindowCreatedSchema`, `EnsembleSetCreatedSchema`:

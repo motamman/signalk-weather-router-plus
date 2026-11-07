@@ -336,11 +336,13 @@ async function chartsLeg(
     // No tag: the worker names the leg of a multi-leg route on every error (worker/route.ts legOne).
     throw new RouteError(`the chart mesh covers this leg but cannot take it: ${mr.refused}`);
   }
-  // Every mesh's water is land to the coastline search (a chain on the charts alone has no open stretch, no mask).
+  // Every mesh's water is land to the coastline search, over the whole world it searches (`b`, the leg's box widened
+  // to the sweep's reach): the triangles where the plan marked them, every mesh's extent beyond (mesh/area.ts). A chain
+  // on the charts alone has no open stretch, no mask.
   const mask = p.mask;
   const coastal: LegPipelineInputs = {
     ...inp,
-    landFor: (b, band) => (mask ? inp.landFor(b, band).withExtraLand(mask) : inp.landFor(b, band)),
+    landFor: (b, band) => (mask ? inp.landFor(b, band).withExtraLand(inp.mesh!.area(b, mask)) : inp.landFor(b, band)),
   };
   if (p.kind === 'open') return openWaterLeg(coastal, plan, legIndex, legStart, legDeparture, tag, null, false, arriving, box);
   const exactAt = (end: [number, number]): LegPlan => ({ ...plan, end, snapToExact: true, arrivalRadiusM: undefined });

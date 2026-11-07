@@ -56,6 +56,7 @@ import { avoidAt, type AvoidArea } from '../../geo/avoid';
 import type { WorkerState } from './state';
 import { MeshStore } from '../../engine/mesh/store';
 import { meshCovers, runTargets } from '../../engine/mesh/route';
+import { meshAreaLand } from '../../engine/mesh/area';
 import type { MeshLegArgs, MeshLegRunner, MeshRefusal } from '../../engine/mesh/leg';
 import type { MeshRules } from '../../engine/mesh/route';
 import { runChildTask } from '../childtask';
@@ -200,6 +201,14 @@ export function meshLegRunner(
   return {
     covers: points => meshFor(points) !== undefined,
     meets: box => stores.some(s => boxesMeet(s.store.index, box)),
+    // Every mesh's tiles, from the indexes (mesh/area.ts marks only those on the box); the cell budget is the land mask's.
+    area: (box, exact) =>
+      meshAreaLand(
+        stores.flatMap(s => s.store.index.tiles),
+        box,
+        exact,
+        cfg.routing.landRasterMaxCells
+      ),
     // A leg's way across the limits of the charts (part 5): in a child process (plugin/meshwaters.ts) holding every
     // mesh meeting the leg's area; their rough cuts and joins first when missing. Meshes go to the pipeline by folder.
     plan: async c => {

@@ -147,8 +147,14 @@ export function validateEnsembleSetRequest(b: unknown): string | null {
 }
 
 export interface EnsembleSetDeps extends SeriesDeps {
-  /** The cycle (ISO) and members on disk of an ensemble's cycle in use, or null when none is. */
-  onDisk: (model: EnsembleModelId) => { cycle: string; members: number[] } | null;
+  /**
+   * The cycle (ISO) and members on disk of an ensemble's cycle in use, read now from its record on disk (data/ensemble.ts
+   * ensembleCurrentFile, the one record of what is in use, which the members' routes read too: worker/route.ts
+   * memberRun); null when it has none; or what is wrong with the record. Until 2026-11-07 it was the data worker's
+   * last status, which is behind the record from the moment a new cycle is recorded until the next status: a set made
+   * then was pinned to the old cycle, and every member of it failed as "no longer on disk" (PR #7 review).
+   */
+  onDisk: (model: EnsembleModelId) => { cycle: string; members: number[] } | { problem: string } | null;
 }
 
 export class EnsembleSetManager extends JobSeries<EnsembleSet> {
@@ -176,13 +182,14 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
 
   /**
    * Start a set (the request validated by validateEnsembleSetRequest): the first `members` members on disk of the
-   * ensemble's cycle in use, the control first where there is one. Refused, with why, when the ensemble or that many
-   * members are not on disk.
+   * ensemble's cycle in use, read now, the control first where there is one. Refused, with why, when the ensemble or
+   * that many members are not on disk, or its record cannot be read.
    */
   create(req: EnsembleSetRequest): { set: EnsembleSet } | { refused: string } {
     const disk = this.setDeps.onDisk(req.model);
     const name = ENSEMBLES[req.model].name;
     if (!disk) return { refused: `${name} is not on disk (plugin config: Ensemble downloads)` };
+    if ('problem' in disk) return { refused: `${name}: ${disk.problem}` };
     if (disk.members.length < req.members) return { refused: `${name} has ${disk.members.length} members on disk, ${req.members} asked` };
     const s: EnsembleSet = {
       id: randomUUID(),

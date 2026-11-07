@@ -39,6 +39,7 @@ import { JobManager, type Job } from './plugin/jobs';
 import { windowNotification, WindowManager, type DepartureWindow } from './plugin/windows';
 import { EnsembleSetManager } from './plugin/ensembles';
 import type { EnsembleModelId } from './data/ecmwf';
+import { ensembleCurrentFile } from './data/ensemble';
 import { registerApi } from './plugin/api';
 import { NotStartedError } from './plugin/errors';
 import { TileService, TileStore, tileGenerationKeys, tileGroup } from './plugin/tiles';
@@ -1370,10 +1371,18 @@ export = function plugin(app: SkApp): SignalKPlugin {
       dataDir,
       {
         cancelRunning: cancelRunningJob,
-        /** From the data worker's last status: the ensemble's cycle in use and its members on disk, or null. */
+        /**
+         * The ensemble's cycle in use and its members, read now from its record on disk (data/ensemble.ts), the
+         * record the members' routes read (worker/route.ts memberRun); never the data worker's last status, which
+         * is behind the record between a new cycle's recording and the next status. An ensemble not chosen in the
+         * config has none. The cycle is the record's time as the status writes it (worker/query.ts dataStatus).
+         */
         onDisk: model => {
-          const e = ensemblesOnDisk().find(x => x.model === model);
-          return e ? { cycle: e.cycle, members: e.members } : null;
+          const chosen = config?.forecast.ensemble;
+          if (!chosen || !chosen.models.includes(model)) return null;
+          const { current, problem } = ensembleCurrentFile(dataDir, model);
+          if (problem) return { problem };
+          return current ? { cycle: new Date(current.cycleTimeMs).toISOString(), members: [...current.members] } : null;
         },
         log: m => app.error(m),
       },

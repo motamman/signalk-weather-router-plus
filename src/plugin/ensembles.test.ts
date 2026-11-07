@@ -134,6 +134,27 @@ test('create refuses an ensemble not on disk, or more members than it has', () =
   });
 });
 
+test("create refuses with the record's own problem when the ensemble's record of its cycle in use cannot be read", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
+  try {
+    const sets = new EnsembleSetManager(
+      new JobManager(dir, 50, '/p', m => assert.fail(`unexpected log: ${m}`)),
+      dir,
+      {
+        cancelRunning: () => undefined,
+        onDisk: () => ({ problem: 'current.json is not JSON: Unexpected end of JSON input' }),
+        log: () => undefined,
+      },
+      '/p'
+    );
+    assert.deepEqual(sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 }), {
+      refused: 'ECMWF IFS ENS: current.json is not JSON: Unexpected end of JSON input',
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('cancel: members not started are cancelled, the running one is asked to stop', () => {
   const h = harness();
   const s = made(h.sets.create({ route: ROUTE, model: 'ifs-ens', members: 5 }));

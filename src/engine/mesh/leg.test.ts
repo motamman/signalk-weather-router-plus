@@ -20,6 +20,7 @@ import { collapseRuns, planLegs } from '../multileg';
 import { PolarDiagram } from '../../vessel/polar';
 import { runLegPipeline, type LegPipelineInputs } from '../pipeline';
 import { classifySegments, meshCorridor, type MeshLegRunner, meshRulesFor, routeFromMeshPath, stitchMeshSegments } from './leg';
+import { meshAreaLand } from './area';
 import { type MeshLegLand, runMeshLeg } from './legrun';
 import type { MeshRouteResult } from './route';
 import type { LegWind } from '../horizon';
@@ -93,6 +94,9 @@ function fakeMesh(result: MeshRouteResult, covers = true, env: FakeEnv = {}): { 
       meets: () => covers,
       // One mesh holds every leg these tests give it.
       plan: async () => ({ kind: 'one-mesh', mesh: 'the mesh' }),
+      area: () => {
+        throw new Error('not used by these tests: one mesh holds every leg');
+      },
       leg: async a => {
         calls.push({ start: a.legStart, end: a.plan.end, rules: a.rules });
         return runMeshLeg({
@@ -759,6 +763,8 @@ test("pipeline: a leg the charts' plan splits is planned stretch by stretch, on 
     covers: pts => pts.every(p => p[0] <= 0.5) || pts.every(p => p[0] >= 0.5),
     meets: () => true,
     plan,
+    // These meshes have no tiles: the plan's mask alone is the charts' area, as area.ts makes it from no extents.
+    area: (box, exact) => meshAreaLand([], box, exact, 25_000_000),
     leg: async a => {
       const path: [number, number][] = [a.legStart, a.plan.end];
       parts.push(path);

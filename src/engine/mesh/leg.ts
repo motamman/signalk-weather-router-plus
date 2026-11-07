@@ -23,7 +23,7 @@ import type { CorridorInput } from '../search/types';
 import { MAX_SCAN_M } from './width';
 import { enrichLegRanges, enrichWaypoints } from '../propagator';
 import { haversineBearing, haversineDistanceM, type BBox } from '../../geo/geodesy';
-import type { CellMask } from '../../geo/landmask';
+import type { CellMask, LandMask } from '../../geo/landmask';
 import { recomputePerWaypointMetadata, type Route, type RouteWarning, type Waypoint } from '../route';
 import { recomputeTotals } from '../smoother';
 import type { DrawbridgeChoice, MeshRules } from './route';
@@ -117,6 +117,11 @@ export interface MeshLegRunner {
   }): Promise<LegReach | MeshRefusal>;
   /** Whether any mesh meets the box (from the meshes' indexes alone). */
   meets(box: BBox): boolean;
+  /**
+   * The meshes' area as land for the coastline search over `box`, the search's whole world (mesh/area.ts): the tiles'
+   * extents over all of it, and `exact`, the triangles over the leg's box as `plan` marked them, where it covers.
+   */
+  area(box: BBox, exact: CellMask): LandMask;
   /**
    * A leg's way across the limits of the charts (part 5, engine/mesh/waters.ts), for the coastline search's land over
    * `box`: one mesh holds the leg (its id, for `leg`); or open water outside every mesh joins its ends; or the
