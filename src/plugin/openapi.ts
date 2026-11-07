@@ -5,8 +5,8 @@ import * as path from 'node:path';
 import { SETTINGS_GROUPS, SETTINGS_SPEC, type SettingSpec } from './settings';
 import { routeRequestSchema } from './request_schema';
 import { JobPublicSchema } from './response_schema';
-import { WindowPublicSchema, WindowRequestSchema } from './windows';
-import { EnsembleSetPublicSchema, EnsembleSetRequestSchema } from './ensembles';
+import { WindowCreatedSchema, WindowPublicSchema, WindowRequestSchema } from './windows';
+import { EnsembleSetCreatedSchema, EnsembleSetPublicSchema, EnsembleSetRequestSchema } from './ensembles';
 
 /** JSON schema of one setting's value (SI). */
 function settingValueSchema(s: SettingSpec): Record<string, unknown> {
@@ -751,7 +751,10 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           summary: 'Departure window: the route computed for a series of departures, one route job each, one at a time',
           requestBody: { required: true, content: { 'application/json': { schema: openApi30(WindowRequestSchema) } } },
           responses: {
-            202: { description: '{id, status: "running", departures, links}' },
+            202: {
+              description: 'The window started: its id, status, how many departures it has, and links; Location header = links.self',
+              content: { 'application/json': { schema: openApi30(WindowCreatedSchema) } },
+            },
             400: { description: '{error}' },
             413: { description: 'The request body is over 64 KB' },
             429: { description: 'Two windows are being computed already' },
@@ -804,7 +807,10 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
             "Ensemble set: the route computed on each member of an ensemble on disk (its own route search on that member's forecast), one route job each, one at a time",
           requestBody: { required: true, content: { 'application/json': { schema: openApi30(EnsembleSetRequestSchema) } } },
           responses: {
-            202: { description: '{id, status: "running", members, links}' },
+            202: {
+              description: 'The set started: its id, status, how many members it routes, and links; Location header = links.self',
+              content: { 'application/json': { schema: openApi30(EnsembleSetCreatedSchema) } },
+            },
             400: { description: '{error}: a bad request, or the ensemble or that many members not on disk' },
             413: { description: 'The request body is over 64 KB' },
             429: { description: 'Two sets are being computed already' },

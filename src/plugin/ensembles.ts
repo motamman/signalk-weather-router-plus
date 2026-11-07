@@ -88,6 +88,9 @@ export const EnsembleSetSchema = Type.Object({
 });
 export type EnsembleSet = Static<typeof EnsembleSetSchema>;
 
+/** A set's links (jobseries.ts links): itself, and its cancel. */
+export const EnsembleSetLinksSchema = Type.Object({ self: Type.String(), cancel: Type.String() });
+
 /** A set as the API answers it (EnsembleSetManager.toPublic): the member computing's last progress line, and links. */
 export const EnsembleSetPublicSchema = Type.Object({
   ...EnsembleSetSchema.properties,
@@ -106,9 +109,22 @@ export const EnsembleSetPublicSchema = Type.Object({
     }
   ),
   progress: Type.Union([Type.String(), Type.Null()]),
-  links: Type.Object({ self: Type.String(), cancel: Type.String() }),
+  links: EnsembleSetLinksSchema,
 });
 export type EnsembleSetPublic = Static<typeof EnsembleSetPublicSchema>;
+
+/**
+ * The answer to POST /api/ensemble-sets (202): the set started, by id, with how many members it routes and its links;
+ * the set itself is GET /api/ensemble-sets/{id} (EnsembleSetPublicSchema). The one shape the handler answers and the
+ * OpenAPI document describes.
+ */
+export const EnsembleSetCreatedSchema = Type.Object({
+  id: Type.String(),
+  status: EnsembleSetStatusSchema,
+  members: Type.Integer({ description: 'How many members the set routes' }),
+  links: EnsembleSetLinksSchema,
+});
+export type EnsembleSetCreated = Static<typeof EnsembleSetCreatedSchema>;
 
 /** Why a set request is not acceptable, or null (what is on disk is checked by the API: membersOnDisk). */
 export function validateEnsembleSetRequest(b: unknown): string | null {

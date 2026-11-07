@@ -251,6 +251,8 @@ export const DEFAULT_MIRROR: EcmwfMirror = 'ecmwf';
  * mp2: its figures stand.
  */
 export const ENSEMBLE_MEMBER_COST = {
+  /** The forecast horizon the figures are for (hours): every page that shows them names it, as a longer horizon costs more in proportion. */
+  horizonHours: 72,
   downloadBytes: { 'ifs-ens': 350_757_112 / 5 + 25 * 440_100, 'aifs-ens': 206_788_659 / 6 } satisfies Record<EnsembleModelId, number>,
   diskBytes: { 'ifs-ens': (519_126_603 * 6) / 5, 'aifs-ens': 269_947_987 } satisfies Record<EnsembleModelId, number>,
 };
@@ -258,7 +260,7 @@ export const ENSEMBLE_MEMBER_COST = {
 /** What the ensemble downloads cost and do, for the plugin config's schema and the configuration pages (configChoices). */
 export const ENSEMBLE_DOWNLOAD_NOTE =
   "Also download ECMWF ensembles, each cycle after the forecast (wind and waves, to the forecast's horizon), so Find Route " +
-  "can compute the route on each member's forecast as well: where each member's route goes and when it arrives. At 72 h, " +
+  `can compute the route on each member's forecast as well: where each member's route goes and when it arrives. At ${ENSEMBLE_MEMBER_COST.horizonHours} h, ` +
   `per member and cycle: an IFS ENS member about ${Math.round(ENSEMBLE_MEMBER_COST.downloadBytes['ifs-ens'] / 1e6)} MB downloaded and ` +
   `${Math.round(ENSEMBLE_MEMBER_COST.diskBytes['ifs-ens'] / 1e6)} MB on disk (arithmetic from the test box's measures with five fields, ` +
   "2026-11-05 and 2026-11-06, plus its sixth field, the wave period mp2, at the main forecast's measured message size), an AIFS ENS member about " +

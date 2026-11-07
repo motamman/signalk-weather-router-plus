@@ -59,11 +59,12 @@ import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import type { IRouter, Request, Response } from 'express';
 import { type JobManager, type Job } from './jobs';
-import { validateWindowRequest, WINDOW_LIMITS, type WindowManager, type WindowRequest } from './windows';
+import { validateWindowRequest, WINDOW_LIMITS, type WindowCreated, type WindowManager, type WindowRequest } from './windows';
 import {
   ENSEMBLE_SET_LIMITS,
   validateEnsembleSetRequest,
   type EnsembleSet,
+  type EnsembleSetCreated,
   type EnsembleSetManager,
   type EnsembleSetRequest,
 } from './ensembles';
@@ -1037,7 +1038,8 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     }
     const w = windows.create(req.body as WindowRequest);
     res.setHeader('Location', windows.links(w.id).self);
-    json(res, 202, { id: w.id, status: w.status, departures: w.departures.length, links: windows.links(w.id) });
+    const created: WindowCreated = { id: w.id, status: w.status, departures: w.departures.length, links: windows.links(w.id) };
+    json(res, 202, created);
   });
 
   ro.get('/api/windows', (req: Request, res: Response) => {
@@ -1110,7 +1112,8 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     }
     const s = made.set;
     res.setHeader('Location', sets.links(s.id).self);
-    json(res, 202, { id: s.id, status: s.status, members: s.members.length, links: sets.links(s.id) });
+    const created: EnsembleSetCreated = { id: s.id, status: s.status, members: s.members.length, links: sets.links(s.id) };
+    json(res, 202, created);
   });
 
   ro.get('/api/ensemble-sets', (req: Request, res: Response) => {

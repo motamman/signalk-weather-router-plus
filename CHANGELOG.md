@@ -116,6 +116,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The OpenAPI document describes what `POST /api/windows` and
+  `POST /api/ensemble-sets` answer.** Their 202 was a description only;
+  it is a schema now (`WindowCreatedSchema`, `EnsembleSetCreatedSchema`:
+  the id, status, the count of departures or members, and links), and
+  the handlers answer a value of that schema, so the document and the
+  answer cannot drift apart. The cost figures of the ensemble downloads
+  (plugin configuration) name the horizon they were measured at from the
+  one place that holds them (`ENSEMBLE_MEMBER_COST.horizonHours`).
 - **An ensemble cycle whose record cannot be written stays on disk.**
   When `current.json` could not be written for a cycle complete on disk,
   the prune kept only the cycle the old record named, so the complete
