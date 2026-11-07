@@ -7,7 +7,7 @@
  */
 
 import type { Worker } from 'node:worker_threads';
-import type { EcmwfClient } from '../../data/ecmwf';
+import type { EcmwfClient, EnsembleModelId } from '../../data/ecmwf';
 import type { ForecastStore } from '../../data/forecast';
 import type { DecodedRun } from '../../data/decoded';
 import type { LandMask } from '../../geo/landmask';
@@ -42,8 +42,11 @@ export interface WorkerState {
   lastDecode: DataStatus['lastDecode'];
   /** One-step block size while a decode runs. */
   decodingBlockBytes: number | null;
-  /** Bytes of the decoded runs and GRIB cache on disk, refreshed after each forecast check. */
-  diskBytes: { decoded: number; grib: number };
+  /**
+   * Bytes of the decoded runs and GRIB cache on disk, measured after each forecast check; null when not measured (not
+   * yet, or their folders could not be read: refreshDiskBytes reports why).
+   */
+  diskBytes: { decoded: number | null; grib: number | null };
   /** On-demand overlay land rasters (data / tiles worker). */
   overlayLand: OnDemandLand | null;
   polar: PolarDiagram | null;
@@ -102,6 +105,20 @@ export interface WorkerState {
   currentsUnread: string[];
   /** Kills the forecast decode child process (plugin stopped). */
   decodeAbort: AbortController | null;
+  /** Kills the ensemble download and decode child process (plugin stopped, a hold); null while none runs. */
+  ensembleAbort?: AbortController | null;
+  /** The ensembles' last pass (data worker, worker/forecast.ts refreshEnsembles): what it is doing, or why it could not. */
+  ensembles: Partial<
+    Record<
+      EnsembleModelId,
+      { loading: { cycle: string; done: number; total: number | null } | null; error: string | null; checkedAt: string | null }
+    >
+  >;
+  /**
+   * Each chosen ensemble's bytes on disk (decoded runs and GRIB cache): measured by refreshEnsembles at each round and
+   * after its pass and prunes, or once by the status for a model not measured yet (worker/forecast.ts ensembleBytesOf).
+   */
+  ensembleBytes?: Partial<Record<EnsembleModelId, number | null>>;
 }
 
 /** A request's finding about the connection: a server answered ('ok'), or there was no connection ('offline', why). */

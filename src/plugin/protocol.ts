@@ -20,6 +20,7 @@ import type { AvoidArea } from '../geo/avoid';
 import type { ResolvedConfig, SelfDesign } from './config';
 import type { BBox } from '../geo/geodesy';
 import type { DecodedIndex } from '../data/decoded';
+import type { EnsembleModelId } from '../data/ecmwf';
 import type { SerializedSmoc, SmocStatus } from '../currents/smoc';
 import type { SerializedRtofsSet } from '../currents/rtofs';
 import type { SerializedHarmonic } from '../currents/harmonic';
@@ -226,10 +227,10 @@ export interface DataStatus {
     /** Directory and bytes of the run in use. */
     decodedDir: string;
     decodedBytes: number;
-    /** Bytes of every decoded run kept on disk (keepCycles). */
-    decodedDiskBytes: number;
-    /** Bytes of the GRIB message cache. */
-    gribCacheBytes: number;
+    /** Bytes of every decoded run kept on disk (keepCycles); null when not measured (not yet, or the folder could not be read: the log says why). */
+    decodedDiskBytes: number | null;
+    /** Bytes of the GRIB message cache; null when not measured, as above. */
+    gribCacheBytes: number | null;
   } | null;
   /** Last streaming decode: time, the one-step block it reused, bytes written. */
   lastDecode: { at: string; cycle: string; ms: number; stepBlockBytes: number; writtenBytes: number; downloaded: number } | null;
@@ -262,6 +263,25 @@ export interface DataStatus {
   connectivity: Connectivity;
   /** Tidal-harmonic files that failed to load ("file: reason"). */
   harmonicErrors: string[];
+  /** The ensembles chosen in the plugin config (data/ensemble.ts), one entry each; empty when ensembles are off. */
+  ensembles: EnsembleStatus[];
+}
+
+/** One ensemble: the members in use for a route, and what its last pass did. */
+export interface EnsembleStatus {
+  model: EnsembleModelId;
+  name: string;
+  /** The cycle in use (ISO), null before the first complete pass. */
+  cycle: string | null;
+  /** Members on disk for that cycle (0 = the control). */
+  members: number[];
+  /** Bytes of this ensemble on disk (decoded runs and GRIB cache); null when its folders could not be read (the log says why). */
+  bytes: number | null;
+  /** A pass under way: the cycle, steps downloaded and members decoded of the total. */
+  loading: { cycle: string; done: number; total: number | null } | null;
+  /** Why the last pass could not get the cycle (held, offline, disk, a server error), or null. */
+  error: string | null;
+  checkedAt: string | null;
 }
 
 /** One regional source's decode state. */

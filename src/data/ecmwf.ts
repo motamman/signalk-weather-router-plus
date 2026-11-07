@@ -21,21 +21,93 @@ import { fetchWithRetry, isOffline, sleep } from './http';
 import { MINUTE_MS, HOUR_MS, HOUR_S } from '../geo/units';
 import * as path from 'node:path';
 
-export const ECMWF_MIRRORS: Record<string, string> = {
+/** The open-data mirrors, by the name the configuration chooses one with: the one list of them. */
+export const ECMWF_MIRRORS = {
   ecmwf: 'https://data.ecmwf.int/forecasts',
   aws: 'https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com',
   google: 'https://storage.googleapis.com/ecmwf-open-data',
+} as const;
+export type EcmwfMirror = keyof typeof ECMWF_MIRRORS;
+
+/** Each mirror's name for people (the configuration panel shows these). */
+export const ECMWF_MIRROR_LABELS: Record<EcmwfMirror, string> = {
+  ecmwf: 'ECMWF (data.ecmwf.int)',
+  aws: 'Amazon (AWS Open Data)',
+  google: 'Google Cloud',
 };
+
+/** True when `name` is a mirror's name (ECMWF_MIRRORS). */
+export function isEcmwfMirror(name: string): name is EcmwfMirror {
+  return Object.hasOwn(ECMWF_MIRRORS, name);
+}
 
 /** Parameters the router needs, by stream: a cycle or a decoded run without one of these is incomplete. */
 export const ATM_PARAMS = ['10u', '10v', 'msl'] as const;
 export const WAVE_PARAMS = ['swh', 'mwp', 'mwd'] as const;
 /**
- * Wave fields fetched and decoded when they can be, never required: the peak period (pp1d), kept beside the mean
- * because a polar's wave-correction table may be made for either (not read yet). A cycle cached, or a run decoded,
- * without them is complete, so an update never makes a boat that is offline throw away the forecast it has.
+ * Wave fields fetched and decoded when they can be, never required:
+ *  - mp2, the mean zero-crossing period Tm02: the period a polar's wave-correction table is read with
+ *    (vessel/wavecorrection.ts). ECMWF's mwp is the energy mean period Tm−1,0, longer than Tm01 or Tm02; open data has
+ *    no Tm01, so mp2 is the nearest to TimeZero's tables (SignalK/sailsconfiguration#13, 2026-11-04).
+ *  - pp1d, the peak period, kept for tables made for it (not read yet).
+ * A cycle cached, or a run decoded, without them is complete, so an update never makes a boat that is offline throw
+ * away the forecast it has.
  */
-export const OPTIONAL_WAVE_PARAMS = ['pp1d'] as const;
+export const OPTIONAL_WAVE_PARAMS = ['mp2', 'pp1d'] as const;
+
+/**
+ * The ECMWF ensembles the plugin can download, each on the same open-data server, grid (0.25°) and `.index` byte-range
+ * scheme as the main forecast (checked on data.ecmwf.int, 2026-11-05):
+ *  - IFS ENS (`ifs/0p25`): one `ef` file per stream and step holds the 50 perturbed members (index `type` pf, `number`
+ *    1–50); open data has no control member. Steps every 3 h to 144 h, then every 6 h, as the main forecast.
+ *  - AIFS ENS (`aifs-ens/0p25`, ECMWF's machine-learning ensemble): `pf` files hold members 1–50 and a `cf` file the
+ *    control, whose index records carry no `number` (member 0 here). Steps every 6 h.
+ * Both put the wind (`10u`, `10v`) in the `enfo` stream and the waves (`swh`, `mwp`, `mwd`) in `waef`. Every message is
+ * product definition template 4.1 (grib2.ts), which names its member.
+ */
+export const ENSEMBLE_MODELS = ['ifs-ens', 'aifs-ens'] as const;
+export type EnsembleModelId = (typeof ENSEMBLE_MODELS)[number];
+
+export interface EnsembleModel {
+  id: EnsembleModelId;
+  /** For people: settings, the page, the log. */
+  name: string;
+  /** Path below the cycle's directory, before the stream. */
+  path: string;
+  /** The files of a step: kind (the file name's suffix) and whether it holds the control (member 0) or the members. */
+  files: { kind: string; control: boolean }[];
+  /** Hours between steps up to 144 h (6 h after it for every model). */
+  stepHours: number;
+}
+
+export const ENSEMBLES: Record<EnsembleModelId, EnsembleModel> = {
+  'ifs-ens': { id: 'ifs-ens', name: 'ECMWF IFS ENS', path: 'ifs/0p25', files: [{ kind: 'ef', control: false }], stepHours: 3 },
+  'aifs-ens': {
+    id: 'aifs-ens',
+    name: 'ECMWF AIFS ENS',
+    path: 'aifs-ens/0p25',
+    files: [
+      { kind: 'cf', control: true },
+      { kind: 'pf', control: false },
+    ],
+    stepHours: 6,
+  },
+};
+
+/** The routing fields an ensemble member holds, by stream (the main forecast's base fields less the pressure): required. */
+export const ENSEMBLE_PARAMS = { enfo: ['10u', '10v'], waef: ['swh', 'mwp', 'mwd'] } as const;
+
+/**
+ * The optional field an ensemble member holds when its index has it, never required, as the main forecast's
+ * OPTIONAL_WAVE_PARAMS: mp2, the mean zero-crossing period Tm02 the wave correction reads. IFS ENS publishes it, AIFS
+ * ENS does not (data.ecmwf.int, 2026-11-06, the 00z run's +24 h wave indexes); a member without it routes its waves
+ * uncorrected (engine/smoother.ts waves_no_period). pp1d is not read by the router, so not fetched for every member.
+ */
+export const ENSEMBLE_OPTIONAL_PARAMS = { enfo: [], waef: ['mp2'] } as const;
+
+/** The number of members a setting may ask for: 5 to 50 in fives. */
+export const ENSEMBLE_MEMBER_CHOICES = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50] as const;
+
 export type EcmwfParam =
   | (typeof ATM_PARAMS)[number]
   | (typeof WAVE_PARAMS)[number]
@@ -182,6 +254,58 @@ export function availableSteps(cycle: Pick<Cycle, 'maxStep'>, horizonHours: numb
   return steps;
 }
 
+/** An index file's records (one JSON object per line), each checked to carry its offset, length and parameter. */
+function parseIndex(text: string, url: string): IndexRecord[] {
+  const out: IndexRecord[] = [];
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const rec = JSON.parse(t) as IndexRecord;
+    if (typeof rec._offset !== 'number' || typeof rec._length !== 'number' || typeof rec.param !== 'string')
+      throw new EcmwfError(`malformed index line in ${url}: ${t.slice(0, 120)}`);
+    out.push(rec);
+  }
+  return out;
+}
+
+/**
+ * A cached message is there and starts with GRIB: false when there is no such file; a file that is there but cannot
+ * be read throws (a failing disk is reported, never taken for a message to fetch again).
+ */
+export function isGribFile(p: string): boolean {
+  let fd: number;
+  try {
+    fd = fs.openSync(p, 'r');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+  try {
+    const head = Buffer.alloc(4);
+    return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * A fetched message into the GRIB cache at `cached`, through a temporary file renamed into place. The temporary name
+ * is unique per writer: the data worker and the route worker (first boot, no decoded run yet) can fetch the same field
+ * at once, and threads share a pid. A rename that fails takes its temporary file with it; one that fails because
+ * another writer put the same message in place meanwhile has that as its answer.
+ */
+function writeCached(cached: string, msg: Uint8Array): void {
+  fs.mkdirSync(path.dirname(cached), { recursive: true });
+  const tmp = `${cached}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  fs.writeFileSync(tmp, msg);
+  try {
+    fs.renameSync(tmp, cached);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    if (!fs.existsSync(cached)) throw err;
+  }
+}
+
 export class EcmwfClient {
   /** Mirrors in order; index 0 is the one currently in use. */
   private mirrors: string[];
@@ -288,22 +412,12 @@ export class EcmwfClient {
     throw new EcmwfError(`no ECMWF cycle in the last ${maxAge} h has +${horizonHours} h published`);
   }
 
+  /** A step file's `.index` from the mirror, parsed into its records (one per message); any answer but 200 throws. */
   async fetchIndex(cycle: Cycle, stream: string, step: number): Promise<IndexRecord[]> {
     const url = this.stepUrl(cycle, stream, step, 'index');
     const res = await this.request(this.stepPath(cycle, stream, step, 'index'));
     if (res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${url}`);
-    const text = await res.text();
-    const out: IndexRecord[] = [];
-    for (const line of text.split('\n')) {
-      const t = line.trim();
-      if (!t) continue;
-      const rec = JSON.parse(t) as IndexRecord;
-      if (typeof rec._offset !== 'number' || typeof rec._length !== 'number' || typeof rec.param !== 'string') {
-        throw new EcmwfError(`malformed index line in ${url}: ${t.slice(0, 120)}`);
-      }
-      out.push(rec);
-    }
-    return out;
+    return parseIndex(await res.text(), url);
   }
 
   cachePath(cycle: Cycle, stream: string, step: number, param: string): string {
@@ -312,18 +426,7 @@ export class EcmwfClient {
 
   /** Is a cached message present and GRIB-headed? */
   hasCached(cycle: Cycle, stream: string, step: number, param: string): boolean {
-    const p = this.cachePath(cycle, stream, step, param);
-    try {
-      const fd = fs.openSync(p, 'r');
-      try {
-        const head = Buffer.alloc(4);
-        return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch {
-      return false;
-    }
+    return isGribFile(this.cachePath(cycle, stream, step, param));
   }
 
   /**
@@ -372,46 +475,77 @@ export class EcmwfClient {
     const idx = index ?? (await this.fetchIndex(cycle, stream, step));
     const rec = idx.find(r => r.param === param && (r.levtype === undefined || r.levtype === 'sfc'));
     if (!rec) return null;
-    const url = this.stepUrl(cycle, stream, step, 'grib2');
-    const res = await this.request(this.stepPath(cycle, stream, step, 'grib2'), {
-      headers: { Range: `bytes=${rec._offset}-${rec._offset + rec._length - 1}` },
-    });
-    if (res.status !== 206 && res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${param} from ${url}`);
-    const buf = new Uint8Array(await res.arrayBuffer());
-    let msg = buf;
-    if (res.status === 200) {
-      // Server ignored the range: slice the whole file.
-      msg = buf.subarray(rec._offset, rec._offset + rec._length);
-    }
-    if (msg.length !== rec._length) {
-      throw new EcmwfError(`short read for ${param} step ${step}: got ${msg.length} of ${rec._length} bytes`);
-    }
-    if (!(msg[0] === 0x47 && msg[1] === 0x52 && msg[2] === 0x49 && msg[3] === 0x42)) {
-      throw new EcmwfError(`fetched bytes for ${param} step ${step} do not start with GRIB`);
-    }
-    fs.mkdirSync(path.dirname(cached), { recursive: true });
-    // Unique per writer: the data worker and the route worker (first boot, no
-    // decoded run yet) can fetch the same field at once, and threads share a pid.
-    const tmp = `${cached}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-    fs.writeFileSync(tmp, msg);
-    try {
-      fs.renameSync(tmp, cached);
-    } catch (err) {
-      fs.rmSync(tmp, { force: true });
-      // Another writer put the same field in place meanwhile: that is the answer.
-      if (!fs.existsSync(cached)) throw err;
-    }
+    const msg = await this.fetchMessage(this.stepPath(cycle, stream, step, 'grib2'), rec, step);
+    writeCached(cached, msg);
     return msg;
   }
 
-  /** Delete cached cycles other than `keep`. */
+  /**
+   * One index record of a step file as its raw GRIB2 message, by HTTP Range (a server that ignores the range sends the
+   * whole file, which is sliced), checked to be the record's length and to start with GRIB.
+   */
+  private async fetchMessage(pathSuffix: string, rec: IndexRecord, step: number): Promise<Uint8Array> {
+    const res = await this.request(pathSuffix, { headers: { Range: `bytes=${rec._offset}-${rec._offset + rec._length - 1}` } });
+    if (res.status !== 206 && res.status !== 200)
+      throw new EcmwfError(`HTTP ${res.status} fetching ${rec.param} from ${this.baseUrl}${pathSuffix}`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const msg = res.status === 200 ? buf.subarray(rec._offset, rec._offset + rec._length) : buf;
+    if (msg.length !== rec._length)
+      throw new EcmwfError(`short read for ${rec.param} step ${step}: got ${msg.length} of ${rec._length} bytes`);
+    if (!(msg[0] === 0x47 && msg[1] === 0x52 && msg[2] === 0x49 && msg[3] === 0x42))
+      throw new EcmwfError(`fetched bytes for ${rec.param} step ${step} do not start with GRIB`);
+    return msg;
+  }
+
+  /** Path of an ensemble step file below any mirror's base URL. */
+  ensembleStepPath(cycle: Cycle, model: EnsembleModel, stream: string, kind: string, step: number, ext: 'grib2' | 'index'): string {
+    return `/${cycle.yyyymmdd}/${cycle.hh}z/${model.path}/${stream}/${cycle.yyyymmdd}${cycle.hh}0000-${step}h-${stream}-${kind}.${ext}`;
+  }
+
+  /**
+   * An ensemble step file's index, or null when the cycle has no such step (404/403: past the end of this cycle's
+   * ladder, or not published yet).
+   */
+  async fetchEnsembleIndex(cycle: Cycle, model: EnsembleModel, stream: string, kind: string, step: number): Promise<IndexRecord[] | null> {
+    const p = this.ensembleStepPath(cycle, model, stream, kind, step, 'index');
+    const res = await this.request(p);
+    if (res.status === 404 || res.status === 403) return null;
+    if (res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${this.baseUrl}${p}`);
+    return parseIndex(await res.text(), this.baseUrl + p);
+  }
+
+  /**
+   * One record of an ensemble step file as a raw GRIB2 message, written to `cachePath` (one message per file, as the
+   * main forecast's cache); from the cache when it is there.
+   */
+  async fetchEnsembleField(
+    cycle: Cycle,
+    model: EnsembleModel,
+    stream: string,
+    kind: string,
+    step: number,
+    rec: IndexRecord,
+    cachePath: string
+  ): Promise<Uint8Array> {
+    if (fs.existsSync(cachePath)) {
+      const buf = fs.readFileSync(cachePath);
+      if (buf.length === rec._length && buf.toString('latin1', 0, 4) === 'GRIB') return new Uint8Array(buf);
+      fs.unlinkSync(cachePath);
+    }
+    const msg = await this.fetchMessage(this.ensembleStepPath(cycle, model, stream, kind, step, 'grib2'), rec, step);
+    writeCached(cachePath, msg);
+    return msg;
+  }
+
+  /** Delete cached cycles other than `keep`. No cache folder yet: nothing to delete; one that cannot be read throws. */
   pruneCache(keep: Cycle[]): void {
     const keepNames = new Set(keep.map(c => `${c.yyyymmdd}${c.hh}`));
     let entries: string[];
     try {
       entries = fs.readdirSync(this.cacheDir);
-    } catch {
-      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
     }
     for (const e of entries) {
       if (/^\d{10}$/.test(e) && !keepNames.has(e)) {

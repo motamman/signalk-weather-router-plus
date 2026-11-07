@@ -19,7 +19,7 @@ function wind(speedMs: number, swhM: number): WindSource {
     at: () => [speedMs, 180],
     atMany: lons => ({ speed: new Float64Array(lons.length).fill(speedMs), dir: new Float64Array(lons.length).fill(180) }),
     hasWaves: true,
-    wavesAt: () => ({ swh: swhM, mwp: 6, mwd: 180 }),
+    wavesAt: () => ({ swh: swhM, mwp: 6, mp2: 6, mwd: 180 }),
     wavesAtMany: lons => new Float64Array(lons.length).fill(swhM),
   };
 }

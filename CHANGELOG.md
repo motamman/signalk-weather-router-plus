@@ -8,6 +8,47 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Ensembles: route each member of ECMWF IFS ENS and AIFS ENS.**
+  Optional and off by default (plugin configuration, *Download
+  ensembles*: which ensembles, at least one, and 5 to 50 members). Each
+  cycle, after the forecast, the routing fields (`10u`, `10v`, `swh`,
+  `mwp`, `mwd`, and the wave period `mp2` where the ensemble publishes
+  it: IFS ENS does, AIFS ENS does not, checked 2026-11-06) of the chosen
+  members are downloaded to the forecast's horizon and decoded to disk,
+  one run per member, each message checked to be its member (GRIB2
+  template 4.1, now read). A member without `mp2` routes its waves
+  uncorrected, with a `waves_no_period` warning. With *Route each
+  ensemble member too* (Route → Plan, with the ensemble and the members),
+  Find Route computes the route on the main forecast and an ensemble set
+  computes the same request as its own route search on each member's
+  forecast (`POST /api/ensemble-sets`; `forecast_member` on a route
+  request). The members' routes show dotted cyan on the map and the main
+  forecast's thin and solid, with the **corridor** they all lie in shaded
+  under them (for each 1/200 of the way along every route, the convex
+  hull of all the routes there, so every route lies inside it; display
+  only, water not checked) and the route opened on a white
+  band; the arrival spread is in the result strip and a members table in
+  the Itinerary. Before fetching, every step's index is read (the last
+  step's first) and the free disk is checked against the size of every
+  message still to fetch plus the decoded runs, keeping the forecast's
+  reserve free; a disk that cannot be measured stops the download, with
+  why. The data worker alone records each ensemble's cycle in use
+  (`current.json`), from the members complete on disk; a record it
+  cannot read, or cannot write (the cycle is then not in use), is
+  reported in the log and the ensemble's status. A set whose file
+  cannot be saved carries `save_error` (as a departure window does,
+  below), and `forecast_member` is refused with `no_forecast`, and
+  refused (`400`) when that ensemble or member is not on disk as the
+  data worker last reported, for a route and a departure window alike;
+  one gone since that report fails its route job, which says so. Off,
+  nothing else of the ensemble setting is read or checked. The owner's
+  Refresh, or a route, during a pass a background round started makes
+  it the owner's: a metered or lost connection no longer stops it.
+  On the test box (Pi 5), 72 h: 5 IFS ENS members downloaded
+  350,757,112 B (2026-11-05; arithmetic: about 70 MB a member), and a
+  decoded IFS ENS member takes 519,126,603 B on disk (`du -sb`,
+  2026-11-06, the 06Z run); both with the five required fields, before
+  `mp2` made a sixth for an IFS ENS member (not measured).
 - **Polar sets from Polar Management (polar-format 2).** A `polarSet`
   2.0.0 active in Polar Management is routed on its `best` table; a v1
   `polarTable` routes as before. A null cell (no sailing solution) has no
@@ -25,20 +66,53 @@ uses [Semantic Versioning](https://semver.org/).
   the sails.
 - **Wave correction.** A polar set's `waveCorrection` table multiplies the
   sailing speed by its factor for the forecast sea the boat meets: the
-  significant height, ECMWF's mean period (`mwp`) and the waves' angle
-  off the heading, interpolated in angle, then period, then height.
-  A sea outside the table is never taken as factor 1 or extrapolated: it
-  is sailed uncorrected and the leg carries a `waves_outside_correction`
-  warning with the seconds. Off when Polar Management's
+  significant height, ECMWF's mean zero-crossing period Tm02 (`mp2`) and
+  the waves' angle off the heading, interpolated in angle, then period,
+  then height. Tm02 rather than ECMWF's mean period `mwp`, which is the
+  energy mean period Tm−1,0, longer than the Tm01 or Tm02 tables are made
+  for (SignalK/sailsconfiguration#13). A sea outside the table is never
+  taken as factor 1 or extrapolated: it is sailed uncorrected and the leg
+  carries a `waves_outside_correction` warning with the seconds. Waves
+  with no `mp2` in the forecast are sailed uncorrected too, never with
+  `mwp`, with a `waves_no_period` warning. Off when Polar Management's
   `polars.applyWaveCorrection` is false; motoring speed is not corrected.
   The wave limit and the comfort weight still only weigh the route
   choice, so no sea counts twice.
-- **The peak wave period is downloaded.** ECMWF's `pp1d` is fetched and
-  decoded beside the other wave fields when it can be, one more global
-  field per step (4.15 MB). A forecast without it still counts as
-  complete, so an update never makes a boat that is offline throw away
-  the forecast it has, and a `pp1d` message that cannot be fetched or
-  decoded is skipped, never failing the step. Nothing reads it yet.
+- **Two more wave periods are downloaded.** ECMWF's Tm02 (`mp2`, read
+  by the wave correction) and peak period (`pp1d`, not read yet) are
+  fetched and decoded beside the other wave fields when they can be, one
+  more global field each per step (4.15 MB). A forecast without them
+  still counts as complete, so an update never makes a boat that is
+  offline throw away the forecast it has, and a message that cannot be
+  fetched or decoded is skipped, never failing the step.
+- **A Route row in the map legend**: what of the route is drawn, each
+  item with its map symbol (tack and motoring legs, past the forecast,
+  forecast ends, waypoint marks, wind arrows, points moved to water,
+  arrival circles, an ensemble set's corridor and lines, the decision
+  lines and A* guide while shown, a re-plan, the track and earlier
+  routes). Only what is on the map is listed.
+- **The legend folds on any screen**, not only on a phone: tap its first
+  line. A wider screen starts open and remembers its own choice.
+
+### Changed
+
+- **Motoring legs are amber**, as their waypoint marks already were; they
+  were black.
+- **An ensemble set's opened route sits on a white band** with a dark
+  edge instead of a yellow one, which hid amber motoring legs.
+- **A list's `limit` that is not a whole number from 1 is refused**
+  (`400`) on `GET /api/routes` and `GET /api/windows`; it was read as
+  the default. A larger one is still held to what the list can hold.
+  With no `limit`, `GET /api/windows` lists every window (at most 12);
+  its default was 20, more than it can hold.
+- **The forecast's disk figures in the status are null when not
+  measured** (`decoded_disk_bytes`, `grib_cache_bytes`): before the
+  first measure they read 0, and a folder that could not be read was
+  counted as empty. The reason is in the log.
+- **The status lists what the plugin config offers** (`config_choices`:
+  the mirrors with their names, the ensembles, the member counts and the
+  defaults), and the configuration panel shows those instead of its own
+  copies.
 
 ### Fixed
 
@@ -47,6 +121,61 @@ uses [Semantic Versioning](https://semver.org/).
   wind-limit, wave-limit and wave-correction warnings go and the
   detour's own come in at its place. Before, the replaced segment's
   warnings stayed and the detour's were lost.
+- **A departure window whose file cannot be saved says so.** A full or
+  read-only disk made the save throw into the job event, the request or
+  the start-up. The window now runs on from memory with `save_error`
+  (why its file is behind), the failure goes to the Signal K log, and
+  the next change saves it again and clears it. A window file that
+  cannot be read at start-up, or does not hold a window, and a delete
+  that fails, are reported in the log instead of passing silently.
+- **Cache and prune failures are reported, not read as nothing there.**
+  A cached GRIB message that exists but cannot be read was taken for a
+  missing one and fetched again; a cache or decoded-run folder that
+  could not be read was pruned as empty or measured as 0 bytes. Now only
+  a missing file or folder counts as none; anything else is reported
+  (the forecast's prune and disk measure in the log, a cached message
+  that cannot be read fails the load that wanted it).
+- **A route being opened is dropped when the route on screen changes.**
+  Every change of the route on the map (another one opened from Saved,
+  a departure or a member, Find Route, Clear, Reset) goes through one
+  place, which aborts every request still in flight for the one before:
+  its route, its skeleton and its fronts. A departure window's route
+  answered after the route was cleared or another opened could be drawn
+  over it. A failed answer cut short by the change is dropped the same
+  way: its body read, aborted, used to be reported as the failure "HTTP
+  <status>" and could mark the route opened since as not loaded.
+- **A route job whose file cannot be saved says so, and the queue goes
+  on.** A full or read-only disk made the job's save throw when it
+  finished, before the next job was started, so the queue stopped. The
+  job now carries `save_error`, the failure goes to the Signal K log, a
+  departure window's job keeps its route in memory until it is saved
+  (it was dropped from memory as if saved), and the next job starts. A
+  job file that cannot be read at start-up was skipped silently; it is
+  reported now, as is a delete that fails and a saved route that cannot
+  be read back. A job's route results are saved once, when it finishes,
+  in a file of their own (`jobs/results/<id>.json`) that no later save
+  rewrites: before, every save of a window's job read its route back
+  from its file and wrote it again, so a read that failed lost the
+  route. Until that file is saved, the job's own file holds the results
+  too. A restart brings back each job as its last successful save left
+  it: its own file, with its results inside for as long as their own
+  file was never saved; a job none of whose saves succeeded is lost. Job
+  files saved before keep loading; their results are moved to their own
+  file at start-up. After a restart a job's event log is the one it
+  finished with. A departure window's or ensemble set's jobs are deleted
+  at start-up only when the window or set has no file at all; one whose
+  file is refused keeps its jobs, and a jobs folder that cannot be
+  listed keeps every job. The same for a job's route results: a results
+  file whose job has no file at all is removed at start-up, one whose
+  job file is there but refused stays. A record file is its record's:
+  one holding a job, window or set of another id (a copy) is refused,
+  since restoring it would write over that id's files. So is a job file
+  with a status no job has (it would count in the trim and push a sound
+  job out), and one holding some of its results without its events (no
+  save writes such a file; restored, a departure window's departure
+  linked to it could stop the start-up). Jobs, departure windows and ensemble sets
+  save their files one way (`src/plugin/jsonfiles.ts`): a save that
+  fails also says when its partial copy could not be removed.
 
 ## [0.2.1] - 2026-11-02
 

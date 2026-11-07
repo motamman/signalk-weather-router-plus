@@ -6,6 +6,7 @@ import { SETTINGS_GROUPS, SETTINGS_SPEC, type SettingSpec } from './settings';
 import { routeRequestSchema } from './request_schema';
 import { JobPublicSchema } from './response_schema';
 import { WindowPublicSchema, WindowRequestSchema } from './windows';
+import { EnsembleSetPublicSchema, EnsembleSetRequestSchema } from './ensembles';
 
 /** JSON schema of one setting's value (SI). */
 function settingValueSchema(s: SettingSpec): Record<string, unknown> {
@@ -87,6 +88,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
   const routeRequest = routeRequestSchema();
   const job = openApi30(JobPublicSchema);
   const windowDoc = openApi30(WindowPublicSchema);
+  const setDoc = openApi30(EnsembleSetPublicSchema);
   return {
     openapi: '3.0.0',
     info: {
@@ -106,7 +108,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           description:
             'Top level: plugin, started, workers {data, route}, forecast, forecast_error, forecast_loading, currents, currents_route_worker, rtofs, overlay_land, overlay_tiles, overlay_prebuild, ' +
             'weather_provider_registered, jobs, vessel, polar, land, harmonic_dir, extra_fields, tides, tides_enabled, tides_error, process_rss_bytes, ' +
-            'meshes (the managed chart meshes, as GET /api/meshes), router (the open-water router the next route runs: "standard" | "refined"), checks, freshness, connectivity. ' +
+            'meshes (the managed chart meshes, as GET /api/meshes), ensembles (per ensemble chosen in the plugin config: {model, name, cycle (ISO, null before the first complete pass), members (the member numbers on disk, 0 = the control), bytes, loading, error, checkedAt}), router (the open-water router the next route runs: "standard" | "refined"), checks, freshness, connectivity. ' +
             '`forecast_error` clears only on a check that reached ECMWF (the newest run in use, or a new one loaded). ' +
             '`checks`: what the last check of each source found, {ecmwf, smoc, tides, "rtofs:<product>" per RTOFS product loaded}, each {outcome: "newest" | "could-not-check" (the server could not be asked: ' +
             'no connection, or it failed; the run in use stays) | "new-run" | "failed" (the server answered but the new run could not be loaded), at, reason}. ' +
@@ -793,6 +795,54 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
         post: {
           summary:
             'Cancel the departures not computed yet, and ask the one computing to stop: it stops when the route worker next checks, so DELETE answers 409 until then',
+          responses: { 202: { description: '{id, status}' }, 404: { description: 'Not found' } },
+        },
+      },
+      '/api/ensemble-sets': {
+        post: {
+          summary:
+            "Ensemble set: the route computed on each member of an ensemble on disk (its own route search on that member's forecast), one route job each, one at a time",
+          requestBody: { required: true, content: { 'application/json': { schema: openApi30(EnsembleSetRequestSchema) } } },
+          responses: {
+            202: { description: '{id, status: "running", members, links}' },
+            400: { description: '{error}: a bad request, or the ensemble or that many members not on disk' },
+            413: { description: 'The request body is over 64 KB' },
+            429: { description: 'Two sets are being computed already' },
+            503: { description: 'Plugin not started' },
+          },
+        },
+        get: {
+          summary: 'The ensemble sets, newest first',
+          parameters: [{ name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 12, default: 12 } }],
+          responses: {
+            200: { description: 'OK', content: { 'application/json': { schema: { type: 'array', items: setDoc } } } },
+            503: { description: 'Plugin not started' },
+          },
+        },
+      },
+      '/api/ensemble-sets/{id}': {
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        get: {
+          summary: 'An ensemble set: each member with its status, route job (GET /api/routes/{job_id}/result for its route) and metrics',
+          responses: {
+            200: { description: 'OK', content: { 'application/json': { schema: setDoc } } },
+            404: { description: 'Not found' },
+            503: { description: 'Plugin not started' },
+          },
+        },
+        delete: {
+          summary: 'Delete a finished set and its route jobs',
+          responses: {
+            204: { description: 'Deleted' },
+            404: { description: 'Not found' },
+            409: { description: 'Still running, or cancelled with a member still stopping' },
+          },
+        },
+      },
+      '/api/ensemble-sets/{id}/cancel': {
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        post: {
+          summary: 'Cancel the members not computed yet, and ask the one computing to stop',
           responses: { 202: { description: '{id, status}' }, 404: { description: 'Not found' } },
         },
       },

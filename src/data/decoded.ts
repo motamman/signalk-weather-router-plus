@@ -270,7 +270,8 @@ export function listDecodedRuns(root: string): string[] {
 /**
  * Delete decoded runs other than `keep` (cycle names), and leftovers of
  * interrupted writes (`.tmp-*`, `.old-*`) except `activeTmp`. Returns the
- * names removed.
+ * names removed. No folder: nothing to delete; one that cannot be read, or a
+ * run that cannot be removed, throws (the caller reports it).
  */
 export function pruneDecodedRuns(root: string, keep: string[], activeTmp: string | null = null): string[] {
   const keepSet = new Set(keep);
@@ -278,8 +279,9 @@ export function pruneDecodedRuns(root: string, keep: string[], activeTmp: string
   let entries: string[];
   try {
     entries = fs.readdirSync(root);
-  } catch {
-    return removed;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return removed;
+    throw err;
   }
   for (const e of entries) {
     const full = path.join(root, e);
@@ -291,14 +293,18 @@ export function pruneDecodedRuns(root: string, keep: string[], activeTmp: string
   return removed;
 }
 
-/** Bytes of all files below a directory (du, apparent size). */
+/**
+ * Bytes of all files below a directory (du, apparent size): 0 when it is missing, and a file removed while it is
+ * walked is not counted. A folder or file that is there but cannot be read throws (the caller reports it).
+ */
 export function dirBytes(dir: string): number {
   let total = 0;
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return 0;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw err;
   }
   for (const e of entries) {
     const p = path.join(dir, e.name);
@@ -306,8 +312,8 @@ export function dirBytes(dir: string): number {
     else if (e.isFile()) {
       try {
         total += fs.statSync(p).size;
-      } catch {
-        /* vanished */
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
       }
     }
   }

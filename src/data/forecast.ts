@@ -619,12 +619,17 @@ export class ForecastStore implements WindSource {
     return { speed, dir };
   }
 
+  /**
+   * The waves at a point and time: swh, mwp and mp2 blended linearly between the two steps around `time`, mwd through
+   * its unit vector; mp2 NaN where the run has none. Null without wave fields, or where swh is not a number (land).
+   */
   wavesAt(lon: number, lat: number, time: Date): WaveConditions | null {
     if (!this.hasWaves) return null;
     const [i0, i1, a] = this.timeBlend(time);
     const g = (p: string, i: number): number => sampleField(this.steps[i].fields.get(p)!, lon, lat);
     let swh = g('swh', i0);
     let mwp = g('mwp', i0);
+    let mp2 = this.optional('mp2', i0, lon, lat);
     let mwd: number;
     const d0 = (g('mwd', i0) * Math.PI) / 180;
     if (a === 0 || i0 === i1) {
@@ -632,13 +637,20 @@ export class ForecastStore implements WindSource {
     } else {
       swh = swh * (1 - a) + g('swh', i1) * a;
       mwp = mwp * (1 - a) + g('mwp', i1) * a;
+      mp2 = mp2 * (1 - a) + this.optional('mp2', i1, lon, lat) * a;
       const d1 = (g('mwd', i1) * Math.PI) / 180;
       const sx = Math.sin(d0) * (1 - a) + Math.sin(d1) * a;
       const cx = Math.cos(d0) * (1 - a) + Math.cos(d1) * a;
       mwd = norm360((Math.atan2(sx, cx) * 180) / Math.PI);
     }
     if (!Number.isFinite(swh)) return null;
-    return { swh, mwp, mwd };
+    return { swh, mwp, mp2, mwd };
+  }
+
+  /** An optional field (OPTIONAL_WAVE_PARAMS) at a point of a step: NaN where that step has none. */
+  private optional(param: string, i: number, lon: number, lat: number): number {
+    const f = this.steps[i].fields.get(param);
+    return f ? sampleField(f, lon, lat) : NaN;
   }
 
   wavesAtMany(lons: Float64Array, lats: Float64Array, time: Date): Float64Array {
@@ -670,37 +682,41 @@ export class ForecastStore implements WindSource {
     return out;
   }
 
-  /** Height, mean period and mean direction (FROM, degrees; blended as a vector) per point at its own time. */
+  /** Height, mean period, Tm02 (NaN where a step has none) and mean direction (FROM, degrees; blended as a vector) per point at its own time. */
   wavesFullAtManyAt(
     lons: Float64Array,
     lats: Float64Array,
     timesMs: Float64Array
-  ): { swh: Float64Array; mwp: Float64Array; mwd: Float64Array } {
+  ): { swh: Float64Array; mwp: Float64Array; mp2: Float64Array; mwd: Float64Array } {
     const n = lons.length;
     const swh = new Float64Array(n).fill(NaN);
     const mwp = new Float64Array(n).fill(NaN);
+    const mp2 = new Float64Array(n).fill(NaN);
     const mwd = new Float64Array(n).fill(NaN);
-    if (!this.hasWaves) return { swh, mwp, mwd };
+    if (!this.hasWaves) return { swh, mwp, mp2, mwd };
     for (let k = 0; k < n; k++) {
       const [i0, i1, a] = this.timeBlendMs(timesMs[k]);
       const g = (p: string, i: number): number => sampleField(this.steps[i].fields.get(p)!, lons[k], lats[k]);
       let h = g('swh', i0);
       let t = g('mwp', i0);
+      let z = this.optional('mp2', i0, lons[k], lats[k]);
       const d0 = (g('mwd', i0) * Math.PI) / 180;
       let sx = Math.sin(d0);
       let cx = Math.cos(d0);
       if (a !== 0 && i0 !== i1) {
         h = h * (1 - a) + g('swh', i1) * a;
         t = t * (1 - a) + g('mwp', i1) * a;
+        z = z * (1 - a) + this.optional('mp2', i1, lons[k], lats[k]) * a;
         const d1 = (g('mwd', i1) * Math.PI) / 180;
         sx = sx * (1 - a) + Math.sin(d1) * a;
         cx = cx * (1 - a) + Math.cos(d1) * a;
       }
       swh[k] = h;
       mwp[k] = t;
+      mp2[k] = z;
       mwd[k] = norm360((Math.atan2(sx, cx) * 180) / Math.PI);
     }
-    return { swh, mwp, mwd };
+    return { swh, mwp, mp2, mwd };
   }
 
   /** Mean sea-level pressure in Pa, or NaN when not loaded. */

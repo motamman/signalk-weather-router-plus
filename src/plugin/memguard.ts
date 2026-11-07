@@ -141,13 +141,15 @@ export function fieldsPerStep(extraFields: boolean, energyFields = false): numbe
 /** Disk left free after writing a decoded run (a policy, not a measurement). */
 export const DISK_RESERVE_BYTES = 1e9;
 
-/** Free disk space for this process below `dir`, bytes, or null when unknown. */
-export function availableDisk(dir: string): number | null {
+/** Free disk space for this process below `dir`, bytes; or why it could not be measured. */
+export type DiskFree = { bytes: number } | { problem: string };
+
+export function availableDisk(dir: string): DiskFree {
   try {
     const st = fs.statfsSync(dir);
-    return Number(st.bavail) * Number(st.bsize);
-  } catch {
-    return null;
+    return { bytes: Number(st.bavail) * Number(st.bsize) };
+  } catch (err) {
+    return { problem: `free disk space below ${dir} not measured: ${(err as Error).message}` };
   }
 }
 
@@ -155,6 +157,9 @@ export function availableDisk(dir: string): number | null {
  * Can a forecast update run: memory for one decode step with `headroom`
  * to spare, and disk for the whole decoded run with DISK_RESERVE_BYTES to
  * spare? `available` / `disk` default to live readings (tests pass their own).
+ * Free disk that could not be measured (or no `dir`) does not stop the update:
+ * the forecast is what the boat routes on, and a decode that runs out of disk
+ * fails and says so; the message says why it was not measured.
  */
 export function checkDecodeResources(
   horizonS: number,
@@ -163,7 +168,7 @@ export function checkDecodeResources(
   headroomBytes: number,
   dir: string | null,
   available: { bytes: number; source: string } = availableMemory(),
-  disk: number | null = dir ? availableDisk(dir) : null
+  disk: DiskFree | null = dir ? availableDisk(dir) : null
 ): MemoryCheck {
   // Besides the one-step block and decode buffers, the accumulated fields
   // (energy fields) keep the previous step's raw values for the step
@@ -173,14 +178,16 @@ export function checkDecodeResources(
   const horizonHours = horizonS / HOUR_S;
   const runBytes = forecastBytes(horizonS, extraFields, energyFields);
   const memOk = need + headroomBytes <= available.bytes;
-  const diskOk = disk === null || runBytes + DISK_RESERVE_BYTES <= disk;
-  const diskText = disk === null ? 'free disk space unknown' : `${mb(disk)} disk free`;
+  const free = disk && 'bytes' in disk ? disk.bytes : null;
+  const diskOk = free === null || runBytes + DISK_RESERVE_BYTES <= free;
+  const diskText =
+    free !== null ? `${mb(free)} disk free` : disk && 'problem' in disk ? disk.problem : 'free disk space unknown (no folder given)';
   const fieldText = [extraFields ? 'extra fields' : '', energyFields ? 'solar and radiation fields' : ''].filter(Boolean).join(', ');
   let message = `update needs ${mb(need)} of memory for one decode step (${hrs(horizonHours)}${fieldText ? `, ${fieldText}` : ''}) and ${mb(runBytes)} of disk for the decoded run; ${mb(available.bytes)} memory available, ${mb(headroomBytes)} headroom kept; ${diskText}`;
   if (!memOk) {
     message = `not enough memory: ${message}. Free memory or lower the memory headroom setting (Settings tab).`;
-  } else if (!diskOk) {
-    const fits = (h: number, x: boolean, e: boolean): boolean => forecastBytes(h * HOUR_S, x, e) + DISK_RESERVE_BYTES <= disk!;
+  } else if (!diskOk && free !== null) {
+    const fits = (h: number, x: boolean, e: boolean): boolean => forecastBytes(h * HOUR_S, x, e) + DISK_RESERVE_BYTES <= free;
     const options: string[] = [];
     if (extraFields && fits(horizonHours, false, energyFields)) options.push('turn off the extra fields');
     if (energyFields && fits(horizonHours, extraFields, false)) options.push('turn off the solar and radiation fields');

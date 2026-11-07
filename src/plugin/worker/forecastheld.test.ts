@@ -70,6 +70,7 @@ function state(sent: WorkerToMain[], cacheRoot: string): WorkerState {
     harmonicErrors: [],
     currentsUnread: [],
     decodeAbort: null,
+    ensembles: {},
   };
 }
 

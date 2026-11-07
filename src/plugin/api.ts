@@ -37,6 +37,11 @@
  *   GET  /api/windows/:id           a window: each departure's status and metrics
  *   POST /api/windows/:id/cancel
  *   DELETE /api/windows/:id         a finished window and its route jobs
+ *   POST /api/ensemble-sets         the route on each member of an ensemble → 202 {id, status, links}
+ *   GET  /api/ensemble-sets         list ensemble sets
+ *   GET  /api/ensemble-sets/:id     a set: each member's status and metrics
+ *   POST /api/ensemble-sets/:id/cancel
+ *   DELETE /api/ensemble-sets/:id   a finished set and its route jobs
  *   GET  /api/openapi.json
  *
  * Reads are opened to readonly users and writes to readwrite users when
@@ -55,6 +60,13 @@ import * as zlib from 'node:zlib';
 import type { IRouter, Request, Response } from 'express';
 import { type JobManager, type Job } from './jobs';
 import { validateWindowRequest, WINDOW_LIMITS, type WindowManager, type WindowRequest } from './windows';
+import {
+  ENSEMBLE_SET_LIMITS,
+  validateEnsembleSetRequest,
+  type EnsembleSet,
+  type EnsembleSetManager,
+  type EnsembleSetRequest,
+} from './ensembles';
 import type { QueryArgs, QueryKind, RouteRequest, TrackConditions } from './protocol';
 import { meteogramRows, METEOGRAM_STEP_S, routePoints, sampleStep, trackSamples, type Meteogram } from './meteogram';
 import { openApiDocument } from './openapi';
@@ -80,6 +92,8 @@ export interface ApiDeps {
   jobs: JobManager;
   /** Departure windows (throws, like `jobs`, when the plugin is not started). */
   windows: WindowManager;
+  /** Ensemble sets (throws, like `jobs`, when the plugin is not started). */
+  ensembleSets: EnsembleSetManager;
   status: () => Record<string, unknown>;
   forecastInfo: (lat?: number, lon?: number) => Promise<Record<string, unknown>>;
   refreshForecast: (force: boolean) => void;
@@ -128,6 +142,8 @@ export interface ApiDeps {
   sharedPrefs: SharedPrefsStore;
   /** True when Signal K runs with security off (no users, no application data). */
   securityOff: () => boolean;
+  /** The ensembles a route can run on now: each downloaded model and its member numbers on disk (empty when off). */
+  ensembles: () => { model: string; name: string; members: number[] }[];
   /** Validate, persist and apply a partial settings update. */
   updateSettings: (partial: unknown) => {
     values: AppSettings;
@@ -164,6 +180,10 @@ function num(s: unknown, def: number, min: number, max: number, name: string): n
   return v;
 }
 
+/**
+ * Register the plugin's HTTP API on `router`: the routes that only read under Signal K's readonly access, the others
+ * under readwrite, where the server has access levels (else both on `router`).
+ */
 export function registerApi(router: IRouter, deps: ApiDeps): void {
   const r = router as AccessRouter;
   const ro: IRouter = typeof r.access === 'function' ? r.access('readonly') : router;
@@ -185,6 +205,15 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   const windowsOr503 = (res: Response): WindowManager | null => {
     try {
       return deps.windows;
+    } catch (err) {
+      json(res, 503, { error: (err as Error).message });
+      return null;
+    }
+  };
+  /** The ensemble sets, or null after answering 503 when the plugin is not started. */
+  const setsOr503 = (res: Response): EnsembleSetManager | null => {
+    try {
+      return deps.ensembleSets;
     } catch (err) {
       json(res, 503, { error: (err as Error).message });
       return null;
@@ -715,7 +744,10 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     json(res, 413, { error: `route request too large (over ${MAX_ROUTE_REQUEST_BYTES / 1024} KB)` });
     return true;
   };
-  // Check local files before queuing. Managed tokens are resolved by the capture before dispatch (index.ts).
+  /**
+   * A polar token that names a local file not in the library is refused before queuing (400; 503 before the plugin
+   * has started); managed tokens are resolved by the capture before dispatch (index.ts). True when refused.
+   */
   const badPolar = (res: Response, polar: string | undefined, field: string): boolean => {
     if (!polar || polar === 'auto' || polar === ACTIVE_POLAR_TOKEN) return false;
     try {
@@ -726,6 +758,25 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       else json(res, 400, { error: `${field}: ${(e as Error).message}: ${polar} (a token from /api/polars)` });
       return true;
     }
+  };
+
+  /**
+   * A route on one ensemble member (forecast_member) needs that ensemble and member on disk now: checked before
+   * queuing, for a route and for each departure of a window alike, so neither fails later on what is not there.
+   * True when refused (the 400 is sent).
+   */
+  const badMember = (res: Response, fm: RouteRequest['forecast_member'], field: string): boolean => {
+    if (!fm) return false;
+    const have = deps.ensembles().find(e => e.model === fm.model);
+    if (!have) {
+      json(res, 400, { error: `${field}: ${fm.model} is not downloaded (plugin config: Ensemble downloads)` });
+      return true;
+    }
+    if (!have.members.includes(fm.member)) {
+      json(res, 400, { error: `${field}: ${have.name} member ${fm.member} is not on disk` });
+      return true;
+    }
+    return false;
   };
 
   rw.post('/api/routes', (req: Request, res: Response) => {
@@ -743,6 +794,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       return;
     }
     if (badPolar(res, body.vessel?.polar, 'vessel.polar')) return;
+    if (badMember(res, body.forecast_member, 'forecast_member')) return;
     if (jobs.queueLength >= 16) {
       json(res, 429, { error: 'job queue is full' });
       return;
@@ -752,10 +804,27 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     json(res, 202, { id: job.id, status: job.status, links: jobs.links(job.id) });
   });
 
+  /**
+   * A list's `limit` query: absent, `def`, which is the whole list (`max`) unless the list says otherwise; a whole
+   * number from 1, held to `max` (a list holds no more); anything else is refused (400) rather than read as the
+   * default. Null when refused (the answer is sent).
+   */
+  const listLimit = (req: Request, res: Response, max: number, def = max): number | null => {
+    const raw = req.query.limit;
+    if (raw === undefined) return def;
+    const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+    if (!Number.isInteger(n) || n < 1) {
+      json(res, 400, { error: `limit must be a whole number from 1 (at most ${max} are listed)` });
+      return null;
+    }
+    return Math.min(n, max);
+  };
+
   ro.get('/api/routes', (req: Request, res: Response) => {
     const jobs = jobsOr503(res);
     if (!jobs) return;
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 50) || 50));
+    const limit = listLimit(req, res, 500, 50);
+    if (limit === null) return;
     json(
       res,
       200,
@@ -938,6 +1007,12 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
         json(res, 409, { error: `a departure window's route: delete the window (DELETE ${deps.basePath}/api/windows/${job.windowId})` });
         return;
       }
+      if (job.ensembleSetId) {
+        json(res, 409, {
+          error: `an ensemble set's route: delete the set (DELETE ${deps.basePath}/api/ensemble-sets/${job.ensembleSetId})`,
+        });
+        return;
+      }
       jobs.delete(job.id);
       res.status(204).end();
     });
@@ -953,7 +1028,9 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       json(res, 400, { error: err });
       return;
     }
-    if (badPolar(res, (req.body as WindowRequest).route.vessel?.polar, 'route: vessel.polar')) return;
+    const route = (req.body as WindowRequest).route;
+    if (badPolar(res, route.vessel?.polar, 'route: vessel.polar')) return;
+    if (badMember(res, route.forecast_member, 'route: forecast_member')) return;
     if (windows.running >= WINDOW_LIMITS.maxRunning) {
       json(res, 429, { error: `${windows.running} departure windows are being computed; wait for one to finish, or cancel it` });
       return;
@@ -966,7 +1043,8 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
   ro.get('/api/windows', (req: Request, res: Response) => {
     const windows = windowsOr503(res);
     if (!windows) return;
-    const limit = Math.min(WINDOW_LIMITS.keep + WINDOW_LIMITS.maxRunning, Math.max(1, Number(req.query.limit ?? 20) || 20));
+    const limit = listLimit(req, res, WINDOW_LIMITS.keep + WINDOW_LIMITS.maxRunning);
+    if (limit === null) return;
     json(
       res,
       200,
@@ -1002,6 +1080,80 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
         const running = windows.get(id)!.status === 'running';
         json(res, 409, {
           error: running ? 'cancel the window before deleting it' : 'a cancelled departure is still stopping; try again in a moment',
+        });
+        return;
+      }
+      res.status(204).end();
+    });
+  });
+
+  // ── Ensemble sets (ensembles.ts): the route on each member of an ensemble ──
+  rw.post('/api/ensemble-sets', (req: Request, res: Response) => {
+    const sets = setsOr503(res);
+    if (!sets) return;
+    if (tooLarge(res, req.body)) return;
+    const err = validateEnsembleSetRequest(req.body);
+    if (err) {
+      json(res, 400, { error: err });
+      return;
+    }
+    const body = req.body as EnsembleSetRequest;
+    if (badPolar(res, body.route.vessel?.polar, 'route: vessel.polar')) return;
+    if (sets.running >= ENSEMBLE_SET_LIMITS.maxRunning) {
+      json(res, 429, { error: `${sets.running} ensemble sets are being computed; wait for one to finish, or cancel it` });
+      return;
+    }
+    const made = sets.create(body);
+    if ('refused' in made) {
+      json(res, 400, { error: made.refused });
+      return;
+    }
+    const s = made.set;
+    res.setHeader('Location', sets.links(s.id).self);
+    json(res, 202, { id: s.id, status: s.status, members: s.members.length, links: sets.links(s.id) });
+  });
+
+  ro.get('/api/ensemble-sets', (req: Request, res: Response) => {
+    const sets = setsOr503(res);
+    if (!sets) return;
+    const limit = listLimit(req, res, ENSEMBLE_SET_LIMITS.keep + ENSEMBLE_SET_LIMITS.maxRunning);
+    if (limit === null) return;
+    json(
+      res,
+      200,
+      sets.list(limit).map(s => sets.toPublic(s))
+    );
+  });
+
+  /** Run `fn` on set `:id`: 503 before the plugin has started, 404 for a set not found. */
+  const withSet = (req: Request, res: Response, fn: (sets: EnsembleSetManager, s: EnsembleSet) => void): void => {
+    const sets = setsOr503(res);
+    if (!sets) return;
+    const s = sets.get(String(req.params.id));
+    if (!s) {
+      json(res, 404, { error: 'ensemble set not found' });
+      return;
+    }
+    fn(sets, s);
+  };
+
+  ro.get('/api/ensemble-sets/:id', (req: Request, res: Response) => {
+    withSet(req, res, (sets, s) => json(res, 200, sets.toPublic(s)));
+  });
+
+  rw.post('/api/ensemble-sets/:id/cancel', (req: Request, res: Response) => {
+    withSet(req, res, (sets, s) => {
+      sets.cancel(s.id);
+      json(res, 202, { id: s.id, status: s.status });
+    });
+  });
+
+  rw.delete('/api/ensemble-sets/:id', (req: Request, res: Response) => {
+    withSet(req, res, (sets, s) => {
+      if (!sets.delete(s.id)) {
+        const running = s.status === 'running';
+        json(res, 409, {
+          error: running ? 'cancel the set before deleting it' : 'a cancelled member is still stopping; try again in a moment',
         });
         return;
       }

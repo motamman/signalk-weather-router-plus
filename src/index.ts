@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import type { IRouter } from 'express';
 import {
   CONFIG_SCHEMA,
+  configChoices,
   resolveConfig,
   rtofsLoadSame,
   smocLoadSame,
@@ -36,6 +37,8 @@ import { checkDecodeResources } from './plugin/memguard';
 import { siText } from './plugin/unittext';
 import { JobManager, type Job } from './plugin/jobs';
 import { windowNotification, WindowManager, type DepartureWindow } from './plugin/windows';
+import { EnsembleSetManager } from './plugin/ensembles';
+import type { EnsembleModelId } from './data/ecmwf';
 import { registerApi } from './plugin/api';
 import { NotStartedError } from './plugin/errors';
 import { TileService, TileStore, tileGenerationKeys, tileGroup } from './plugin/tiles';
@@ -146,6 +149,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
   let jobs: JobManager | null = null;
   /** Departure windows (windows.ts): created with the job manager. */
   let windows: WindowManager | null = null;
+  /** Ensemble sets (ensembles.ts): created with the job manager. */
+  let ensembleSets: EnsembleSetManager | null = null;
   /** The decoded run in use (where it is on disk and its index), relayed to the route worker. */
   let forecastRun: ForecastRunInfo | null = null;
   /** Forecast memory the route worker holds (its corridor store while a route runs). */
@@ -171,6 +176,14 @@ export = function plugin(app: SkApp): SignalKPlugin {
   /** Routes since the plugin was loaded whose corridor search failed and ran on the coarse skeleton (decision E). */
   let corridorFallbacks = 0;
   let dataStatus: DataStatus | null = null;
+  /**
+   * The ensembles a route can run on now, as the data worker last reported them: each with a cycle in use and its
+   * members on disk (none when off). Route requests (api.ts) and ensemble sets (ensembles.ts) both read it.
+   */
+  const ensemblesOnDisk = (): { model: EnsembleModelId; name: string; cycle: string; members: number[] }[] =>
+    (dataStatus?.ensembles ?? []).flatMap(e =>
+      e.cycle && e.members.length ? [{ model: e.model, name: e.name, cycle: e.cycle, members: [...e.members] }] : []
+    );
   /** The route worker's own current sources (its SMOC on-demand areas and memory). */
   let routeCurrents: DataStatus['currents'] | null = null;
   let refreshTimer: NodeJS.Timeout | null = null;
@@ -1069,8 +1082,9 @@ export = function plugin(app: SkApp): SignalKPlugin {
         }
         const job = jobs?.get(msg.id);
         if (job) {
-          // A departure window's routes: one notification for the window when it is done (notifyWindow).
-          if (!job.windowId)
+          // A departure window's routes: one notification for the window when it is done (notifyWindow). An ensemble
+          // set's member routes: none (the page follows the set itself).
+          if (!job.windowId && !job.ensembleSetId)
             notify(
               job,
               'normal',
@@ -1086,7 +1100,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       case 'error': {
         jobs?.onError(msg.id, msg.message, msg.cancelled);
         const job = jobs?.get(msg.id);
-        if (job && !msg.cancelled && !job.windowId) notify(job, 'alert', `route failed: ${siText(msg.message)}`);
+        if (job && !msg.cancelled && !job.windowId && !job.ensembleSetId) notify(job, 'alert', `route failed: ${siText(msg.message)}`);
         updateStatus();
         return;
       }
@@ -1324,7 +1338,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
     );
     updateTileGenerations();
     startPrebuilder(dataDir);
-    jobs = new JobManager(dataDir, config.routing.keepJobs, BASE_PATH);
+    jobs = new JobManager(dataDir, config.routing.keepJobs, BASE_PATH, m => app.error(m));
     jobs.on('start', (job: Job) => {
       // First start: the first forecast is still downloading. The route waits for it
       // rather than downloading its own copy of the same fields alongside.
@@ -1347,6 +1361,21 @@ export = function plugin(app: SkApp): SignalKPlugin {
         cancelRunning: cancelRunningJob,
         forecastValidToMs: () => (forecastRun ? forecastRun.index.steps[forecastRun.index.steps.length - 1].validMs : null),
         onFinished: notifyWindow,
+        log: m => app.error(m),
+      },
+      BASE_PATH
+    );
+    ensembleSets = new EnsembleSetManager(
+      jobs,
+      dataDir,
+      {
+        cancelRunning: cancelRunningJob,
+        /** From the data worker's last status: the ensemble's cycle in use and its members on disk, or null. */
+        onDisk: model => {
+          const e = ensemblesOnDisk().find(x => x.model === model);
+          return e ? { cycle: e.cycle, members: e.members } : null;
+        },
+        log: m => app.error(m),
       },
       BASE_PATH
     );
@@ -1374,6 +1403,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
     // The windows first: failing the running job must not start a window's next departure.
     windows?.close();
     windows = null;
+    ensembleSets?.close();
+    ensembleSets = null;
     jobs?.failRunning(why);
     waitingForForecast = null;
     routeAtWorker = null;
@@ -1433,6 +1464,11 @@ export = function plugin(app: SkApp): SignalKPlugin {
       get jobs(): JobManager {
         if (!jobs) throw new NotStartedError(notStartedReason());
         return jobs;
+      },
+      /** The ensemble sets, once the plugin has started (a NotStartedError before). */
+      get ensembleSets(): EnsembleSetManager {
+        if (!ensembleSets) throw new NotStartedError(notStartedReason());
+        return ensembleSets;
       },
       get windows(): WindowManager {
         if (!windows) throw new NotStartedError(notStartedReason());
@@ -1529,6 +1565,9 @@ export = function plugin(app: SkApp): SignalKPlugin {
         regional: regionalStatus(),
         jobs: jobs ? { running: jobs.runningId, queued: jobs.queueLength, total: jobs.list(500).length } : null,
         windows: windows ? { running: windows.running } : null,
+        ensemble_sets: ensembleSets ? { running: ensembleSets.running } : null,
+        // What the plugin config offers (config.ts), for the configuration panel (public/remoteEntry.js) to show.
+        config_choices: configChoices(),
         // The name, draught and air draft are Signal K's (vessels.self.name, design.*), not plugin settings.
         vessel: config?.vessel ? { ...config.vessel, ...selfDesign(), name: selfName() } : undefined,
         polar_source: config?.polarSource,
@@ -1539,6 +1578,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
         harmonic_dir: config?.currents.harmonicDir,
         extra_fields: config?.forecast.extraFields,
         energy_fields: config?.forecast.energyFields,
+        // The ensembles chosen in the plugin config (data/ensemble.ts): the members in use and the last pass; empty when off.
+        ensembles: dataStatus?.ensembles ?? [],
       }),
       forecastInfo: async (lat, lon) => {
         if (!forecastRun) throw new Error(forecastError ? `forecast unavailable: ${forecastError}` : 'forecast not loaded yet');
@@ -1560,6 +1601,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
       query,
       tiles: () => tiles,
       regionalRuns: () => (dataStatus?.regional ?? []).map(r => ({ name: r.source, cycle: r.cycle })),
+      /** From the data worker's last status: each ensemble with a cycle in use, and its members on disk. */
+      ensembles: ensemblesOnDisk,
       chartGroups: () => charts.groups(),
       chartRows: () => charts.chartRows(),
       downloadCoastline: () => coast.requestDownload(),

@@ -9,7 +9,17 @@
 import { HOUR_MS, HOUR_S } from '../../geo/units';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { availableSteps, type Cycle, cycleFor, EcmwfClient, latestExpectedCycle } from '../../data/ecmwf';
+import { availableSteps, type Cycle, cycleFor, EcmwfClient, ENSEMBLES, type EnsembleModelId, latestExpectedCycle } from '../../data/ecmwf';
+import {
+  ENSEMBLE_DECODED_DIR,
+  ENSEMBLE_GRIB_DIR,
+  ensembleCurrentFile,
+  ensembleMembers,
+  memberComplete,
+  pruneEnsembles,
+  readEnsembleCurrent,
+  recordEnsembleCycle,
+} from '../../data/ensemble';
 import { ForecastStore } from '../../data/forecast';
 import { isOffline } from '../../data/http';
 import { requestedParams, resolveCycle, type ResolvedCycle } from '../../data/loader';
@@ -95,8 +105,17 @@ export function newestDecodedRun(st: WorkerState, cfg: ResolvedConfig): DecodedR
   return null;
 }
 
+/** The forecast's decoded runs and GRIB cache on disk, measured now; a folder that cannot be read is reported and shows as not measured. */
 export function refreshDiskBytes(st: WorkerState): void {
-  st.diskBytes = { decoded: dirBytes(decodedRoot(st)), grib: st.client ? dirBytes(st.client.cacheDir) : 0 };
+  const measure = (what: string, dir: string): number | null => {
+    try {
+      return dirBytes(dir);
+    } catch (err) {
+      st.log('error', `forecast: ${what} disk use not measured (${(err as Error).message})`);
+      return null;
+    }
+  };
+  st.diskBytes = { decoded: measure('decoded runs', decodedRoot(st)), grib: st.client ? measure('GRIB cache', st.client.cacheDir) : null };
 }
 
 /** Make `r` the run in use and tell the main thread (which relays it to the route worker). */
@@ -319,6 +338,176 @@ async function refreshForecastInner(
     st.decodingBlockBytes = null;
     st.decodeAbort = null;
   }
+}
+
+/** What stays of each chosen ensemble on disk (data/ensemble.ts pruneEnsembles): the members wanted, the cycle in use, `pending` cycles. */
+function ensembleKeep(
+  st: WorkerState,
+  e: NonNullable<ResolvedConfig['forecast']['ensemble']>,
+  pending: Partial<Record<EnsembleModelId, string>>
+): Parameters<typeof pruneEnsembles>[1] {
+  const keep: Parameters<typeof pruneEnsembles>[1] = {};
+  for (const m of e.models) {
+    const cur = readEnsembleCurrent(st.cacheRoot, m);
+    keep[m] = {
+      members: [...new Set([...ensembleMembers(ENSEMBLES[m], e.members), ...(cur ? cur.members : [])])],
+      cycles: cur ? [cur.cycle] : [],
+      pending: pending[m] ?? null,
+    };
+  }
+  return keep;
+}
+
+/**
+ * An ensemble's decoded runs and GRIB cache, in bytes: a walk of every file in its folders. Null when they cannot be
+ * read, which is reported.
+ */
+function ensembleDirBytes(st: WorkerState, model: EnsembleModelId): number | null {
+  try {
+    return dirBytes(path.join(st.cacheRoot, ENSEMBLE_DECODED_DIR, model)) + dirBytes(path.join(st.cacheRoot, ENSEMBLE_GRIB_DIR, model));
+  } catch (err) {
+    st.log('error', `ensembles: ${ENSEMBLES[model].name}: disk use not measured (${(err as Error).message})`);
+    return null;
+  }
+}
+
+/** Prune the ensembles to `keep` (pruneEnsembles): what went is logged at `level`, what could not be read or removed as an error. */
+function pruneEnsemblesReported(st: WorkerState, keep: Parameters<typeof pruneEnsembles>[1], what: string): boolean {
+  const { removed, problems } = pruneEnsembles(st.cacheRoot, keep);
+  if (removed.length) st.log('info', `ensembles: ${what}removed ${removed.join(', ')}`);
+  for (const p of problems) st.log('error', `ensembles: not pruned: ${p}`);
+  return removed.length > 0;
+}
+
+/** Each chosen ensemble's bytes on disk, measured now (st.ensembleBytes): after a pass or prune changed them. */
+function measureEnsembles(st: WorkerState, models: EnsembleModelId[]): void {
+  const out: Partial<Record<EnsembleModelId, number | null>> = {};
+  for (const m of models) out[m] = ensembleDirBytes(st, m);
+  st.ensembleBytes = out;
+}
+
+/**
+ * An ensemble's bytes on disk for the status (query.ts dataStatus): as last measured, or measured once now when it has
+ * not been (before the first pass, a model just chosen). Never a walk of its folders per status: the status follows
+ * every map query.
+ */
+export function ensembleBytesOf(st: WorkerState, model: EnsembleModelId): number | null {
+  const known = st.ensembleBytes?.[model];
+  if (known !== undefined) return known;
+  const b = ensembleDirBytes(st, model);
+  st.ensembleBytes = { ...st.ensembleBytes, [model]: b };
+  return b;
+}
+
+/**
+ * Data worker, after the forecast (refresh): the chosen ensembles' members for the cycle of the run in use, downloaded
+ * and decoded in a child process (forecastdecodetask.ts runEnsembleDecodeTask) when any is missing. Never touches the
+ * main forecast: a failure, a hold or a lack of disk is recorded for the status (st.ensembles) and the ensemble in use
+ * stays. Ensembles off: whatever an earlier setting left on disk is removed.
+ */
+export async function refreshEnsembles(
+  st: WorkerState,
+  offline: string | null,
+  held: () => string | null,
+  changed: () => void = () => undefined,
+  /** Runs the ensemble-decode child (tests give one that answers without a child process). */
+  runTask: typeof runChildTask = runChildTask
+): Promise<void> {
+  const { config: cfg } = requireInit(st);
+  const e = cfg.forecast.ensemble;
+  if (!e) {
+    // Both folders, whichever is there (a download that failed before any decode leaves only the GRIB cache); a
+    // missing one reads as empty.
+    pruneEnsemblesReported(st, {}, 'off; ');
+    st.ensembles = {};
+    st.ensembleBytes = {};
+    return;
+  }
+  measureEnsembles(st, e.models);
+  // A record of the cycle in use that cannot be read counts as none (routes and the status see no ensemble, the prune
+  // keeps no cycle for it): reported each round until the cycle's members are complete and it is written again.
+  for (const m of e.models) {
+    const { problem } = ensembleCurrentFile(st.cacheRoot, m);
+    if (problem) st.log('error', `ensembles: ${ENSEMBLES[m].name}: ${problem}; written again once the cycle's members are complete`);
+  }
+  if (!st.run) return;
+  // The forecast's cycle as this round found it (a new run may be adopted while the child works).
+  const cycleTime = st.run.cycleTime;
+  const cycle = cycleName(cycleTime);
+  const horizonHours = cfg.forecast.horizonS / HOUR_S;
+  const wanted = (m: EnsembleModelId): number[] => ensembleMembers(ENSEMBLES[m], e.members);
+  // Each wanted member's decoded run checked once a round (memberComplete reads its index and stats every field file):
+  // the models with members still to get, and those members.
+  const todo = e.models
+    .map(m => ({ m, members: wanted(m).filter(n => !memberComplete(st.cacheRoot, m, n, cycle, horizonHours)) }))
+    .filter(x => x.members.length > 0);
+  const missing = todo.map(x => x.m);
+  const pending = Object.fromEntries(missing.map(m => [m, cycle])) as Partial<Record<EnsembleModelId, string>>;
+  const note = (m: EnsembleModelId, s: Partial<NonNullable<WorkerState['ensembles'][EnsembleModelId]>>): void => {
+    // checkedAt last: this note's time, never the entry's earlier one.
+    st.ensembles[m] = { loading: null, error: null, ...st.ensembles[m], ...s, checkedAt: new Date().toISOString() };
+    changed();
+  };
+  /** Model `m` complete on disk for this cycle: recorded as the ensemble in use, or why it could not be (its status, the log). */
+  const record = (m: EnsembleModelId): void => {
+    const why = recordEnsembleCycle(st.cacheRoot, m, cycleTime, wanted(m), horizonHours);
+    note(m, { loading: null, error: why ? `cycle ${cycle} complete but not in use: ${why}` : null });
+    if (why) st.log('error', `ensembles: ${ENSEMBLES[m].name}: cycle ${cycle} complete but not in use: ${why}`);
+  };
+  // A model complete on disk for this cycle is the ensemble in use, whatever stopped the pass that decoded it.
+  for (const m of e.models) if (!missing.includes(m)) record(m);
+  if (!missing.length) {
+    if (pruneEnsemblesReported(st, ensembleKeep(st, e, {}), '')) measureEnsembles(st, e.models);
+    return;
+  }
+  const why = offline ?? held();
+  if (why) {
+    for (const m of missing) note(m, { loading: null, error: `cycle ${cycle} not downloaded: ${why}` });
+    return;
+  }
+  // The disk is checked in the child, against the exact size of what each model's pass writes (data/ensemble.ts
+  // downloadModel, forecastdecodetask.ts diskCheck).
+  for (const m of missing) note(m, { loading: { cycle: cycleTime.toISOString(), done: 0, total: null }, error: null });
+  st.ensembleAbort = new AbortController();
+  try {
+    const results = await runTask(
+      {
+        task: 'ensemble-decode',
+        cacheRoot: st.cacheRoot,
+        mirror: cfg.forecast.mirror,
+        cycle: cycleTime.toISOString(),
+        horizonS: cfg.forecast.horizonS,
+        models: missing,
+        members: e.members,
+      },
+      null,
+      st.ensembleAbort.signal,
+      ev => {
+        // Each step is one model's: the child decodes the models one after the other.
+        if (ev.event === 'decode-step' && ev.model)
+          note(ev.model, { loading: { cycle: cycleTime.toISOString(), done: ev.done, total: ev.total } });
+        else if (ev.event === 'decode-log') st.log('info', `ensembles: ${ev.message}`);
+      }
+    );
+    for (const r of results) {
+      const failed = r.failed.map(f => `member ${f.member}: ${f.error}`);
+      note(r.model, { loading: null, error: r.error ?? (failed.length ? failed.join('; ') : null) });
+      if (!r.error && !failed.length) delete pending[r.model];
+    }
+  } catch (err) {
+    const h = held();
+    const text = h && st.ensembleAbort?.signal.aborted ? `stopped: ${h}` : (err as Error).message;
+    for (const m of missing) note(m, { loading: null, error: `cycle ${cycle} not downloaded: ${text}` });
+    st.log('info', `ensembles: cycle ${cycle} not downloaded (${text})`);
+  } finally {
+    st.ensembleAbort = null;
+  }
+  // What the pass completed is in use from now on: checked on disk, not taken from the child's answer. A model whose
+  // pass reported an error keeps that error in its status unless its cycle is now complete.
+  for (const m of missing) if (wanted(m).every(n => memberComplete(st.cacheRoot, m, n, cycle, horizonHours))) record(m);
+  pruneEnsemblesReported(st, ensembleKeep(st, e, pending), '');
+  measureEnsembles(st, e.models);
+  changed();
 }
 
 export function keepCycles(current: Cycle, n: number): Cycle[] {

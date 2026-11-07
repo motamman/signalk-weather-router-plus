@@ -302,9 +302,11 @@ export function limitWarnings(
 /**
  * The legs of the final route sailed partly where the sea was outside the polar's wave-correction table (legsim.ts
  * SimOptions.waveCorrection), as warnings: that time was sailed at the polar's speed, uncorrected (the owner's choice,
- * 2026-11-03: shown, the route not failed). Each leg timed again from its start waypoint's time, on the route as it
- * stands, as limitWarnings does; earlier such warnings are replaced. Nothing without a wave correction, or without
- * waves in the forecast (no correction can apply then: legsim.ts).
+ * 2026-11-03: shown, the route not failed). Likewise the time sailed where the forecast had waves but no Tm02 (mp2)
+ * to read the table with (`waves_no_period`: an older run, a step whose mp2 was not fetched, an AIFS ENS member, whose
+ * ensemble publishes no mp2). Each leg timed again from its start waypoint's time, on the route as it stands, as limitWarnings does; earlier
+ * such warnings are replaced. Nothing without a wave correction, or without waves in the forecast (no correction can
+ * apply then: legsim.ts).
  */
 export function waveCorrectionWarnings(
   route: Route,
@@ -314,7 +316,9 @@ export function waveCorrectionWarnings(
   // Counted, not stopped, as limitWarnings: a limit set to block would stop the leg at its first step over and drop
   // the time sailed uncorrected before it; the mode policy is the route's.
   const count: SimOptions = { ...env.sim, maxWindMode: 'avoid', maxSwhMode: 'avoid' };
-  const warns: NonNullable<Route['warnings']> = (route.warnings ?? []).filter(w => w.violation !== 'waves_outside_correction');
+  const warns: NonNullable<Route['warnings']> = (route.warnings ?? []).filter(
+    w => w.violation !== 'waves_outside_correction' && w.violation !== 'waves_no_period'
+  );
   const wps = route.waypoints;
   for (let i = 0; i + 1 < wps.length; i++) {
     const a = wps[i];
@@ -328,6 +332,15 @@ export function waveCorrectionWarnings(
         to: [b.lon, b.lat],
         repaired: false,
         detail: String(Math.round(r.uncorrectedWaveSeconds)),
+      });
+    if (r.noPeriodWaveSeconds > 0)
+      warns.push({
+        leg_index: i,
+        violation: 'waves_no_period',
+        from: [a.lon, a.lat],
+        to: [b.lon, b.lat],
+        repaired: false,
+        detail: String(Math.round(r.noPeriodWaveSeconds)),
       });
   }
   route.warnings = warns.length ? warns : undefined;

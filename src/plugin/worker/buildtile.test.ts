@@ -77,6 +77,7 @@ function state(sent: WorkerToMain[]): WorkerState {
     harmonicErrors: [],
     currentsUnread: [],
     decodeAbort: null,
+    ensembles: {},
   };
 }
 

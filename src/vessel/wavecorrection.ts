@@ -9,8 +9,10 @@
  * layers' axes) has no factor: polar-format forbids extrapolating or treating it as 1, so the caller sails it
  * uncorrected and says so (the owner's choice, 2026-11-03: a warning on the leg, the route not failed).
  *
- * The period is the forecast's mean wave period (ECMWF mwp; the owner's choice, 2026-11-03): polar-format does not
- * say which period a table is made for.
+ * The period is the forecast's mean zero-crossing period Tm02 (ECMWF mp2): mean, the owner's choice of 2026-11-03,
+ * agreed in SignalK/sailsconfiguration#13; Tm02 because ECMWF's mwp is the energy mean period Tm−1,0, longer than
+ * Tm01 or Tm02, and open data has no Tm01 (2026-11-04). Polar-format does not say which period a table is made for. A
+ * forecast without mp2 leaves the sea uncorrected (legsim.ts), never read with mwp.
  */
 
 /** One height layer: factors[period row × angles + angle column]. */

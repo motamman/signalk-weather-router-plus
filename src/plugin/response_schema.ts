@@ -11,11 +11,14 @@ import { DRAWBRIDGE_CHOICES } from '../engine/mesh/route';
 import { ROUTER_KINDS } from '../engine/router';
 import { SEARCH_PRESETS } from '../engine/search/presets';
 import { RouteRequestSchema } from './request_schema';
+import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS } from '../data/ecmwf';
 
 const nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T, description?: string) =>
   Type.Union([t, Type.Null()], description ? { description } : {});
 
-export const JobStatusSchema = Type.Enum(['queued', 'running', 'done', 'failed', 'cancelled'] as const, { type: 'string' });
+/** A route job's statuses: what the API answers, and what a saved job file is accepted with (jobs.ts). */
+export const JOB_STATUSES = ['queued', 'running', 'done', 'failed', 'cancelled'] as const;
+export const JobStatusSchema = Type.Enum(JOB_STATUSES, { type: 'string' });
 export type JobStatus = Static<typeof JobStatusSchema>;
 
 export const JobProgressSchema = Type.Object({
@@ -95,6 +98,21 @@ export const RouteSummarySchema = Type.Object({
   drawbridges_rule: Type.Optional(Type.Enum(DRAWBRIDGE_CHOICES, { type: 'string' })),
   router: Type.Optional(Type.Enum(ROUTER_KINDS, { type: 'string', description: 'The open-water router that ran.' })),
   search: Type.Optional(Type.Enum(SEARCH_PRESETS, { type: 'string', description: 'The search method the route ran with.' })),
+  forecast_member: Type.Optional(
+    Type.Object(
+      {
+        model: Type.Enum(ENSEMBLE_MODELS, { type: 'string' }),
+        name: Type.String(),
+        cycle: Type.String({ description: "The ensemble's cycle (ISO 8601)" }),
+        member: Type.Integer({
+          minimum: 0,
+          maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+          description: '0 = the control',
+        }),
+      },
+      { description: 'The ensemble member whose forecast the route ran on (request.forecast_member); absent: the main forecast.' }
+    )
+  ),
 });
 export type RouteSummary = Static<typeof RouteSummarySchema>;
 
@@ -124,7 +142,11 @@ export const JobPublicSchema = Type.Object({
   error: Type.Optional(Type.String()),
   resource_id: Type.Optional(Type.String()),
   publish_error: Type.Optional(Type.String({ description: 'Why publishing to the Resources API failed, when it did' })),
+  save_error: Type.Optional(
+    Type.String({ description: "Why the job's file on disk is behind it (its last save failed); absent once a save succeeds" })
+  ),
   window_id: Type.Optional(Type.String({ description: 'The departure window this job is one departure of (/api/windows)' })),
+  ensemble_set_id: Type.Optional(Type.String({ description: "The ensemble set this job is one member's route of (/api/ensemble-sets)" })),
   links: JobLinksSchema,
 });
 export type JobPublic = Static<typeof JobPublicSchema>;

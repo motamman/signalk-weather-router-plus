@@ -13,7 +13,7 @@ const easing: WindSource = {
     throw new Error('unused');
   },
   hasWaves: true,
-  wavesAt: (_lon, _lat, t) => ({ swh: Math.max(0, 4.6 - (0.3 * (t.getTime() - t0)) / H), mwp: 11, mwd: 300 }),
+  wavesAt: (_lon, _lat, t) => ({ swh: Math.max(0, 4.6 - (0.3 * (t.getTime() - t0)) / H), mwp: 11, mp2: 11, mwd: 300 }),
 };
 
 test('refusal text: waves over the limit at the start, when they ease, what to do', () => {

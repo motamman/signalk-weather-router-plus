@@ -53,7 +53,7 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
 - **Forecast:** ECMWF IFS 0.25° open data, `oper`/`wave` streams for every
   cycle: 00z/12z to 360 h (every 3 h to 144 h, then every 6 h), 06z/18z to
   144 h. Fields: the base fields `10u`, `10v`, `msl`, `swh`, `mwp`,
-  `mwd`, the optional peak wave period `pp1d`, and the extra fields when
+  `mwd`, the optional wave periods `mp2` and `pp1d`, and the extra fields when
   they are on (below). Only those fields are fetched (byte-range
   requests against the published `.index` files, roughly 4.7 MB per
   step instead of 140 MB) and cached on disk under the plugin's data
@@ -62,10 +62,13 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   Weather API and routing work anywhere: 1440 × 721 cells × 4 B =
   4.15 MB per field per step. A 72 h horizon (25 steps) is 623 MB with
   the six base fields and 1.35 GB with the extra fields (`2t`, `tprate`,
-  `skt`, `2d`, `ptype`, `tcc`, `10fg`). The peak wave period (`pp1d`) is
-  fetched when it can be, about 104 MB more at 72 h (25 × 4.15 MB); it
-  is optional: a forecast without it is complete, and nothing reads it
-  yet (it is there for wave-correction tables made for peak period).
+  `skt`, `2d`, `ptype`, `tcc`, `10fg`). Two wave periods are fetched
+  when they can be, each about 104 MB more on disk at 72 h
+  (25 × 4.15 MB): the mean zero-crossing period Tm02 (`mp2`, 440,100 B
+  per step to download for the 05 Nov 18Z run at +24 h, from its
+  `.index`), which the wave correction is read with, and the peak period
+  (`pp1d`), which nothing reads yet. Both are optional: a forecast
+  without them is complete.
 
   **When a run is due.** ECMWF publishes each cycle at once, 454 minutes
   after its run time for 00z/12z and 387 minutes for 06z/18z (measured
@@ -150,6 +153,65 @@ What changed in this version: [WHATSNEW.md](WHATSNEW.md). Full history:
   disk). Route areas are released when a route ends, so each route
   decodes its CMEMS SMOC area again from the disk cache (2.1–3.4 s
   measured).
+- **Ensembles (optional, off by default).** With *Download ensembles* on
+  in the plugin configuration, each cycle, after the forecast, the plugin
+  also downloads ECMWF's open-data ensembles at 0.25°: **IFS ENS** (50
+  perturbed members, no control; every 3 h to 144 h, then every 6 h) and
+  **AIFS ENS** (a control and 50 members; every 6 h). Which ones, and
+  how many members (5 to 50 in fives, members 1 to N, and AIFS ENS's
+  control too), are chosen there; at least one ensemble while they are
+  on. Only the routing fields are fetched (`10u`, `10v`, `swh`, `mwp`,
+  `mwd`, and the mean zero-crossing period `mp2` where the ensemble
+  publishes it: IFS ENS does, AIFS ENS does not, checked on
+  data.ecmwf.int 2026-11-06; a member without it routes its waves
+  uncorrected, with a `waves_no_period` warning), to the forecast's
+  horizon, step by step from the published
+  `.index` files (`ecmwf-ens/` under the plugin data directory), and each
+  member is decoded to disk as a run of its own in the forecast's format
+  (`forecast-ens/<model>/mNN/<cycle>/`; m00 is the control); every
+  message is checked to be the member it is filed as (GRIB2 product
+  template 4.1). A cycle is used only once every member chosen is on
+  disk; until then the one before stays. The download holds off while
+  offline or held, as the forecast's does. Before fetching, it reads
+  every step's index (the last step's first, so a cycle not finished
+  yet costs one index) and checks the free disk against the size of
+  every message still to fetch plus the members' decoded runs, keeping
+  the forecast's reserve free; when that does not fit, or the free disk
+  cannot be measured, the cycle is not fetched and the status says why.
+
+  A route can then be **routed on each member**: with *Route each
+  ensemble member too* ticked (Route → Plan, above Find Route, with the
+  ensemble and the number of members, 5 to those on disk), Find Route
+  computes the route on the main forecast as always, and an ensemble set
+  computes the same request (start, destination, waypoints, boat, polar,
+  limits, options) as a route search of its own on each member's
+  forecast, one after the other on the server, so a route asked for
+  meanwhile waits behind one member at most. A member's route reads only
+  that member's wind and waves (no regional wind); every member of a set
+  is of the same ensemble cycle. On the map the members' routes are
+  dotted cyan and the main forecast's thin and solid, with the
+  **corridor** they all lie in shaded under them: each route is cut into
+  200 steps by progress along its own length, and each step's piece is
+  the convex hull of every route's points in it, so every route lies
+  inside by construction; it is wider where the routes progress unevenly
+  (display only; water is not checked, so two members either side of an
+  island put the island in it). The route
+  opened sits on a white band. The result strip gives how far the set is and the earliest,
+  median and latest arrival, and the Itinerary tab lists each member's
+  arrival, passage, motoring, strongest wind and highest waves; a row
+  opens that member's route. Over the API: `POST /api/ensemble-sets`,
+  and `forecast_member` on a route request.
+
+  *Measured on the test box (Pi 5), 2026-11-05, 72 h:* IFS ENS, 5
+  members: 625 fields, 350,757,112 B downloaded (arithmetic: about
+  70 MB per member), decoded in 121.8 s. AIFS ENS, the control and 5
+  members: 390 fields, 206,788,659 B (arithmetic: about 34.5 MB per
+  member), 75.3 s. *On disk, measured 2026-11-06 (`du -sb`, the 06Z run,
+  72 h):* 519,126,603 B per IFS ENS member (25 steps) and 269,947,987 B
+  per AIFS ENS member (13 steps), the same for each of the 21 members.
+  Both measures are of the five required fields, before `mp2` made a
+  sixth for an IFS ENS member (not measured). The time of one member's
+  route is not measured yet.
 - **Land:** GSHHG shorelines as shapefiles (`GSHHS_f_L1.shp` for full
   resolution, automatically including L2–L4 siblings; add `GSHHS_f_L6.shp` for Antarctica) or the OSM
   land-polygons export. At start the plugin cuts the coastline into
@@ -424,9 +486,11 @@ computed with what that request says, not with the user's saved Setup.
   the sheet is half open and the others are open. The sideways test comes
   first and reads the screen, not the window, so the on-screen keyboard,
   which shrinks the window to a wide, short box, does not turn the sheet
-  into the drawer; the other two read the window's width. On a phone,
-  upright or sideways, the legend folds to one line naming its rows (tap
-  to open; remembered), and the map credits fold to their button with the
+  into the drawer; the other two read the window's width. The legend
+  folds to one line naming its rows on any screen (tap to open or fold;
+  remembered, separately for a phone and a wider screen; a phone starts
+  folded, a wider screen open). On a phone, upright or sideways, the map
+  credits fold to their button with the
   OpenStreetMap credit beside it. Upright, both sit just above the sheet.
 - **Planning.** Click the map for the menu: set or move the start, set or
   move the destination, **Add waypoint here** (the clicked point becomes
@@ -737,6 +801,17 @@ computed with what that request says, not with the user's saved Setup.
   search (water too shallow on the finished route) leaves it where the
   search ended. With the decision lines on, the path is theirs (dashed)
   and the boat sits at its end.
+- **The map legend's Route row**: while a route is on the map, the
+  legend (bottom left) starts with what of it is drawn, each item with
+  its symbol as the map draws it: starboard tack (green), port tack
+  (red) and motoring (amber) legs, a leg past the forecast (dashed), the
+  "forecast ends" diamond, the waypoint rings and heading arrows (in
+  their next leg's colour; blue at the arrival), the wind arrows, a point
+  moved to the nearest water (maroon dashed), approximate waypoints'
+  arrival circles, an ensemble set's corridor, main forecast and members
+  and the route opened, the decision lines and the coarse A* guide while
+  they show, a proposed re-plan, the track sailed and earlier routes.
+  Only what is drawn is listed.
 - **Defaults tab**: the web-app settings below (what every route starts from, shared by every client), in the selected units. Numbers are sliders with the value beside the label; max wind and max wave height have a "no limit" box.
 - **While the server gets its forecast** (a first start, or after the
   forecast settings changed, when the forecast is decoded again): a notice
@@ -1653,6 +1728,9 @@ React and needs no build step for it.
 | `polarsDir` | directory of `.pol`/`.csv` polars listed by `/api/polars`. Blank = the library bundled with the plugin (`data/polars/`: the ~700 polars of the OpenCPN [weather_routing_pi](https://github.com/seandepagnier/weather_routing_pi) library, GPL-3.0), with user polars (generated ones included) kept in `polars/user/` in the plugin data directory, so an update never removes them. Set, user polars are in `<polarsDir>/user/` |
 | `currents.harmonicDir` | directory of tidal-harmonic `.npz` files |
 | `forecast.mirror` | `ecmwf`, `aws` or `google` |
+| `forecast.ensemble.enabled` | download ECMWF ensembles each cycle, after the forecast (default off: nothing downloaded, nothing shown, and the other `ensemble` settings are not read or checked). See [Data](#data) |
+| `forecast.ensemble.models` | `ifs-ens`, `aifs-ens` or both (default `ifs-ens`); at least one while ensembles are on. One no longer chosen is deleted from disk |
+| `forecast.ensemble.members` | members per ensemble, 5 to 50 in fives (default 5): members 1 to this, and AIFS ENS's control too |
 | `weatherProvider.enabled` | register with the Weather API (default on) |
 | `overlayCache.enabled` | build map tiles ahead of time (default on) |
 | `overlayCache.radius` | m, around the boat at zoom 8 and below; halved at each deeper zoom (default 250000, 1000–2000000); the map view builds only the tiles it showed |
@@ -2005,6 +2083,11 @@ the SSE endpoint replays.
 | GET | `/api/windows/{id}` | readonly | a window's departures, their status and metrics |
 | POST | `/api/windows/{id}/cancel` | readwrite | cancel the departures not computed yet |
 | DELETE | `/api/windows/{id}` | readwrite | delete a finished window and its route jobs |
+| POST | `/api/ensemble-sets` | readwrite | ensemble set `{route, model, members}`: the route on each member on disk, one route job each |
+| GET | `/api/ensemble-sets` | readonly | list ensemble sets; `limit` as for windows (all by default, at most 12; a whole number from 1) |
+| GET | `/api/ensemble-sets/{id}` | readonly | a set's members, their status, route job and metrics; `save_error` as for windows |
+| POST | `/api/ensemble-sets/{id}/cancel` | readwrite | cancel the members not computed yet |
+| DELETE | `/api/ensemble-sets/{id}` | readwrite | delete a finished set and its route jobs |
 
 #### Job lifecycle
 
@@ -2018,9 +2101,18 @@ the SSE endpoint replays.
 
 - The queue holds at most 16 waiting jobs; a 17th is refused with `429`.
 - Finished jobs (`done`, `failed`, `cancelled`) are saved to disk
-  (`jobs/<id>.json` in the plugin data directory) and survive a restart.
+  (`jobs/<id>.json` in the plugin data directory, the route results
+  once in `jobs/results/<id>.json`) and survive a restart. After a
+  restart a job's event log is the one it finished with.
   Only the newest are kept: the `routing.keepJobs` setting ("finished
-  routes kept", default 50, 1–500); older ones are deleted.
+  routes kept", default 50, 1–500); older ones are deleted. A job file
+  that cannot be read at start-up, does not hold a job (a status other
+  than the five above, no request or creation time, a done job without
+  its summary, or some of its route results inside without its events),
+  or holds a job of another id, is left as it is, not restored, and
+  named in the Signal K log; so is one whose delete fails (it comes
+  back after a restart). A results file whose job has no file at all is
+  removed at start-up.
 - A job that was `queued` or `running` when the plugin stopped is
   loaded as `failed` with `error` "plugin restarted while the job was in
   progress". If the route worker crashes or exits, the running job fails
@@ -2059,6 +2151,7 @@ Submit a route request. Access: readwrite. Body: JSON `RouteRequest`.
 | `no_currents` | boolean | | false | ignore every current source |
 | `wind_model` | string | | `auto` | `auto`: regional wind from signalk-grib-downloader where finer and covering, ECMWF elsewhere; `ecmwf`: ECMWF only |
 | `avoid_areas` | boolean | | true | treat the areas marked on Signal K notes (`properties.avoid.radius_m` around the note's position) as land |
+| `forecast_member` | `{model, member, cycle?}` | | none | route on one ensemble member's forecast instead of the main one (no regional wind): `model` `"ifs-ens"` or `"aifs-ens"` (downloaded, else `400`), `member` 0..50 on disk as the data worker last reported (0 = the control; a member gone since fails the job: "member N is not on disk"), `cycle` (yyyymmddHH) refused when it is no longer the ensemble's cycle in use. Refused (`400`) with `no_forecast`, and an ensemble set refuses a route with `no_forecast`. A departure window's route with `forecast_member` is checked the same way before the window starts (`400 {error: "route: forecast_member: …"}`). Ensemble sets send it per member; `summary.forecast_member` names it |
 | `vessel` | object | | the vessel settings | per-route overrides; absent keys use the settings ([Configuration](#configuration)) |
 | `vessel.name` | string | | | ignored (accepted so older clients still validate); the vessel name is Signal K's `vessels.self.name` |
 | `vessel.motor_speed_ms` | number | m/s | setting (3.087) | 0.01..50 |
@@ -2120,7 +2213,7 @@ List jobs, newest first (by creation time). Access: readonly.
 
 | Query | Type | Default | Limits |
 |---|---|---|---|
-| `limit` | integer | 50 | clamped to 1..500 |
+| `limit` | integer | 50 | a whole number from 1, else `400`; above 500, 500 are listed |
 
 `200`: an array of job status objects (next section).
 
@@ -2142,6 +2235,7 @@ found"}`.
 | `error` | string | `failed` / `cancelled` only |
 | `resource_id` | string | Resources API id once published (equal to the job id) |
 | `publish_error` | string | the last publishing error, when publishing failed |
+| `save_error` | string | only while the job's last save failed (a full or read-only disk): why. The job is answered from memory. Its route results are saved once, in a file of their own that no later save rewrites (`jobs/results/<id>.json`); until that file is saved, the job's own file holds them too, and they stay in memory. A restart brings back each job as its last successful save left it: its own file, with its results inside for as long as their own file was never saved; a job none of whose saves succeeded is lost. The failure is in the Signal K log, and the next save clears this |
 | `links` | object | as in the `202` of `POST /api/routes` |
 
 Progress entry:
@@ -2249,7 +2343,7 @@ LineString `properties`:
 | `stop_count` | number | count | start + waypoints + destination; present with `snaps` |
 | `start_original`, `start_anchor`, `start_snap_distance_m` | `[lon, lat]`, `[lon, lat]`, number | degrees, m | present when the start was moved: the drawn point, where the route starts, and the distance between them |
 | `end_original`, `end_anchor`, `end_snap_distance_m` | as above | | present when the destination was moved |
-| `warnings` | array | | present when any; items `{leg_index, violation, from, to, repaired, detail?}`, `violation` `"leg_crosses_land"`, `"wind_over_limit"`, `"waves_over_limit"` (`detail` the seconds the leg spends over the limit, worked out on the final route, block or avoid), `"detour_motored"` (a depth-check detour that motored on a sailing route; `detail` its motoring time, seconds), `"search_failed"` (the search on an open stretch of a chart-mesh leg failed and the stretch follows the mesh route instead; `from`/`to` the stretch's ends, `detail` the search's reason), `"beat_motored"` (the refined router found no room to tack and motored the leg straight; `detail` its motoring time, seconds) or `"waves_outside_correction"` (the polar set's wave-correction table had no factor for the sea on part of the leg, which was sailed uncorrected; `detail` those seconds), `from`/`to` `[lon, lat]` |
+| `warnings` | array | | present when any; items `{leg_index, violation, from, to, repaired, detail?}`, `violation` `"leg_crosses_land"`, `"wind_over_limit"`, `"waves_over_limit"` (`detail` the seconds the leg spends over the limit, worked out on the final route, block or avoid), `"detour_motored"` (a depth-check detour that motored on a sailing route; `detail` its motoring time, seconds), `"search_failed"` (the search on an open stretch of a chart-mesh leg failed and the stretch follows the mesh route instead; `from`/`to` the stretch's ends, `detail` the search's reason), `"beat_motored"` (the refined router found no room to tack and motored the leg straight; `detail` its motoring time, seconds) `"waves_outside_correction"` (the polar set's wave-correction table had no factor for the sea on part of the leg, which was sailed uncorrected; `detail` those seconds) or `"waves_no_period"` (the forecast had waves but no Tm02, `mp2`, to read that table with on part of the leg, which was sailed uncorrected; `detail` those seconds); a `detail` in seconds is a string of whole seconds; `from`/`to` `[lon, lat]` |
 | `land_crossings` | number | count | present when a warning is `leg_crosses_land` |
 | `has_land_crossing` | boolean | | `true` when `land_crossings` is present |
 | `max_swh_m` | number | m | highest significant wave height at a route point; present when wave data was sampled |
@@ -2457,6 +2551,7 @@ Access: readonly. `200`:
 | `created_at`, `finished_at`, `error` | string | |
 | `request` | object | as posted, with `step_s` |
 | `progress` | string or null | the last progress line of the departure computing |
+| `save_error` | string | only while the window's file could not be saved (a full or read-only disk): why. The window runs on from memory but would not survive a restart as it is now; the failure is in the Signal K log, and the next change saves it again and clears this |
 | `departures` | array | one per departure (below) |
 
 | Departure field | Unit | Notes |
@@ -2476,7 +2571,11 @@ Access: readonly. `200`:
 | `metrics.warnings` | count | the route's warnings |
 
 `GET /api/windows?limit=` lists the windows newest first in the same
-form. `POST /api/windows/{id}/cancel` → `202 {id, status}`: the
+form: all of them by default, at most 12 (the 10 kept and 2 computing);
+`limit`, a whole number from 1 (else `400`), lists fewer. A window file that cannot be
+read at start-up, or that does not hold a window, is left as it is,
+not restored, and named in the Signal K log; so is one whose delete
+fails (it comes back after a restart). `POST /api/windows/{id}/cancel` → `202 {id, status}`: the
 departures not started are cancelled, and the one computing is asked to
 stop; it stops when the route worker next checks, a moment later.
 `DELETE /api/windows/{id}` → `204`, or `409` while it is running, and
@@ -2644,6 +2743,9 @@ Plugin, forecast, currents, tides and queue status. Access: readonly.
 | `overlay_prebuild` | tiles built ahead of time: `{enabled, workers, workers_ready, paused, areas, window, max_zoom, walk_started_at, seen, built, skipped, not_kept, errors, last_error, at, complete, built_total, build_ms_avg}`; `areas`: `[{kind: "view" or "boat", lat, lon, radius_m}]`; `at`: `{area, hour, z}` of the last tile started; `complete`: every tile of the window is saved. Null before start |
 | `weather_provider_registered` | the Weather API provider is registered |
 | `jobs` | `{running: id or null, queued, total}`, or null before start |
+| `windows`, `ensemble_sets` | `{running}`: departure windows and ensemble sets computing, or null before start |
+| `ensembles` | each ensemble chosen in the plugin config: `{model, name, cycle, members, bytes, loading, error, checkedAt}`; `cycle` (ISO) and `members`: the cycle in use and its members on disk; `bytes`: on disk, null when its folders could not be read (the log says why); `loading`: a pass under way; `error`: why the last pass could not get or use the cycle. Empty when ensembles are off |
+| `config_choices` | what the plugin config offers, for the configuration panel: `{mirrors: [{id, label}], mirror_default, ensembles: [{id, name}], ensemble_members, ensemble_defaults: {enabled, models, members}, ensemble_note}` |
 | `vessel`, `polar`, `router`, `land`, `harmonic_dir`, `extra_fields` | the resolved configuration: vessel parameters (internal camelCase names; `draughtM` and `airDraftM` are Signal K's `design.draft.maximum` and `design.airHeight`, null when unset), default polar file, default open-water router, coastline shapefiles, tidal-harmonic directory, extra fields on/off |
 
 `forecast` fields: `cycle`, `valid_from`, `valid_to`, `steps` (number of
@@ -2652,7 +2754,9 @@ steps), `params`, `coverage` (`"global"`), `storage`
 complete decoded run was already on disk; `"grib"`: decoded from the
 GRIB cache or download), `ready_ms`, `fields_downloaded`, `decoded_dir`,
 `decoded_bytes` (this run on disk), `decoded_at`, `decode_ms`,
-`decoded_disk_bytes` (all decoded runs kept), `grib_cache_bytes`,
+`decoded_disk_bytes` (all decoded runs kept), `grib_cache_bytes` (each
+null when not measured: not yet, or its folder could not be read, which
+the log says),
 `last_decode` (`{at, cycle, ms, stepBlockBytes, writtenBytes,
 downloaded}` or null), and `memory`: `{data_worker_held_bytes,
 data_worker_largest_recent_window, route_worker_held_bytes,
@@ -2980,9 +3084,15 @@ and puts a route point where it changes, on the line already sailed
 the stretch into it, shown as **Sails** on the leg cards. The speed stays
 `best`'s. A set's `waveCorrection` table multiplies the sailing speed by
 its factor for the sea the boat meets (significant height, ECMWF's mean
-period `mwp`, the waves' angle off the heading; interpolated in angle,
-then period, then height). A sea outside the table is sailed uncorrected
-and the leg gets a `waves_outside_correction` warning. The correction is
+zero-crossing period Tm02 `mp2`, the waves' angle off the heading;
+interpolated in angle, then period, then height). Tm02, not ECMWF's mean
+period `mwp`: `mwp` is the energy mean period Tm−1,0, longer than Tm01
+or Tm02, and open data has no Tm01, so `mp2` is the nearest to TimeZero's
+tables (SignalK/sailsconfiguration#13). A sea outside the table is sailed
+uncorrected and the leg gets a `waves_outside_correction` warning; where
+the forecast has waves but no `mp2` (an older run, a step whose `mp2`
+could not be fetched, an AIFS ENS member), it is sailed uncorrected too,
+never read with `mwp`, and the leg gets a `waves_no_period` warning. The correction is
 off when `polars.applyWaveCorrection` is false, and motoring speed is not
 corrected.
 

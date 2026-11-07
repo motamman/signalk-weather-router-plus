@@ -197,11 +197,12 @@ export class LayeredWind implements WindSource {
     return Float64Array.from(lons, (lon, k) => this.base.wavesAt(lon, lats[k], time)?.swh ?? NaN);
   }
 
+  /** The waves at each point and time, from the base forecast (regional runs hold wind only): all at once when it can. */
   wavesFullAtManyAt(
     lons: Float64Array,
     lats: Float64Array,
     timesMs: Float64Array
-  ): { swh: Float64Array; mwp: Float64Array; mwd: Float64Array } {
+  ): { swh: Float64Array; mwp: Float64Array; mp2: Float64Array; mwd: Float64Array } {
     if (this.base.wavesFullAtManyAt) return this.base.wavesFullAtManyAt(lons, lats, timesMs);
     return wavesFullFallback(this.base, lons, lats, timesMs);
   }
@@ -212,21 +213,23 @@ export class LayeredWind implements WindSource {
   }
 }
 
+/** The waves at each point and time, one wavesAt each, for a source that cannot sample many at once: NaN where none. */
 function wavesFullFallback(
   w: WindSource,
   lons: Float64Array,
   lats: Float64Array,
   timesMs: Float64Array
-): { swh: Float64Array; mwp: Float64Array; mwd: Float64Array } {
+): { swh: Float64Array; mwp: Float64Array; mp2: Float64Array; mwd: Float64Array } {
   const n = lons.length;
   const swh = new Float64Array(n).fill(NaN);
   const mwp = new Float64Array(n).fill(NaN);
+  const mp2 = new Float64Array(n).fill(NaN);
   const mwd = new Float64Array(n).fill(NaN);
   for (let k = 0; k < n; k++) {
     const v = w.wavesAt(lons[k], lats[k], new Date(timesMs[k]));
-    if (v) [swh[k], mwp[k], mwd[k]] = [v.swh, v.mwp, v.mwd];
+    if (v) [swh[k], mwp[k], mp2[k], mwd[k]] = [v.swh, v.mwp, v.mp2, v.mwd];
   }
-  return { swh, mwp, mwd };
+  return { swh, mwp, mp2, mwd };
 }
 
 function sampleAt(

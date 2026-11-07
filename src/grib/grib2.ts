@@ -3,10 +3,11 @@
  *
  * Supports:
  *  - Section 3 grid definition template 3.0 (lat/lon, Plate Carree)
- *  - Section 4 product definition template 4.0 (instant, point in time)
- *    and 4.8 (statistically processed over a time range, e.g. a maximum
- *    gust or an accumulation), enough to identify the parameter and its
- *    forecast step
+ *  - Section 4 product definition template 4.0 (instant, point in time),
+ *    4.1 (one member of an ensemble at a point in time: 4.0 and the
+ *    member) and 4.8 (statistically processed over a time range, e.g. a
+ *    maximum gust or an accumulation), enough to identify the parameter,
+ *    its forecast step and the ensemble member
  *  - Section 5 data representation templates 5.0 (simple packing) and
  *    5.42 (CCSDS / libaec)
  *  - Section 6 bit maps (indicator 0 = present, 254 = reuse previous,
@@ -64,8 +65,14 @@ export interface Grib2Product {
    * 3 h gust says 2 (the maximum over 2–3 h), its 3 h wind says 3.
    */
   forecastHours: number;
-  /** Length of the time range in hours (4.8); 0 for an instant (4.0), and for a 4.8 range that is still empty (step 0). */
+  /** Length of the time range in hours (4.8); 0 for an instant (4.0, 4.1), and for a 4.8 range that is still empty (step 0). */
   intervalHours: number;
+  /**
+   * The ensemble member (template 4.1, octets 35–37): `type` from code table 4.6 (0 the unperturbed control, 3 and 4 a
+   * negatively and a positively perturbed member), `member` its number (0 for the control), `size` the number of
+   * forecasts in the ensemble. Absent for a forecast that is not an ensemble member.
+   */
+  ensemble?: { type: number; member: number; size: number };
 }
 
 export interface Grib2Packing {
@@ -178,6 +185,11 @@ export function parseGrib2Message(msg: Uint8Array): Grib2Message {
   return parseMessage(msg, 0);
 }
 
+/**
+ * Read one GRIB2 message (`absOffset`: where it starts in its file, for the errors): where each section starts, then
+ * its identification, grid, product (templates 4.0, 4.1 and 4.8), data representation and bit map, and its data,
+ * unpacked only when asked (decode). Throws on a section that is missing, of unknown number or too short, and on a template it does not read.
+ */
 function parseMessage(m: Uint8Array, absOffset: number): Grib2Message {
   const discipline = u8(m, 6);
   const length = u64(m, 8);
@@ -237,8 +249,8 @@ function parseMessage(m: Uint8Array, absOffset: number): Grib2Message {
   // ---- Section 4: product definition
   const pdt = u16(m, s.s4 + 7);
   const q = s.s4 - 1;
-  if (pdt !== 0 && pdt !== 8) {
-    throw new Grib2Error(`product definition template 4.${pdt} not supported (only 4.0 and 4.8)`);
+  if (pdt !== 0 && pdt !== 1 && pdt !== 8) {
+    throw new Grib2Error(`product definition template 4.${pdt} not supported (only 4.0, 4.1 and 4.8)`);
   }
   const parameterCategory = u8(m, q + 10);
   const parameterNumber = u8(m, q + 11);
@@ -274,6 +286,11 @@ function parseMessage(m: Uint8Array, absOffset: number): Grib2Message {
     forecastHours,
     intervalHours,
   };
+  if (pdt === 1) {
+    // Octets 1–34 as template 4.0; then the type of ensemble forecast, the perturbation number and the ensemble's size.
+    if (u32(m, s.s4) < 37) throw new Grib2Error(`product definition template 4.1 section too short (${u32(m, s.s4)} octets)`);
+    product.ensemble = { type: u8(m, q + 35), member: u8(m, q + 36), size: u8(m, q + 37) };
+  }
 
   // ---- Section 5: data representation
   const numberOfValues = u32(m, s.s5 + 5);

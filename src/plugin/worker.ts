@@ -45,7 +45,7 @@ import { type MainToWorker, type WorkerRole, type WorkerToMain } from './protoco
 import { rtofsLoadSame, smocLoadSame } from './config';
 import { setNetworkObserver } from '../data/http';
 import { noteNetwork, requireInit } from './worker/state';
-import { refreshForecast } from './worker/forecast';
+import { refreshEnsembles, refreshForecast } from './worker/forecast';
 import { prepareWaterGrid } from './worker/landgrid';
 import {
   adoptCurrentsRef,
@@ -103,7 +103,7 @@ const st: WorkerState = {
   forecastMemory: { heldBytes: 0, last: null },
   lastDecode: null,
   decodingBlockBytes: null,
-  diskBytes: { decoded: 0, grib: 0 },
+  diskBytes: { decoded: null, grib: null },
   overlayLand: null,
   polar: null,
   landCache: null,
@@ -135,9 +135,38 @@ const st: WorkerState = {
   harmonicErrors: [],
   currentsUnread: [],
   decodeAbort: null,
+  ensembles: {},
 };
 // The data worker's requests say whether there is a connection (status, and a refresh round stops asking servers).
 if (role === 'data') setNetworkObserver((state, reason) => noteNetwork(st, state, reason));
+
+/**
+ * The ensemble pass (worker/forecast.ts refreshEnsembles), started by a refresh round after the forecast and not waited
+ * for: a pass downloads and decodes for many minutes, and the round's own status (forecast, SMOC, tides, regional) and
+ * the next round must not wait behind it. One pass at a time; a round that finds one running leaves it, and the next
+ * round after it ends starts what is still missing. The status goes out at each change the pass makes and at its end.
+ */
+let ensemblePass: Promise<void> | null = null;
+let ensembleUserPass = false;
+/**
+ * Start the ensemble pass (refreshEnsembles) unless one is under way; `user`: the owner asked (Refresh, a route), and
+ * the pass is not stopped by a hold (internet-hold below). The owner asking while a background pass runs makes that
+ * pass the owner's: it is the download they asked for. Its end sends the status.
+ */
+function startEnsembles(st: WorkerState, offline: string | null, held: () => string | null, user: boolean): void {
+  if (ensemblePass) {
+    if (user) ensembleUserPass = true;
+    return;
+  }
+  ensembleUserPass = user;
+  const changed = (): void => st.send({ type: 'data-status', status: dataStatus(st) });
+  ensemblePass = refreshEnsembles(st, offline, held, changed)
+    .catch(err => st.log('error', `ensembles: ${(err as Error).message}`))
+    .finally(() => {
+      ensemblePass = null;
+      changed();
+    });
+}
 
 /**
  * Refresh RTOFS (both roles) and, in the data worker, the forecast and
@@ -167,6 +196,8 @@ export async function refresh(st: WorkerState, force: boolean, user = false): Pr
     sendCurrents(st);
     if (st.role === 'data') {
       await refreshForecast(st, force, offline(), held);
+      // The ensembles of the run in use: started after it, not waited for (startEnsembles).
+      startEnsembles(st, offline(), held, user);
       // After the forecast, so a first boot is not held up by the SMOC resident download.
       await refreshSmoc(st, offline());
       sendCurrents(st);
@@ -180,13 +211,14 @@ export async function refresh(st: WorkerState, force: boolean, user = false): Pr
   }
 }
 
+/** Handle one message from the main thread (MainToWorker): init, refresh, a route, a query, a cancel and the rest. */
 export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> {
   switch (msg.type) {
     case 'init': {
       st.config = msg.config;
       st.cacheRoot = msg.cacheDir;
       st.client = new EcmwfClient({
-        baseUrl: ECMWF_MIRRORS[st.config.forecast.mirror] ?? ECMWF_MIRRORS.ecmwf,
+        baseUrl: ECMWF_MIRRORS[st.config.forecast.mirror],
         cacheDir: path.join(msg.cacheDir, 'ecmwf'),
         log: m => st.log('debug', `ecmwf: ${m}`),
       });
@@ -393,6 +425,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
     }
     case 'shutdown':
       st.decodeAbort?.abort();
+      st.ensembleAbort?.abort();
       if (st.gridBuilder) await st.gridBuilder.terminate();
       process.exit(0);
   }
@@ -439,6 +472,8 @@ port.on('message', (msg: MainToWorker) => {
     st.internetHold = msg.hold;
     // A background round's decode stops, its download with it; the owner's round goes on.
     if (msg.hold && st.backgroundRound) st.decodeAbort?.abort();
+    // So does an ensemble pass a background round started.
+    if (msg.hold && !ensembleUserPass) st.ensembleAbort?.abort();
     return;
   }
   // Initialised first (its own message chain); the rest of the data worker's network work beside the queries.

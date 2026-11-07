@@ -16,6 +16,16 @@ import { ROUTER_KINDS } from '../engine/router';
 import { SEARCH_PRESETS } from '../engine/search/presets';
 import { SETTINGS_SPEC } from './settings';
 import { AIR_DRAFT_M_RANGE, DRAUGHT_M_RANGE, OVERHEAD_M_RANGE, UKC_M_RANGE } from '../vessel/vessel';
+import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS } from '../data/ecmwf';
+
+/**
+ * The fewest and most members an ensemble set routes (ensembles.ts): the most is the most members downloaded plus a
+ * control (AIFS ENS has one, IFS ENS none). The members on disk bound it further (api.ts).
+ */
+export const ENSEMBLE_MEMBERS_RANGE = [
+  ENSEMBLE_MEMBER_CHOICES[0],
+  ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1] + 1,
+] as const;
 
 /** The range a setting allows, for a request field that overrides it. */
 function settingRange(key: string): { minimum: number; maximum: number } {
@@ -215,6 +225,23 @@ export const VESSEL_FIELDS = {
 
 const Point = Type.Object({ lat: Type.Number(), lon: Type.Number() });
 
+/** The fields of `forecast_member`: the schema (OpenAPI) and the check (validateRouteRequest) both read them. */
+const FORECAST_MEMBER_FIELDS = {
+  model: Type.Enum(ENSEMBLE_MODELS, { type: 'string', description: 'The ensemble (downloaded: plugin config Ensemble downloads)' }),
+  member: Type.Integer({
+    minimum: 0,
+    maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+    description: 'The member (0 = the control, where the ensemble has one), on disk in its cycle in use',
+  }),
+  cycle: Type.Optional(
+    Type.String({
+      pattern: '^[0-9]{10}$',
+      title: 'yyyymmddHH',
+      description: 'The ensemble cycle (yyyymmddHH) the member must be of; refused when that is no longer the one in use',
+    })
+  ),
+};
+
 /** The whole route request: the type, the validator's ranges and the OpenAPI schema. */
 export const RouteRequestSchema = Type.Object({
   start: Point,
@@ -236,6 +263,12 @@ export const RouteRequestSchema = Type.Object({
   ...ROUTE_REQUEST_FIELDS,
   vessel: Type.Optional(
     Type.Object(VESSEL_FIELDS, { description: 'Per-route overrides of the vessel settings (SI); absent keys use the settings.' })
+  ),
+  forecast_member: Type.Optional(
+    Type.Object(FORECAST_MEMBER_FIELDS, {
+      description:
+        "Route on this ensemble member's forecast instead of the main one (no regional wind). Ensemble sets (POST /api/ensemble-sets) send one route per member with it. Absent = the main forecast.",
+    })
   ),
 });
 
@@ -260,6 +293,9 @@ interface FieldJson {
   minimum?: number;
   maximum?: number;
   maxLength?: number;
+  /** A string's pattern, and its name for people (`title`). */
+  pattern?: string;
+  title?: string;
 }
 
 /** Why a field's value does not fit its schema, or null. */
@@ -277,11 +313,23 @@ function fieldError(name: string, v: unknown, schema: TSchema): string | null {
       if (s.minimum !== undefined && v < s.minimum) return `${name} must be >= ${s.minimum}`;
       if (s.maximum !== undefined && v > s.maximum) return `${name} must be <= ${s.maximum}`;
       return null;
+    case 'integer':
+      // Every whole-number field of a request is bounded: its range is the message.
+      if (s.minimum === undefined || s.maximum === undefined)
+        throw new Error(`request_schema: field ${name} is a whole number with no range`);
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < s.minimum || v > s.maximum)
+        return `${name} must be a whole number ${s.minimum}..${s.maximum}`;
+      return null;
     case 'boolean':
       return typeof v === 'boolean' ? null : `${name} must be true or false`;
     case 'string':
       if (typeof v !== 'string') return `${name} must be a string`;
       if (s.maxLength !== undefined && v.length > s.maxLength) return `${name} must be at most ${s.maxLength} characters`;
+      if (s.pattern !== undefined) {
+        // A pattern says what it is in `title`, which is the message.
+        if (s.title === undefined) throw new Error(`request_schema: field ${name} has a pattern and no title`);
+        if (!new RegExp(s.pattern).test(v)) return `${name} must be ${s.title}`;
+      }
       return null;
     default:
       throw new Error(`request_schema: field ${name} has no check`);
@@ -314,6 +362,19 @@ export function validateRouteRequest(b: RouteRequest): string | null {
     if (name === 'departure' && v === '') continue; // empty = now
     const e = fieldError(name, v, schema);
     if (e) return e;
+  }
+  if (b.forecast_member !== undefined) {
+    // A member's forecast and no forecast at all cannot both be the route's weather.
+    if (b.no_forecast === true) return 'forecast_member cannot be combined with no_forecast';
+    const fm = b.forecast_member as unknown as Record<string, unknown> | null;
+    if (!fm || typeof fm !== 'object' || fm.model === undefined || fm.member === undefined)
+      return 'forecast_member must be {model, member}';
+    for (const [name, schema] of Object.entries(FORECAST_MEMBER_FIELDS)) {
+      const v = fm[name];
+      if (v === undefined) continue;
+      const e = fieldError(`forecast_member.${name}`, v, schema);
+      if (e) return e;
+    }
   }
   if (b.vessel !== undefined) {
     if (b.vessel === null || typeof b.vessel !== 'object') return 'vessel must be an object';

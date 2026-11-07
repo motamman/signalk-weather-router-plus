@@ -21,7 +21,7 @@ class GradientWind implements WindSource {
     return { speed, dir };
   }
   wavesAt(lon: number): WaveConditions | null {
-    return { swh: 0.5 + lon * 0.5, mwp: 8, mwd: 180 };
+    return { swh: 0.5 + lon * 0.5, mwp: 8, mp2: 8, mwd: 180 };
   }
 }
 

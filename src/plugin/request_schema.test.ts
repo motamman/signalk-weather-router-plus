@@ -23,7 +23,42 @@ test('route request: ranges come from the settings they override, and the OpenAP
     assert.deepEqual([f.minimum, f.maximum], [spec(key).min, spec(key).max], field);
   }
   const schema = routeRequestSchema() as { properties: Record<string, unknown> };
-  assert.deepEqual(Object.keys(schema.properties), ['start', 'end', 'waypoints', ...Object.keys(ROUTE_REQUEST_FIELDS), 'vessel']);
+  assert.deepEqual(Object.keys(schema.properties), [
+    'start',
+    'end',
+    'waypoints',
+    ...Object.keys(ROUTE_REQUEST_FIELDS),
+    'vessel',
+    'forecast_member',
+  ]);
+});
+
+test('route request: forecast_member names a known ensemble, a member 0..50 and optionally its cycle', () => {
+  assert.equal(validateRouteRequest({ ...ok, forecast_member: { model: 'ifs-ens', member: 1 } }), null);
+  assert.equal(validateRouteRequest({ ...ok, forecast_member: { model: 'aifs-ens', member: 0, cycle: '2026110512' } }), null);
+  assert.equal(
+    validateRouteRequest({ ...ok, forecast_member: { model: 'gefs', member: 1 } as unknown as RouteRequest['forecast_member'] }),
+    'forecast_member.model must be ifs-ens or aifs-ens'
+  );
+  for (const member of [-1, 51, 1.5, '1'])
+    assert.equal(
+      validateRouteRequest({ ...ok, forecast_member: { model: 'ifs-ens', member } as unknown as RouteRequest['forecast_member'] }),
+      'forecast_member.member must be a whole number 0..50',
+      String(member)
+    );
+  assert.equal(
+    validateRouteRequest({ ...ok, forecast_member: { model: 'ifs-ens', member: 1, cycle: '2026-11-05' } }),
+    'forecast_member.cycle must be yyyymmddHH'
+  );
+  assert.equal(
+    validateRouteRequest({ ...ok, no_forecast: true, forecast_member: { model: 'ifs-ens', member: 1 } }),
+    'forecast_member cannot be combined with no_forecast'
+  );
+  assert.equal(validateRouteRequest({ ...ok, no_forecast: false, forecast_member: { model: 'ifs-ens', member: 1 } }), null);
+  assert.equal(
+    validateRouteRequest({ ...ok, forecast_member: null as unknown as RouteRequest['forecast_member'] }),
+    'forecast_member must be {model, member}'
+  );
 });
 
 test('route request: valid bodies pass, each bad field names itself', () => {

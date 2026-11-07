@@ -276,6 +276,8 @@ export function tackSide(cogDeg, windFromDeg) {
   return rel <= 180 ? 'starboard' : 'port';
 }
 export const TACK_COLOR = { starboard: '#2E7D32', port: '#D32F2F' };
+// A motoring leg and the marks at its start (rp-plan.js _drawRouteLegs, rp-layers.js routeLayer and the route legend).
+export const MOTOR_COLOR = '#fc4';
 
 // ─── Exclusive heatmap layer group ───────────────────────────────────
 // Only one full-map heatmap may be visible at a time. Wind barbs,
@@ -417,18 +419,36 @@ function _rateNote(ok) {
 
 // The single funnel for same-origin app fetches. `channel` makes a new
 // request abort the prior one on that channel (pan/zoom supersession).
+// The channel owns a request until the next one on it, or abortChannel:
+// not only until its headers arrive, so that an abort reaches a body
+// still being read (a Response's json() rejects with AbortError then).
 // 400 from an overlay endpoint ("no wave data in the forecast", "skt
 // not loaded") is a routine answer, not a server failure: it must not
 // wind up the backoff for every other caller.
 const _authChannels = new Map();
+/** Abort the request in flight on `channel`, if any: what it was for has been superseded (a new request, a screen cleared). */
+export function abortChannel(channel) {
+  const prev = _authChannels.get(channel);
+  if (prev) prev.abort();
+  _authChannels.delete(channel);
+}
+// The channels of the requests made for the route on screen: its route, its skeleton, its fronts. Each on a channel
+// of its own (two requests in a row on one channel would abort each other), all superseded together when the screen
+// changes (abortRouteRequests: another route opened, one computed, the map cleared).
+export const ROUTE_OPEN_CHANNEL = 'route-load';
+export const ROUTE_SKELETON_CHANNEL = 'skeleton-load';
+export const ROUTE_FRONTS_CHANNEL = 'fronts-load';
+/** The screen's route changed: every request still in flight for the one before is for a route that is gone. */
+export function abortRouteRequests() {
+  for (const c of [ROUTE_OPEN_CHANNEL, ROUTE_SKELETON_CHANNEL, ROUTE_FRONTS_CHANNEL]) abortChannel(c);
+}
 export async function authFetch(url, opts, channel) {
   if (AuthGate.tripped) throw new Error('auth-gate-tripped');
   opts = Object.assign({ credentials: 'same-origin' }, opts || {});
   const ctrl = new AbortController();
   opts.signal = ctrl.signal;
   if (channel) {
-    const prev = _authChannels.get(channel);
-    if (prev) { try { prev.abort(); } catch (_) {} }
+    abortChannel(channel);
     _authChannels.set(channel, ctrl);
   }
   AuthGate.track(ctrl);
@@ -461,11 +481,23 @@ export async function authFetch(url, opts, channel) {
   }
   finally {
     AuthGate.untrack(ctrl);
-    if (channel && _authChannels.get(channel) === ctrl) _authChannels.delete(channel);
   }
 }
 
 // Error text out of a plugin JSON error body ({error} or {message}).
+/**
+ * The JSON body of a failed answer, or null when it is not JSON. A read cut short by an abort (the request's channel
+ * superseded, the auth gate tripped) is not a failed answer: its AbortError goes to the caller, as fetch's own does
+ * when the abort comes before the headers, so the caller tells a superseded request from a failure the same way.
+ */
+async function _errorBody(r) {
+  try {
+    return await r.clone().json();
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    return null;
+  }
+}
 /**
  * The Error for a failed API answer. A 503 that carries `loading` (the
  * server is still getting its first forecast) is marked `waiting`: it is
@@ -473,18 +505,15 @@ export async function authFetch(url, opts, channel) {
  * map tile can get this answer before the page's first status check.
  */
 export async function _apiError(r) {
-  let d = null;
-  try { d = await r.clone().json(); } catch (_) { /* not JSON */ }
+  const d = await _errorBody(r);
   /** @type {Error & { waiting?: boolean }} */
   const err = new Error(d && (d.error || d.message) ? unitText(String(d.error || d.message)) : 'HTTP ' + r.status);
   if (r.status === 503 && d && 'loading' in d) { err.waiting = true; _serverWaiting(); }
   return err;
 }
 export async function _apiErrorText(r) {
-  try {
-    const d = await r.clone().json();
-    return (d && (d.error || d.message)) ? unitText(String(d.error || d.message)) : ('HTTP ' + r.status);
-  } catch (_) { return 'HTTP ' + r.status; }
+  const d = await _errorBody(r);
+  return (d && (d.error || d.message)) ? unitText(String(d.error || d.message)) : ('HTTP ' + r.status);
 }
 
 // Replan EventSource handle so the gate can close it on trip.
@@ -565,7 +594,8 @@ function loadPolarAngles(polarPath) {
   authFetch(API + '/polar-angles?path=' + encodeURIComponent(polarPath), {}, 'polar-angles')
     .then(r => r.ok ? r.json() : null)
     .then(d => { _polarAngles = d; drawPolarDiagram(); })
-    .catch(() => { _polarAngles = null; });
+    // Superseded by a newer selection on the channel: that one sets the angles.
+    .catch(err => { if (err.name !== 'AbortError') _polarAngles = null; });
 }
 
 // The angles of any polar (a /api/polars token; '' = the default), without

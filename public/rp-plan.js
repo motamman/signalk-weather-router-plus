@@ -4,10 +4,10 @@
 // result strip, itinerary, route library, waypoint and conditions popups,
 // Live mode with the Signal K vessel.
 
-import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
+import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, abortRouteRequests, ROUTE_OPEN_CHANNEL, ROUTE_SKELETON_CHANNEL, ROUTE_FRONTS_CHANNEL, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { prefs } from './rp-prefs.js';
-import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats } from './rp-layers.js';
+import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats, watchEnsembleLegend } from './rp-layers.js';
 
 // ─────────── Route state (markers, replan stream, route history) ───────────
 // The limit inputs and the quantity of each (used by _limitSI, below). Declared
@@ -38,6 +38,15 @@ let _win = null;        // the window on screen (GET /api/windows/:id)
 let _winTimer = null;
 let _winOpenJob = null; // the departure's route opened from the table
 let _winStale = false;  // the markers moved since the window on screen was started
+
+// The ensemble set on screen (Ensemble, below: the route on each member, GET /api/ensemble-sets/:id), or null, and its
+// poll. Declared here for the same reason: renderResultStrip and the clears reach it.
+let _ens = null;
+let _ensTimer = null;
+// The set's place on the screen, and every request made for it: a set being started, polled, its lines fetched, a
+// route's set looked up, a member's route opened. Each request holds the screen it was asked for, and acts only while
+// that screen has not ended. _ensGone ends it, saying whether the set is to be cancelled; a new screen takes its place.
+let _ensScreen = { ended: false, cancel: false, pollFailing: false };
 
 let _activeReplanES = null;
 function closeReplanStream() { if (_activeReplanES) { try { _activeReplanES.close(); } catch (_) {} _activeReplanES = null; } }
@@ -89,9 +98,11 @@ function _mapFitPadding() {
   return pad;
 }
 
-// Draw a route (GeoJSON from GET /api/routes/{id}/result): the pins, the
-// legs coloured by tack, where the forecast runs out, the snap connectors,
-// the result strip and the itinerary.
+/**
+ * Draw a route (GeoJSON from GET /api/routes/{id}/result): the pins, the
+ * legs coloured by tack, where the forecast runs out, the snap connectors,
+ * the result strip and the itinerary.
+ */
 function displayRoute(geojson) {
   setSelectedRouteFeature(null);
   routeSource.clear();
@@ -123,6 +134,8 @@ function displayRoute(geojson) {
   }
   // Refresh the itinerary tab with this route's waypoints.
   populateItinerary(features);
+  // The members' table marks the member on the map, if it is one.
+  _ensRender();
 }
 
 // Move the start/end pin markers to the route's first/last waypoint so a
@@ -180,12 +193,15 @@ function _placeRoutePins(pts, snapProps) {
   refreshFindRouteEnabled();
 }
 
-// Leg colouring: each point learns its outgoing course and the next leg's
-// conditions; a sailing leg is coloured by tack (TACK_COLOR), a motoring
-// leg black, a leg past the forecast's last step dashed. Dateline legs
-// are split at ±180 so they render the short way.
 // Longitude difference b − a in (−180, 180]: the short way, across the antimeridian.
 function _dLon(a, b) { return ((b - a + 540) % 360) - 180; }
+/**
+ * Leg colouring: each point learns its outgoing course and the next leg's
+ * conditions; a sailing leg is coloured by tack (TACK_COLOR), a motoring
+ * leg amber (MOTOR_COLOR), a leg past the forecast's last step dashed. Each leg
+ * carries what it is (kind 'leg', `leg`, `beyond`) for the route legend. Dateline legs
+ * are split at ±180 so they render the short way.
+ */
 function _drawRouteLegs(pts) {
   // Set outgoing_cog on each point. Map x wraps at ±180°: across the
   // antimeridian the next point's x is on the opposite edge of the world,
@@ -207,14 +223,10 @@ function _drawRouteLegs(pts) {
     const currMode = curr.get('mode');
     const currCog = curr.get('cog_deg');
     const currWind = curr.get('wind_dir_deg');
-    let segColor;
-    if (currMode !== 'sailing') {
-      segColor = '#000000';
-    } else {
-      // Leg departing prev is coloured by the arriving waypoint's cog
-      // and wind (forward-looking); starboard when either is missing.
-      segColor = TACK_COLOR[tackSide(currCog, currWind) || 'starboard'];
-    }
+    // Leg departing prev is coloured by the arriving waypoint's cog and wind
+    // (forward-looking); starboard when either is missing.
+    const legKind = currMode !== 'sailing' ? 'motoring' : tackSide(currCog, currWind) || 'starboard';
+    const segColor = legKind === 'motoring' ? MOTOR_COLOR : TACK_COLOR[legKind];
     prev.set('next_mode', currMode);
     prev.set('next_sail_plan', curr.get('sail_plan'));
     prev.set('next_cog', currCog);
@@ -252,7 +264,10 @@ function _drawRouteLegs(pts) {
     }
     for (const _sp of _segPairs) {
       const segLine = new ol.Feature({
-        geometry: new ol.geom.LineString([_sp[0], _sp[1]])
+        geometry: new ol.geom.LineString([_sp[0], _sp[1]]),
+        kind: 'leg',
+        leg: legKind,
+        beyond,
       });
       segLine.setStyle(new ol.style.Style({
         stroke: new ol.style.Stroke({ color: segColor, width: 3, lineDash: beyond ? [10, 7] : undefined })
@@ -279,9 +294,11 @@ function _markForecastEnd(pts, snapProps) {
   }
 }
 
-// Maroon dashed connectors from each drawn point that was on land to the
-// water it was moved to (start, end and waypoints), and the warning
-// lines for the result strip. Returns the warnings.
+/**
+ * Maroon dashed connectors from each drawn point that was on land to the
+ * water it was moved to (start, end and waypoints), and the warning
+ * lines for the result strip. Returns the warnings.
+ */
 function _drawSnapConnectors(p) {
   // Maroon dashed connector(s): intent → anchor where the server
   // snapped an unnavigable endpoint to the nearest navigable cell.
@@ -298,6 +315,7 @@ function _drawSnapConnectors(p) {
       ])
     });
     f.setStyle(_dashedStyle);
+    f.set('kind', 'snap');
     routeSource.addFeature(f);
   }
   if (p.end_original && p.end_anchor && p.end_snap_distance_m > 0) {
@@ -308,6 +326,7 @@ function _drawSnapConnectors(p) {
       ])
     });
     f.setStyle(_dashedStyle);
+    f.set('kind', 'snap');
     routeSource.addFeature(f);
   }
   // Drawn waypoints that were on land and were moved to the nearest water
@@ -318,6 +337,7 @@ function _drawSnapConnectors(p) {
     if (s.index === 0 || s.index === _lastStop || !s.original || !s.anchor) continue;
     const f = new ol.Feature({ geometry: new ol.geom.LineString([ol.proj.fromLonLat(s.original), ol.proj.fromLonLat(s.anchor)]) });
     f.setStyle(_dashedStyle);
+    f.set('kind', 'snap');
     routeSource.addFeature(f);
   }
 
@@ -343,10 +363,9 @@ function _drawSnapConnectors(p) {
 // was opened (a job attached, Find Route) is dropped: the channel cancels the request only when another skeleton is
 // asked for.
 function loadSkeleton(id) {
-  authFetch(API + '/routes/' + encodeURIComponent(id) + '/skeleton', { cache: 'no-store' }, 'skeleton-load')
+  authFetch(API + '/routes/' + encodeURIComponent(id) + '/skeleton', { cache: 'no-store' }, ROUTE_SKELETON_CHANNEL)
     .then(r => r.ok ? r.json() : null)
     .then(geojson => {
-      if (_currentRouteJobId !== id) return;
       skeletonSource.clear();
       if (!geojson) return;
       const features = new ol.format.GeoJSON().readFeatures(geojson, { featureProjection: 'EPSG:3857' });
@@ -360,14 +379,25 @@ function loadSkeleton(id) {
       }
       skeletonSource.addFeatures(features);
     })
-    .catch(() => { if (_currentRouteJobId === id) skeletonSource.clear(); });
+    // Superseded (the screen's route changed, or a newer request): nothing of this one is drawn.
+    .catch(err => { if (err.name !== 'AbortError') skeletonSource.clear(); });
 }
 
 // ─────────── Route library: recent jobs (GET /api/routes) ───────────
 // Track the job id of the route currently displayed on the map. Used by
-// the Publish + Delete buttons and set from two places: the history
-// list, and the SSE `done` event after a fresh compute.
+// the Publish + Delete buttons; changed only by _setRouteOnScreen.
 let _currentRouteJobId = null;
+/**
+ * The route on screen becomes job `id` (null: none) named `name`. Every change of the screen goes through here, and
+ * each one supersedes every request still in flight for the route before (its route, skeleton and fronts:
+ * abortRouteRequests): aborted, a body read with it, so no answer from before the change is ever drawn, a Clear with
+ * nothing on screen included.
+ */
+function _setRouteOnScreen(id, name) {
+  abortRouteRequests();
+  _currentRouteJobId = id;
+  _currentRouteName = name;
+}
 
 function _jobLabel(j) {
   const rq = j.request || {};
@@ -471,8 +501,11 @@ function _clearRouteTime() {
   if (timeOverride()) { setTimeOverride(null); _reloadTimedOverlays(); }
 }
 
-// `computed`: a route that has just finished computing (resumed after a reload, or its stream lost), not one opened
-// from Saved: no "Recompute?" banner, and the job stays remembered for a reload until its route has loaded.
+/**
+ * Open route job `id` (`given`: its row, else found in the history). `computed`: a route that has just finished
+ * computing (resumed after a reload, or its stream lost), not one opened from Saved: no "Recompute?" banner, and the
+ * job stays remembered for a reload until its route has loaded.
+ */
 function _loadRouteJob(id, given, { computed = false } = {}) {
   if (!id) return;
   // A route the user opens wins over a remembered computation this page is not following (its startup lookup failed):
@@ -488,16 +521,16 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
     attachToJob(id, job);
     return;
   }
-  _currentRouteJobId = id;
-  _currentRouteName = job && job.request ? (job.request.name || '') : '';
+  _setRouteOnScreen(id, job && job.request ? (job.request.name || '') : '');
   // Another saved route: the departures compared for the one before leave the screen; one of the window's own keeps them.
   if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
-  authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
+  // The same for the ensemble set: one of its members' routes keeps it, another route takes it off the screen.
+  if (!_ens || !(_ens.members.some(m => m.job_id === id) || (_ens.main && _ens.main.job_id === id))) _ensGone(false);
+  _ensForRoute(id);
+  authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
       if (computed) _forgetComputing(id);
-      // Another route opened while this body was still being read (the channel cancels only the request): dropped.
-      if (_currentRouteJobId !== id) return;
       if (_displayedJobId !== id) _clearRouteTime();
       displayRoute(geojson);
       _displayedJobId = id;   // a Publish of this saved route writes its itinerary too
@@ -529,10 +562,12 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
     })
     .catch(err => {
       // Forgotten when the server answered that the route will not come (4xx: no such job, or no route to load) or
-      // another route was opened; a request cut off by a reload, the server out of reach, or not ready (5xx: 503
-      // while the plugin starts) keeps it, as the status lookup does (_jobOnError).
-      if (computed && ((err.status && err.status < 500) || _currentRouteJobId !== id)) _forgetComputing(id);
-      if (_currentRouteJobId !== id) return;   // another route was opened meanwhile
+      // another route took the screen (the request aborted: _setRouteOnScreen); a request cut off by a reload, the
+      // server out of reach, or not ready (5xx: 503 while the plugin starts) keeps it, as the status lookup does
+      // (_jobOnError).
+      const superseded = err.name === 'AbortError';
+      if (computed && ((err.status && err.status < 500) || superseded)) _forgetComputing(id);
+      if (superseded) return;
       console.error('Failed to load route:', err);
       const st = document.getElementById('status');
       if (st) st.textContent = 'Could not load route: ' + err.message;
@@ -541,9 +576,9 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
   _loadFronts(id);
 }
 
+/** Take the route off the map and the page, as after Reset: its legs, guide, fronts, pins, strip, name and ensemble. */
 function _clearDisplayedRoute() {
-  _currentRouteJobId = null;
-  _currentRouteName = '';
+  _setRouteOnScreen(null, '');
   routeSource.clear();
   _routePoints = [];
   skeletonSource.clear();
@@ -567,6 +602,7 @@ function _clearDisplayedRoute() {
   _routeStale = false;
   _lastRouteProps = null;
   _lastNavWarns = null;
+  _ensGone(false);
   updatePlanHint();
 }
 
@@ -1560,9 +1596,9 @@ function _clearRoute() {
   document.getElementById('modalItinerary').innerHTML = '';
   /** @type {HTMLInputElement} */ (document.getElementById('routeNameInput')).value = '';
   document.getElementById('routeNameStatus').textContent = '';
-  _currentRouteJobId = null;
-  _currentRouteName = '';
+  _setRouteOnScreen(null, '');
   _lastRouteProps = null;
+  _ensGone(false);
   // No route is shown: the Meteogram button finds none to open (PR #50 review: it opened the cleared one).
   _displayedJobId = null;
   _itineraryFeatures = [];
@@ -1806,6 +1842,7 @@ function _depthCheckLine(dc) {
   else if (coast.length) parts.push('partly or wholly on coastline data');
   return onMesh > 0 || parts.length ? '<div class="rs-notes">Chart depth checked' + (parts.length ? ': ' + parts.join(' · ') : '') + '</div>' : '';
 }
+/** The result strip: route `p`'s distance, time, arrival, sailing and motoring, and the warnings `navWarns`; empty without a route. */
 function renderResultStrip(p, navWarns) {
   const el = document.getElementById('routeInfo');
   _lastRouteProps = p; _lastNavWarns = navWarns;
@@ -1843,6 +1880,7 @@ function renderResultStrip(p, navWarns) {
       + '. A longer <a id="rsBeyondLink">Forecast horizon</a> in Settings covers more of the passage.</div>';
   }
   html += _depthCheckLine(p.depth_check);
+  html += _ensLine();
   if (navWarns && navWarns.length) html += '<div class="rs-notes">' + navWarns.join(' · ') + '</div>';
   if (_routeStale) html += '<div class="rs-stale">Markers changed since this route was computed.</div>';
   if (warns.length) {
@@ -1884,9 +1922,11 @@ function renderResultStrip(p, navWarns) {
   copy();
 })();
 
-// Called when route computation starts: clear the stale log and
-// itinerary, start the phase progress in Find Route's place, show
-// Cancel. The user's tab is left alone.
+/**
+ * Called when route computation starts: clear the stale log and
+ * itinerary, start the phase progress in Find Route's place, show
+ * Cancel. The user's tab is left alone.
+ */
 function showModal() {
   modalLog.innerHTML = '';
   modalItinerary.innerHTML = '';
@@ -1906,14 +1946,15 @@ function showModal() {
   _itineraryFeatures = [];
   skeletonSource.clear();
   frontSource.clear();
-  _currentRouteJobId = null;
-  _currentRouteName = '';
+  _setRouteOnScreen(null, '');
   // The meteogram described the route that is gone (PR #50 review); the new one opens it again from the itinerary.
   closeMeteogram();
   _clearRouteTime();
   const nameInput = /** @type {HTMLInputElement} */ (document.getElementById('routeNameInput'));
   if (nameInput) nameInput.value = '';
   renderResultStrip(null);
+  // The set of the route before leaves the screen with it (a new request, Find Route, also cancels it).
+  _ensGone(false);
   updatePlanHint();
   RouteProgress.start();
   // The progress takes the button's place until the job ends (_computeUiIdle), in view: it is a little taller than the
@@ -1955,8 +1996,10 @@ function _warningCardIndex(w, lonlats) {
   });
   return Math.sqrt(bestD) * 111000 < 300 ? best : -1;   // within 300 m
 }
-// A warning's kind in words. The two the router reports about its own work say what they mean: a stretch whose
-// search failed and that follows the chart's route instead, and a beat with no room to tack, motored.
+/**
+ * A warning's kind in words. The two the router reports about its own work say what they mean: a stretch whose
+ * search failed and that follows the chart's route instead, and a beat with no room to tack, motored.
+ */
 function _warningKind(w) {
   if (w.violation === 'search_failed')
     return "search failed: this stretch follows the chart's route instead, so it may be slower, with many short tacks";
@@ -1972,6 +2015,11 @@ function _warningKind(w) {
   if (w.violation === 'waves_outside_correction') {
     const s = Number(w.detail);
     return "seas outside the polar's wave correction: sailed uncorrected" + (s > 0 && fmtTime(s) ? ' for ' + fmtTime(s) : '');
+  }
+  // Waves in the forecast but no Tm02 (mp2), the period the wave correction is read with: sailed uncorrected.
+  if (w.violation === 'waves_no_period') {
+    const s = Number(w.detail);
+    return "no wave period (Tm02) in the forecast for the polar's wave correction: sailed uncorrected" + (s > 0 && fmtTime(s) ? ' for ' + fmtTime(s) : '');
   }
   return escapeHtml(String(w.violation || 'warning').replace(/_/g, ' '));
 }
@@ -2478,6 +2526,7 @@ function _limitSI(id) {
   const v = parseFloat(el.value);
   return Number.isFinite(v) ? c.inv(v) : null;
 }
+/** The inputs of _LIMITS (wind and wave limits, cruise speed) in the user's units (none known: disabled, "—"), each filled from its saved SI value unless typed in. */
 function _initLimitInputs() {
   for (const id of Object.keys(_LIMITS)) {
     const el = /** @type {HTMLInputElement} */ (document.getElementById(id));
@@ -2502,11 +2551,393 @@ function _initLimitInputs() {
 }
 window.addEventListener('rp:units', _initLimitInputs);
 
+// ── Ensemble ─────────────────────────────────────────────────────────
+// The route on each member of an ensemble (POST /api/ensemble-sets; plugin/ensembles.ts), beside the route on the main
+// forecast: each member its own route search on its forecast. The controls, on the Plan tab above Find
+// Route, show whenever ensembles are on in the plugin configuration (status `ensembles`, one entry per ensemble chosen
+// there), with what each is doing; they can be used once one is on disk (a run, and at least the fewest members a request
+// may ask for): on or off, which ensemble, how many of its members on disk (the server takes the first that many, the
+// control first). Remembered per browser and Signal K user (rp-prefs.js).
+const ENSEMBLE_MIN_MEMBERS = 5;   // request_schema.ts ENSEMBLE_MEMBERS_RANGE
+let _ensembleStatus = [];         // status `ensembles`, as the server sends them
+let _ensembles = [];              // those on disk: [{ model, name, cycle, members (how many) }]
+/** The ensemble picked in the Ensemble list, as on disk ({ model, name, cycle, members }), or null. */
+function _ensembleChosen() {
+  const sel = /** @type {HTMLSelectElement} */ (document.getElementById('ensembleModel'));
+  return sel ? _ensembles.find(e => e.model === sel.value) || null : null;
+}
+// What each ensemble chosen in the plugin configuration has, and is doing, in words.
+function _ensembleStateText() {
+  return _ensembleStatus.map(x => {
+    const n = Array.isArray(x.members) ? x.members.length : 0;
+    const have = x.cycle ? n + ' members of the run of ' + _shortUtc(x.cycle) : 'none on disk yet';
+    const doing = x.loading
+      ? '; downloading the run of ' + _shortUtc(x.loading.cycle) + (x.loading.total ? ' (' + x.loading.done + ' of ' + x.loading.total + ')' : '')
+      : '';
+    return x.name + ': ' + have + doing + (x.error ? '; ' + unitText(x.error) : '');
+  }).join(' · ');
+}
+/** The members slider's label (how many of those on disk) and the hint under the row (what each ensemble has and is doing). */
+function _ensembleLabel() {
+  const slider = /** @type {HTMLInputElement} */ (document.getElementById('ensembleMembers'));
+  if (!slider) return;
+  const e = _ensembleChosen();
+  const state = _ensembleStateText();
+  document.getElementById('ensembleMembersLabel').textContent = e ? slider.value + ' of ' + e.members : '—';
+  document.getElementById('ensembleRowHint').textContent = e ? state : 'Not ready: ' + state;
+}
+/**
+ * The Ensemble row from the status: hidden while ensembles are off, disabled until one is on disk, the choices
+ * remembered (prefs) applied within what is on disk now.
+ */
+function _ensembleRender() {
+  const row = document.getElementById('ensembleRow');
+  const sel = /** @type {HTMLSelectElement} */ (document.getElementById('ensembleModel'));
+  const slider = /** @type {HTMLInputElement} */ (document.getElementById('ensembleMembers'));
+  const on = /** @type {HTMLInputElement} */ (document.getElementById('ensembleOn'));
+  if (!row || !sel || !slider || !on) return;
+  // Ensembles off in the plugin configuration: nothing shown, as before ensembles existed.
+  row.hidden = !_ensembleStatus.length;
+  if (!_ensembleStatus.length) return;
+  on.checked = prefs.get('routeVar:ensembleOn') === 'true';
+  const ready = _ensembles.length > 0;
+  on.disabled = sel.disabled = slider.disabled = !ready;
+  const ids = _ensembles.map(e => e.model).join(',');
+  if (sel.dataset.ids !== ids) {
+    sel.innerHTML = _ensembles.map(e => '<option value="' + escapeHtml(e.model) + '">' + escapeHtml(e.name) + '</option>').join('');
+    sel.dataset.ids = ids;
+  }
+  if (ready) {
+    const want = prefs.get('routeVar:ensembleModel');
+    sel.value = _ensembles.some(e => e.model === want) ? want : _ensembles[0].model;
+    const e = _ensembleChosen();
+    slider.max = String(e.members);
+    // The members remembered, at most those on disk now (a choice above that stays remembered for a run that has
+    // them); nothing remembered: all of them.
+    const saved = Number(prefs.get('routeVar:ensembleMembers'));
+    slider.value = String(Number.isInteger(saved) && saved >= ENSEMBLE_MIN_MEMBERS ? Math.min(saved, e.members) : e.members);
+  }
+  _ensembleLabel();
+}
+/** The request's `ensemble`, or null: not ticked, or no ensemble on disk. */
+function _ensembleRequest() {
+  const on = /** @type {HTMLInputElement} */ (document.getElementById('ensembleOn'));
+  const slider = /** @type {HTMLInputElement} */ (document.getElementById('ensembleMembers'));
+  const e = _ensembleChosen();
+  if (!on || !on.checked || !slider || !e) return null;
+  return { model: e.model, members: parseInt(slider.value, 10) };
+}
+{
+  const on = /** @type {HTMLInputElement} */ (document.getElementById('ensembleOn'));
+  const sel = /** @type {HTMLSelectElement} */ (document.getElementById('ensembleModel'));
+  const slider = /** @type {HTMLInputElement} */ (document.getElementById('ensembleMembers'));
+  if (on) on.addEventListener('change', () => { prefs.set('routeVar:ensembleOn', on.checked ? 'true' : 'false'); });
+  if (sel) sel.addEventListener('change', () => { prefs.set('routeVar:ensembleModel', sel.value); _ensembleRender(); });
+  if (slider) slider.addEventListener('input', () => { prefs.set('routeVar:ensembleMembers', slider.value); _ensembleLabel(); });
+}
+window.addEventListener('rp:status', (/** @type {CustomEvent} */ e) => {
+  const st = e.detail;
+  if (!st) return;
+  _ensembleStatus = Array.isArray(st.ensembles) ? st.ensembles : [];
+  // `members` there is the member numbers on disk (0 = the control); here, how many.
+  _ensembles = _ensembleStatus
+    .filter(x => x.cycle && Array.isArray(x.members) && x.members.length >= ENSEMBLE_MIN_MEMBERS)
+    .map(x => ({ model: x.model, name: x.name, cycle: x.cycle, members: x.members.length }));
+  _ensembleRender();
+});
+
+// ── The route on each member (POST /api/ensemble-sets; plugin/ensembles.ts) ──
+// Started by Find Route beside the main route: each member gets its own route search on its forecast, one after the
+// other on the server, polled every 3 s while it runs. The routes are drawn on the map (the styles below),
+// the result strip says how far it is and the spread of arrivals, the Itinerary lists the members, and a row
+// opens that member's route (as Best departure opens a departure's).
+// Under the route layer (rp-layers.js routeLayer, zIndex 15), which draws the route opened in full: here every route of
+// the set as one line, and a highlight under the one opened. Not opened: the main forecast's thin and solid, the
+// members' thicker, dotted and brighter.
+const _ensSource = new ol.source.Vector();
+const _ENS_STYLE = {
+  // The route opened: a white band with a dark edge, under its legs (no route colour is white: a yellow band hid the
+  // amber motoring legs).
+  open: [
+    new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(0, 0, 0, 0.45)', width: 13 }) }),
+    new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(255, 255, 255, 0.9)', width: 11 }) }),
+  ],
+  main: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#1f6b8d', width: 2 }) }),
+  member: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#00b8d4', width: 3.5, lineDash: [1, 7], lineCap: 'round' }) }),
+};
+map.addLayer(new ol.layer.Vector({
+  source: _ensSource,
+  zIndex: 4,
+  /** The route opened highlighted; otherwise the main forecast's style or a member's. */
+  style: f => (f.get('job') === _currentRouteJobId ? _ENS_STYLE.open : f.get('main') ? _ENS_STYLE.main : _ENS_STYLE.member),
+}));
+// The corridor (_ensCorridor), under the set's lines: its pieces overlap, so they are filled solid in the members' colour
+// and the layer as a whole is made faint, which shades the area they cover evenly.
+const _ensCorridorSource = new ol.source.Vector();
+map.addLayer(new ol.layer.Vector({
+  source: _ensCorridorSource,
+  zIndex: 3,
+  opacity: 0.15,
+  style: new ol.style.Style({ fill: new ol.style.Fill({ color: '#00b8d4' }) }),
+}));
+// The route legend (rp-layers.js) names what of the set is on the map, as the layer changes.
+watchEnsembleLegend(_ensSource, () => {
+  const fs = _ensSource.getFeatures();
+  return {
+    main: fs.some(f => f.get('main')),
+    members: fs.some(f => f.get('job') && !f.get('main')),
+    open: fs.some(f => f.get('job') && f.get('job') === _currentRouteJobId),
+    corridor: _ensCorridorSource.getFeatures().length > 0,
+  };
+});
+const _ensDrawn = new Set();   // member jobs whose line is on the map
+const _ensLines = new Map();   // job id → { coords (map coordinates), main }: each line drawn, for the corridor
+function _ensStart(route, want, mainJobId) {
+  const req = { route: { ...route }, model: want.model, members: want.members, main_job_id: mainJobId };
+  delete req.route.publish;
+  const screen = _ensScreen;
+  authFetch(API + '/ensemble-sets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) }, null)
+    .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
+    .then(d => {
+      appendLog('Ensemble: ' + d.members + ' member routes started', 'done');
+      if (!screen.ended) {
+        _ensPoll(d.id, screen);
+        return;
+      }
+      // Its screen ended before the set existed. Find Route asked for it to go: it is cancelled now. Clear or another
+      // route did not: it stays on the server, listed with its route, and is shown when that route is opened again.
+      if (screen.cancel) _ensCancel(d.id);
+    })
+    .catch(err => appendLog('Ensemble routes not started: ' + err.message, 'error'));
+}
+/** Follow set `id` on `screen` (_ensScreen) while that screen lasts. */
+function _ensPoll(id, screen) {
+  clearTimeout(_ensTimer);
+  authFetch(API + '/ensemble-sets/' + encodeURIComponent(id), { cache: 'no-store' }, 'ensemble-set')
+    .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status })))))
+    .then(set => {
+      if (screen.ended) return;   // the set left the screen meanwhile (Find Route, Clear, another route)
+      if (screen.pollFailing) appendLog('Ensemble set ' + id + ' read again', 'done');
+      screen.pollFailing = false;
+      _ens = set;
+      _ensDraw();
+      _ensRender();
+      if (set.status === 'running' || set.members.some(m => m.status === 'running' || m.status === 'queued'))
+        _ensTimer = setTimeout(() => _ensPoll(id, screen), 3000);
+    })
+    .catch(err => {
+      if (err.name === 'AbortError' || screen.ended) return;
+      if (err.status === 404) {
+        appendLog('Ensemble set ' + id + ' is gone from the server: its members leave the map');
+        _ensGone(false);
+        return;
+      }
+      // Said once, when the reads start failing; the set is read again every 10 s until it answers.
+      if (!screen.pollFailing) appendLog('Ensemble set ' + id + ' could not be read: ' + err.message + '; trying again every 10 s', 'error');
+      screen.pollFailing = true;
+      _ensTimer = setTimeout(() => _ensPoll(id, screen), 10000);
+    });
+}
+/** Cancel set `id` on the server: its members not computed yet are not computed. A cancel that fails is logged (the set goes on). */
+function _ensCancel(id) {
+  authFetch(API + '/ensemble-sets/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }, null)
+    .then(r => (r.ok ? null : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
+    .catch(err => appendLog('Ensemble set ' + id + ' not cancelled, its members go on computing: ' + err.message, 'error'));
+}
+/** The set leaves the screen; `cancel`: a set still computing, or one still being started, is cancelled on the server too. */
+function _ensGone(cancel) {
+  _ensScreen.ended = true;
+  _ensScreen.cancel = cancel;
+  _ensScreen = { ended: false, cancel: false, pollFailing: false };
+  clearTimeout(_ensTimer);
+  if (cancel && _ens && _ens.status === 'running') _ensCancel(_ens.id);
+  _ens = null;
+  _ensSource.clear();
+  _ensCorridorSource.clear();
+  _ensDrawn.clear();
+  _ensLines.clear();
+  _ensRender();
+}
+/** Each finished route of the set on screen (the main forecast's and the members'): its line fetched once and drawn. */
+function _ensDraw() {
+  const set = _ens;
+  const screen = _ensScreen;
+  const routes = set.main && set.main.status === 'done' ? [{ ...set.main, main: true }, ...set.members] : set.members;
+  for (const m of routes) {
+    if (m.status !== 'done' || !m.job_id || _ensDrawn.has(m.job_id)) continue;
+    _ensDrawn.add(m.job_id);
+    authFetch(API + '/routes/' + encodeURIComponent(m.job_id) + '/result', { cache: 'no-store' }, null)
+      .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
+      .then(geo => {
+        if (screen.ended) return;   // the set left the screen meanwhile (even to come back)
+        const pts = (geo.features || []).filter(f => f.geometry && f.geometry.type === 'Point').map(f => f.geometry.coordinates);
+        if (pts.length < 2) return;
+        const coords = unwrapLonLats(pts).map(c => ol.proj.fromLonLat(c));
+        const line = new ol.Feature(new ol.geom.LineString(coords));
+        line.set('job', m.job_id);
+        line.set('main', !!m.main);
+        _ensSource.addFeature(line);
+        _ensLines.set(m.job_id, { coords, main: !!m.main });
+        _ensCorridor();
+      })
+      .catch(err => {
+        if (screen.ended) return;
+        // Fetched again at the next poll, while the set is computing.
+        _ensDrawn.delete(m.job_id);
+        appendLog('Ensemble: ' + (m.main ? "the main forecast's" : _ensWho(m) + "'s") + ' route not drawn: ' + err.message, 'error');
+      });
+  }
+}
+// ── The corridor: where all the set's routes lie, display only ──
+// Every line drawn (the main forecast's and each finished member's) is cut by progress along its own length into
+// ENS_CORRIDOR_SLICES steps. For each step, the convex hull of every route's points in it (where each enters and leaves
+// the step, and its turns between) is one piece; the corridor is all the pieces. Each piece of a route lies inside its
+// step's hull, so every route is inside the corridor by construction. Where the routes progress unevenly (one goes round
+// early), a step pairs different places and the corridor is wider there. In map coordinates (EPSG:3857): a picture, not
+// a measurement. Water is not checked: two routes either side of an island put the island in it.
+const ENS_CORRIDOR_SLICES = 200;   // display resolution: steps along each route
+/** The convex hull of `pts` ([x, y] map coordinates), counter-clockwise, without repeating the first point. */
+function _ensHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower = [], upper = [];
+  for (const q of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop();
+    lower.push(q);
+  }
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], q) <= 0) upper.pop();
+    upper.push(q);
+  }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+/** Draw the corridor again from every line drawn so far; none until there are two. */
+function _ensCorridor() {
+  _ensCorridorSource.clear();
+  const routes = [..._ensLines.values()];
+  if (routes.length < 2) return;
+  const n = ENS_CORRIDOR_SLICES;
+  const steps = Array.from({ length: n }, () => []);
+  for (const { coords: c } of routes) {
+    const cum = [0];
+    for (let i = 1; i < c.length; i++) cum.push(cum[i - 1] + Math.hypot(c[i][0] - c[i - 1][0], c[i][1] - c[i - 1][1]));
+    const total = cum[cum.length - 1];
+    if (!(total > 0)) continue;
+    const step = total / n;
+    const at = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    for (let i = 1; i < c.length; i++) {
+      const s0 = cum[i - 1], s1 = cum[i], len = s1 - s0;
+      if (!len) continue;
+      // The part of this segment in each step it crosses: where it enters and where it leaves.
+      for (let k = Math.min(n - 1, Math.floor(s0 / step)); k <= Math.min(n - 1, Math.floor(s1 / step)); k++) {
+        const t0 = Math.max(0, (k * step - s0) / len), t1 = Math.min(1, ((k + 1) * step - s0) / len);
+        if (t0 > t1) continue;
+        steps[k].push(at(c[i - 1], c[i], t0), at(c[i - 1], c[i], t1));
+      }
+    }
+  }
+  const pieces = steps.map(_ensHull).filter(h => h.length >= 3).map(h => [h.concat([h[0]])]);
+  if (pieces.length) _ensCorridorSource.addFeature(new ol.Feature(new ol.geom.MultiPolygon(pieces)));
+}
+/** A table cell's number in the user's unit (`ud`: unitDesc), or — when there is none or the unit is not known (Best departure's and the ensemble's tables). */
+function _unitCell(v, ud) { return v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p); }
+/** A member's name in the table: "control" for member 0, else "member N". */
+function _ensWho(m) { return m.member === 0 ? 'control' : 'member ' + m.member; }
+/** The result strip's line: how far the set is, and the arrivals of the members' routes. */
+function _ensLine() {
+  const set = _ens;
+  if (!set) return '';
+  const done = set.members.filter(m => m.metrics);
+  const left = set.members.filter(m => m.status === 'pending' || m.status === 'queued' || m.status === 'running').length;
+  const arr = done.map(m => Date.parse(m.metrics.arrival)).sort((a, b) => a - b);
+  const iso = t => new Date(t).toISOString();
+  const parts = [done.length + ' of ' + set.members.length + ' member routes' + (left ? ', ' + left + ' to go' : '')];
+  if (arr.length) parts.push('arrive ' + fmtWhen(iso(arr[0])) + ' to ' + fmtWhen(iso(arr[arr.length - 1])) + ', median ' + fmtWhen(iso(arr[Math.floor((arr.length - 1) / 2)])));
+  const failed = set.members.filter(m => m.status === 'failed').length;
+  if (failed) parts.push(failed + ' failed');
+  return '<div class="rs-notes" style="color:var(--text-2);">' + escapeHtml(set.name) + ' (' + _shortUtc(set.cycle) + '): ' + escapeHtml(parts.join(' · ')) + '</div>';
+}
+/** The Itinerary tab's table: one row per member, numbers in the cells and the units in the header (as Best departure's). */
+function _ensRender() {
+  if (_lastRouteProps) renderResultStrip(_lastRouteProps, _lastNavWarns);
+  _ensSource.changed();   // the highlight follows the route opened
+  const el = document.getElementById('itinEnsemble');
+  if (!el) return;
+  const set = _ens;
+  if (!set) { el.innerHTML = ''; return; }
+  const was = el.querySelector('details');
+  const open = was ? /** @type {HTMLDetailsElement} */ (was).open : true;
+  const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
+  const STATUS = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled' };
+  // The main forecast's route first, so it can be opened again after a member's.
+  const main = set.main ? [{ ...set.main, who: 'main forecast' }] : [];
+  const rows = main.concat(set.members).map(m => {
+    const opened = m.job_id && m.job_id === _currentRouteJobId ? ' class="win-open"' : '';
+    const who = m.who || _ensWho(m);
+    if (!m.metrics) {
+      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + who + '</td><td colspan="5" style="text-align:left;">'
+        + escapeHtml(STATUS[m.status] || m.status) + (m.error && m.status === 'failed' ? ': ' + escapeHtml(unitText(m.error)) : '') + '</td></tr>';
+    }
+    const x = m.metrics;
+    return '<tr data-job="' + escapeHtml(m.job_id) + '" style="cursor:pointer;"' + opened + ' title="Click to open this member\'s route">'
+      + '<td>' + (m.who ? '<b>' + who + '</b>' : who) + '</td><td title="' + escapeHtml(fmtWhen(x.arrival)) + '">' + escapeHtml(_winWhen(x.arrival)) + '</td>'
+      + '<td>' + _winDuration(x.total_time_s, true) + '</td><td>' + _winDuration(x.motoring_time_s) + '</td>'
+      + '<td>' + _unitCell(x.max_wind_ms, speedU) + '</td><td>' + _unitCell(x.max_swh_m, waveU) + '</td></tr>';
+  });
+  el.innerHTML = '<details' + (open ? ' open' : '') + '><summary>' + escapeHtml(set.name) + ' (' + _shortUtc(set.cycle) + '): the route on each of ' + set.members.length + ' members</summary>'
+    + '<div class="ens-scroll"><table><thead><tr><th>Member</th><th>Arrives</th><th>Passage</th><th>Motor</th>'
+    + '<th title="Strongest wind on any leg">Wind<br>' + escapeHtml(speedU.u) + '</th><th title="Highest significant waves on any leg">Waves<br>' + escapeHtml(waveU.u) + '</th></tr></thead><tbody>'
+    + rows.join('') + '</tbody></table></div>'
+    + '<div class="ctl-hint">Each member\'s own route search on that member\'s forecast (wind and waves; no regional wind), with this route\'s start, destination, waypoints, boat and options. On the map: the main forecast\'s route thin and solid, the members\' dotted, the one opened highlighted, and the corridor they all lie in shaded under them. Click a row to open that route.</div>'
+    + '</details>';
+  /** @type {NodeListOf<HTMLElement>} */ (el.querySelectorAll('tr[data-job]')).forEach(tr => { tr.onclick = () => _ensOpen(tr.dataset.job); });
+}
+/**
+ * Open one member's route, or the main forecast's (a set's job is not in the Saved list: its record is fetched first),
+ * on the route-open channel: another route opened, computed or cleared meanwhile aborts it (ROUTE_OPEN_CHANNEL). The
+ * set leaving the screen ends it too (_ensScreen).
+ */
+function _ensOpen(jobId) {
+  const screen = _ensScreen;
+  authFetch(API + '/routes/' + encodeURIComponent(jobId), { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
+    .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
+    .then(job => {
+      if (screen.ended) return;
+      _loadRouteJob(jobId, job);
+      _ensRender();
+    })
+    .catch(err => {
+      if (err.name === 'AbortError' || screen.ended) return;
+      appendLog('Could not open the member route: ' + err.message, 'error');
+    });
+}
+window.addEventListener('rp:units', _ensRender);
+/**
+ * The set of a route: its main forecast's route names it (request.main_job_id). Looked up whenever that route is
+ * opened or followed (a saved route, a reload while it computes), so the set comes and goes with its route.
+ */
+function _ensForRoute(id) {
+  if (_ens && ((_ens.main && _ens.main.job_id === id) || _ens.members.some(m => m.job_id === id))) return;
+  const screen = _ensScreen;
+  authFetch(API + '/ensemble-sets?limit=12', { cache: 'no-store' }, null)
+    .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
+    .then(list => {
+      const set = list.find(x => x.request && x.request.main_job_id === id);
+      if (set && !screen.ended && _currentRouteJobId === id) _ensPoll(set.id, screen);
+    })
+    .catch(err => {
+      if (err.name === 'AbortError' || screen.ended) return;
+      appendLog('Ensemble: the set of this route could not be looked up: ' + err.message, 'error');
+    });
+}
+
 // The finished job's stage fronts (faint) replace the live ones; dropped once another route is open (loadSkeleton).
 function _loadFronts(id) {
-  authFetch(API + '/routes/' + encodeURIComponent(id) + '/fronts', { cache: 'no-store' }, 'fronts-load')
+  authFetch(API + '/routes/' + encodeURIComponent(id) + '/fronts', { cache: 'no-store' }, ROUTE_FRONTS_CHANNEL)
     .then(r => r.ok ? r.json() : null)
-    .then(fronts => { if (fronts && _currentRouteJobId === id) drawFronts(fronts); })
+    .then(fronts => { if (fronts) drawFronts(fronts); })
     .catch(() => {});
 }
 
@@ -2551,12 +2982,12 @@ function _computeUiIdle(keep = false) {
 let _jobBeforeAttach = null;
 function _backToEarlierRoute() {
   const shown = _jobBeforeAttach && routeSource.getFeatures().length;
-  _currentRouteJobId = shown ? _jobBeforeAttach.id : null;
-  _currentRouteName = shown ? _jobBeforeAttach.name : '';
+  _setRouteOnScreen(shown ? _jobBeforeAttach.id : null, shown ? _jobBeforeAttach.name : '');
   _jobBeforeAttach = null;
 }
 // Counts the attachments: an answer meant for an earlier one, even of the same job, is dropped (_jobOnError).
 let _attachSeq = 0;
+/** Follow route job `id` (`jobRow`: its row when known) as it computes, from its event stream: progress, then its route. */
 function attachToJob(id, jobRow) {
   // A reconnect to the same job keeps what was on the map before it.
   const reconnect = _activeJobId === id;
@@ -2575,8 +3006,8 @@ function attachToJob(id, jobRow) {
   // showModal clears the route on the map with its job id and name: this job's are set after it (PR #39 review: set
   // before, they were cleared, so a new route's Publish, Delete, name and points of sail had no job).
   showModal();
-  _currentRouteJobId = id;
-  _currentRouteName = jobRow && jobRow.request ? (jobRow.request.name || '') : ((/** @type {HTMLInputElement} */ (document.getElementById('routeName')).value || '').trim());
+  _setRouteOnScreen(id, jobRow && jobRow.request ? (jobRow.request.name || '') : ((/** @type {HTMLInputElement} */ (document.getElementById('routeName')).value || '').trim()));
+  _ensForRoute(id);
   appendLog('job ' + id);
   // The search's boat comes with the first stage (_jobOnFrontier): the start as drawn can be on land, which the router
   // first leaves for usable water (up to 1 km, worker/route.ts SNAP_MAX_M; the owner's review of #78). A reconnect
@@ -2694,13 +3125,10 @@ function _jobOnDone(job, d) {
   routeActive = true;
   _computeUiIdle(true);
   // Fetch the route GeoJSON separately (SSE is not for large payloads).
-  authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, 'route-load')
+  authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
     .then(geojson => {
       _forgetComputing(id);
-      // An answer for a job no longer current (a newer request started while this body was still being read: the
-      // 'route-load' channel cancels only the request, not the body read; PR #40 review) is dropped.
-      if (_currentRouteJobId !== id) return;
       displayRoute(geojson);
       _displayedJobId = id;
       _meteoRouteChanged();
@@ -2713,9 +3141,11 @@ function _jobOnDone(job, d) {
       showTab('itinerarySection');
     })
     .catch(err => {
-      // Forgotten on a 4xx or when another route was opened; kept on a 5xx or no answer (as in _loadRouteJob).
-      if ((err.status && err.status < 500) || _currentRouteJobId !== id) _forgetComputing(id);
-      if (_currentRouteJobId !== id) return;   // a job no longer current: the route shown is another's
+      // Forgotten on a 4xx or when another route took the screen (aborted: _setRouteOnScreen); kept on a 5xx or no
+      // answer (as in _loadRouteJob).
+      const superseded = err.name === 'AbortError';
+      if ((err.status && err.status < 500) || superseded) _forgetComputing(id);
+      if (superseded) return;
       // No route is shown after all (PR #39 review): the hint and the stale check must not act on one.
       routeActive = false;
       updatePlanHint();
@@ -2725,8 +3155,10 @@ function _jobOnDone(job, d) {
   loadPluginStatus();
 }
 
-// `event: error` from the server (failed or cancelled), or a dropped
-// connection: when the browser gave up, check the job's status once.
+/**
+ * `event: error` from the server (failed or cancelled), or a dropped
+ * connection: when the browser gave up, check the job's status once.
+ */
 function _jobOnError(job, ev) {
   const { id, es, statusEl } = job;
   if (ev && ev.data) {
@@ -2785,7 +3217,13 @@ document.getElementById('findRoute').addEventListener('click', /** @this {HTMLBu
   infoEl.innerHTML = '';
   _routeComputing = true;
 
+  // A new request: the set of the route before is cancelled if still computing (its members would queue ahead of
+  // this one's).
+  _ensGone(true);
   const body = buildRoutePayload();
+  // Find Route only: Best departure and the LIVE re-plans build their requests from buildRoutePayload too, and route
+  // no ensemble.
+  const ensemble = _ensembleRequest();
   // A job opened from Saved while this request is on its way is the one followed if the request fails: the failure is
   // logged, and that job keeps its progress, Cancel, boat and stream.
   const seq = _attachSeq;
@@ -2800,6 +3238,8 @@ document.getElementById('findRoute').addEventListener('click', /** @this {HTMLBu
       _currentRouteName = body.name || '';
       attachToJob(job.id, { request: body });
       loadRouteHistory();
+      // After attachToJob (its showModal clears the set before): the same route on each chosen member.
+      if (ensemble) _ensStart(body, ensemble, job.id);
     })
     .catch(err => {
       if (_attachSeq !== seq) { appendLog('Could not start the route calculation: ' + err.message, 'error'); return; }
@@ -3990,6 +4430,7 @@ function _winBest(w, sortId) {
   return best;
 }
 
+/** Show the departure window: its status line, Cancel while it runs, and its departures' table. */
 function _winRender() {
   const w = _win;
   const status = document.getElementById('windowStatus');
@@ -4008,7 +4449,6 @@ function _winRender() {
   const t = _winDuration;
   // Numbers in the cells, the unit in the header (the panel is narrow).
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
-  const num = (v, ud) => (v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p));
   let html = '<div class="win-sort"><label for="windowSort" style="margin:0;">Best by</label><select id="windowSort" aria-label="Rank the departures by">'
     + Object.entries(_WIN_SORTS).map(([id, s]) => '<option value="' + id + '"' + (id === sortId ? ' selected' : '') + '>' + s.label + '</option>').join('')
     + '</select></div>';
@@ -4023,7 +4463,7 @@ function _winRender() {
     }
     html += '<tr class="' + cls + '" data-job="' + escapeHtml(d.job_id) + '" title="Arrives ' + escapeHtml(fmtWhen(m.arrival)) + '. Click to open this departure’s route' + (m.beyond_forecast ? ' (arrives after the forecast ends: its last legs ran on conditions held at the last step)' : '') + '">'
       + '<td>' + lead + '</td><td>' + t(m.total_time_s, true) + (m.beyond_forecast ? ' *' : '') + '</td>'
-      + '<td>' + num(m.max_wind_ms, speedU) + '</td><td>' + num(m.max_swh_m, waveU) + '</td><td>' + t(m.motoring_time_s) + '</td><td>' + t(m.upwind_time_s) + '</td></tr>';
+      + '<td>' + _unitCell(m.max_wind_ms, speedU) + '</td><td>' + _unitCell(m.max_swh_m, waveU) + '</td><td>' + t(m.motoring_time_s) + '</td><td>' + t(m.upwind_time_s) + '</td></tr>';
   });
   html += '</tbody></table></div>';
   if (w.departures.some(d => d.metrics && d.metrics.beyond_forecast)) html += '<div class="ctl-hint">* arrives after the forecast ends; not ranked.</div>';
@@ -4037,16 +4477,22 @@ function _winRender() {
   /** @type {NodeListOf<HTMLElement>} */ (out.querySelectorAll('tr.win-row[data-job]')).forEach(tr => { tr.onclick = () => _winOpen(tr.dataset.job); });
 }
 
-// Open one departure's route (a window job is not in the Saved list: its record is fetched first).
+/**
+ * Open one departure's route (a window job is not in the Saved list: its record is fetched first), on the route-open
+ * channel: another route opened, computed or cleared meanwhile aborts it (ROUTE_OPEN_CHANNEL).
+ */
 function _winOpen(jobId) {
-  authFetch(API + '/routes/' + encodeURIComponent(jobId), { cache: 'no-store' }, 'window-route')
+  authFetch(API + '/routes/' + encodeURIComponent(jobId), { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(job => {
       _winOpenJob = jobId;
       _loadRouteJob(jobId, job);
       _winRender();
     })
-    .catch(err => appendLog('Could not open the departure: ' + err.message, 'error'));
+    .catch(err => {
+      if (err.name === 'AbortError') return;
+      appendLog('Could not open the departure: ' + err.message, 'error');
+    });
 }
 
 (function() {
@@ -4996,7 +5442,7 @@ function _meteoRouteChanged() {
 
   // Put an accepted re-plan on the map in place of the route being followed.
   function applyRoute(geojson, jobId) {
-    if (jobId) { _currentRouteJobId = jobId; }
+    if (jobId) _setRouteOnScreen(jobId, _currentRouteName);
     // The route being followed stays as a faint line (pastRouteSource).
     if (_routePoints.length >= 2) {
       pastRouteSource.addFeature(new ol.Feature(new ol.geom.LineString(unwrapLonLats(_routePoints.map(p => p.lonLat)).map(c => ol.proj.fromLonLat(c)))));

@@ -13,23 +13,24 @@ import { streamingDecodeBytes } from '../data/loader';
 
 test('forecastBytes (a decoded run on disk) is steps × fields × one global grid', () => {
   assert.equal(FIELD_STEP_BYTES, 4_152_960);
-  // 3 atmosphere + 3 wave fields + the optional peak period (pp1d), then 7 extra and 6 energy fields.
-  assert.equal(forecastBytes(72 * HOUR_S, false), 25 * 7 * FIELD_STEP_BYTES); // 726,768,000
-  assert.equal(forecastBytes(72 * HOUR_S, true), 25 * 14 * FIELD_STEP_BYTES); // 1,453,536,000
-  assert.equal(forecastBytes(72 * HOUR_S, true, true), 25 * 20 * FIELD_STEP_BYTES); // 2,076,480,000
-  assert.equal(forecastBytes(72 * HOUR_S, false, true), 25 * 13 * FIELD_STEP_BYTES);
+  // 3 atmosphere + 3 wave fields + the optional Tm02 (mp2) and peak period (pp1d), then 7 extra and 6 energy fields.
+  assert.equal(forecastBytes(72 * HOUR_S, false), 25 * 8 * FIELD_STEP_BYTES); // 830,592,000
+  assert.equal(forecastBytes(72 * HOUR_S, true), 25 * 15 * FIELD_STEP_BYTES); // 1,557,360,000
+  assert.equal(forecastBytes(72 * HOUR_S, true, true), 25 * 21 * FIELD_STEP_BYTES); // 2,180,304,000
+  assert.equal(forecastBytes(72 * HOUR_S, false, true), 25 * 14 * FIELD_STEP_BYTES);
 });
 
 test('update check: memory for one decode step, disk for the decoded run', () => {
   const GB = 1e9;
-  // One step with the extra fields: 14 global Float32 fields + decode buffers (12 B/cell) + wave fill temporaries (8 B/cell).
-  assert.equal(streamingDecodeBytes(14), 1440 * 721 * (14 * 4 + 12 + 8));
-  const ok = checkDecodeResources(72 * HOUR_S, true, false, GB, null, { bytes: 2 * GB, source: 'test' }, 10 * GB);
+  // One step with the extra fields: 15 global Float32 fields + decode buffers (12 B/cell) + wave fill temporaries (8 B/cell).
+  assert.equal(streamingDecodeBytes(15), 1440 * 721 * (15 * 4 + 12 + 8));
+  const ok = checkDecodeResources(72 * HOUR_S, true, false, GB, null, { bytes: 2 * GB, source: 'test' }, { bytes: 10 * GB });
   assert.equal(ok.ok, true);
-  assert.equal(ok.needBytes, streamingDecodeBytes(14));
+  assert.equal(ok.needBytes, streamingDecodeBytes(15));
   // Memory: one step fits where the old whole store (1.14 GB + 1 GB headroom) did not.
   assert.equal(
-    checkDecodeResources(72 * HOUR_S, true, false, GB, null, { bytes: GB + streamingDecodeBytes(14), source: 'test' }, 10 * GB).ok,
+    checkDecodeResources(72 * HOUR_S, true, false, GB, null, { bytes: GB + streamingDecodeBytes(15), source: 'test' }, { bytes: 10 * GB })
+      .ok,
     true
   );
   const noMem = checkDecodeResources(
@@ -38,27 +39,46 @@ test('update check: memory for one decode step, disk for the decoded run', () =>
     false,
     GB,
     null,
-    { bytes: GB + streamingDecodeBytes(14) - 1, source: 'test' },
-    10 * GB
+    { bytes: GB + streamingDecodeBytes(15) - 1, source: 'test' },
+    { bytes: 10 * GB }
   );
   assert.equal(noMem.ok, false);
   assert.match(noMem.message, /not enough memory/);
-  // Disk: 1.45 GB run + 1 GB reserve.
+  // Disk: 1.56 GB run + 1 GB reserve.
   const run = forecastBytes(72 * HOUR_S, true);
   assert.equal(
-    checkDecodeResources(72 * HOUR_S, true, false, GB, null, { bytes: 5 * GB, source: 'test' }, run + DISK_RESERVE_BYTES).ok,
+    checkDecodeResources(72 * HOUR_S, true, false, GB, null, { bytes: 5 * GB, source: 'test' }, { bytes: run + DISK_RESERVE_BYTES }).ok,
     true
   );
-  const noDisk = checkDecodeResources(72 * HOUR_S, true, false, GB, null, { bytes: 5 * GB, source: 'test' }, run + DISK_RESERVE_BYTES - 1);
+  const noDisk = checkDecodeResources(
+    72 * HOUR_S,
+    true,
+    false,
+    GB,
+    null,
+    { bytes: 5 * GB, source: 'test' },
+    { bytes: run + DISK_RESERVE_BYTES - 1 }
+  );
   assert.equal(noDisk.ok, false);
   assert.match(noDisk.message, /not enough disk space/);
   assert.match(noDisk.message, /turn off the extra fields/);
-  // Unknown free disk space does not block.
+  // Free disk space that could not be measured does not block the forecast, and the message says why.
   assert.equal(checkDecodeResources(72 * HOUR_S, true, false, GB, null, { bytes: 5 * GB, source: 'test' }, null).ok, true);
+  const unmeasured = checkDecodeResources(
+    72 * HOUR_S,
+    true,
+    false,
+    GB,
+    null,
+    { bytes: 5 * GB, source: 'test' },
+    { problem: 'free disk space below /x not measured: EIO' }
+  );
+  assert.equal(unmeasured.ok, true);
+  assert.match(unmeasured.message, /free disk space below \/x not measured: EIO/);
   // The energy fields count for memory (one step plus the previous accumulated
   // fields the step difference holds) and disk, and their setting is suggested
   // off when the run would not fit.
-  const needEnergy = streamingDecodeBytes(20) + 5 * FIELD_STEP_BYTES;
+  const needEnergy = streamingDecodeBytes(21) + 5 * FIELD_STEP_BYTES;
   const runEnergy = forecastBytes(72 * HOUR_S, true, true);
   const okEnergy = checkDecodeResources(
     72 * HOUR_S,
@@ -67,7 +87,7 @@ test('update check: memory for one decode step, disk for the decoded run', () =>
     GB,
     null,
     { bytes: 5 * GB, source: 'test' },
-    runEnergy + DISK_RESERVE_BYTES
+    { bytes: runEnergy + DISK_RESERVE_BYTES }
   );
   assert.equal(okEnergy.ok, true);
   assert.equal(okEnergy.needBytes, needEnergy);
@@ -78,7 +98,7 @@ test('update check: memory for one decode step, disk for the decoded run', () =>
     GB,
     null,
     { bytes: 5 * GB, source: 'test' },
-    runEnergy + DISK_RESERVE_BYTES - 1
+    { bytes: runEnergy + DISK_RESERVE_BYTES - 1 }
   );
   assert.equal(noDiskEnergy.ok, false);
   assert.match(noDiskEnergy.message, /turn off the solar and radiation fields/);

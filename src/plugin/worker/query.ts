@@ -9,7 +9,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ForecastStore } from '../../data/forecast';
-import type { DecodedRun, WindowOptions } from '../../data/decoded';
+import { type DecodedRun, type WindowOptions } from '../../data/decoded';
+import { ENSEMBLES } from '../../data/ecmwf';
+import { readEnsembleCurrent } from '../../data/ensemble';
 import { LAYER_PARAMS } from '../layers';
 import { bboxFromLonLat, type BBox } from '../../geo/geodesy';
 import { REGIONAL_DIR } from '../../data/regionaldecode';
@@ -29,7 +31,7 @@ import {
 import { POINT_FORECAST_PARAMS, pointForecasts } from '../weather';
 import { type DataStamp, type DataStatus, type QueryArgs, type TrackConditions, type TrackConditionsRow } from '../protocol';
 import { encodeTile, tileGroup, tileQuery, type TileId } from '../tiles';
-import { readWindow, releaseWindow } from './forecast';
+import { ensembleBytesOf, readWindow, releaseWindow } from './forecast';
 import { regionalRunsFor, type RegionalRun } from './regionalwind';
 import { currentsStatus, prepareSmocForQuery } from './currents';
 import { conditionsTide, prepareTidesForQuery, tideSeriesQuery } from './tides';
@@ -453,6 +455,10 @@ function reportStatus(st: WorkerState, kind: string): void {
   }
 }
 
+/**
+ * The data worker's status for the main thread: the forecast run in use, its decode and memory, currents, RTOFS, land,
+ * tides, regional runs, checks, connectivity and ensembles. The currents' and tides' revisions sent are noted.
+ */
 export function dataStatus(st: WorkerState): DataStatus {
   st.reportedSmocRev = st.smoc ? st.smoc.revision : -1;
   st.reportedTidesRev = st.tides ? st.tides.revision : -1;
@@ -496,5 +502,19 @@ export function dataStatus(st: WorkerState): DataStatus {
     checks: { ...st.checks },
     connectivity: { ...st.connectivity },
     harmonicErrors: [...st.harmonicErrors],
+    ensembles: (st.config?.forecast.ensemble?.models ?? []).map(m => {
+      const cur = readEnsembleCurrent(st.cacheRoot, m);
+      const s = st.ensembles[m];
+      return {
+        model: m,
+        name: ENSEMBLES[m].name,
+        cycle: cur ? new Date(cur.cycleTimeMs).toISOString() : null,
+        members: cur ? [...cur.members] : [],
+        bytes: ensembleBytesOf(st, m),
+        loading: s?.loading ?? null,
+        error: s?.error ?? null,
+        checkedAt: s?.checkedAt ?? null,
+      };
+    }),
   };
 }
