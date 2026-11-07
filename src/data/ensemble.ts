@@ -352,8 +352,7 @@ async function downloadModel(
 ): Promise<{ steps: number[]; downloaded: number; bytes: number }> {
   /**
    * The members a step file holds that still have a message to fetch from it (none: every required and optional field
-   * is cached; whether an optional one exists is the index's to say, so it is read). By the header alone: no index has
-   * been read here yet, so no length is known (isGribFile); the plan below, with the index, checks each file's length.
+   * is cached, isGribFile; whether an optional one exists is the index's to say, so it is read).
    */
   const toGet = (file: EnsembleModel['files'][number], stream: string, params: readonly string[], step: number): number[] => {
     const inFile = members.filter(m => (m === 0) === file.control);
@@ -405,7 +404,7 @@ async function downloadModel(
           }))
         );
         for (const r of all) if (optional.includes(r.rec.param)) optionalPresent.add(r.rec.param);
-        const recs = all.filter(r => !isGribFile(r.path, r.rec._length));
+        const recs = all.filter(r => !isGribFile(r.path));
         for (const r of recs) toFetch += r.rec._length;
         plan.push({ step, stream, kind: file.kind, recs });
       }
@@ -422,7 +421,7 @@ async function downloadModel(
   for (const step of ladder) {
     for (const part of plan.filter(x => x.step === step)) {
       for (const { rec, path: p } of part.recs) {
-        if (isGribFile(p, rec._length)) continue;
+        if (isGribFile(p)) continue;
         const msg = await client.fetchEnsembleField(o.cycle, model, part.stream, part.kind, step, rec, p);
         downloaded++;
         bytes += msg.length;

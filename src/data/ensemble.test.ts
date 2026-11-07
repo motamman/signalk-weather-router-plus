@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { cycleFor, type EcmwfClient, ENSEMBLE_OPTIONAL_PARAMS, ENSEMBLE_PARAMS, ENSEMBLES, type IndexRecord, isGribFile } from './ecmwf';
 import { dirBytes } from './decoded';
 import { GLOBAL_CELLS } from './loader';
-import { asEnsembleMember } from '../grib/grib2fixture';
+import { asEnsembleMember, gribShell } from '../grib/grib2fixture';
 import {
   ENSEMBLE_DECODED_DIR,
   ENSEMBLE_GRIB_DIR,
@@ -114,14 +114,14 @@ test('prune: keeps the members wanted in the cycles kept and the pending GRIB ca
 
 /**
  * A fake client for IFS ENS member 1: index records for the steps in `published` (none for the others), each the
- * length of `message` (10 bytes of 'GRIB------' unless one is given), and every field it is asked for written to the
- * cache as that message; `fetched` counts those.
+ * length of `message` (a 16-octet GRIB2 indicator section, gribShell, unless one is given), and every field it is
+ * asked for written to the cache as that message; `fetched` counts those.
  */
 function fakeClient(
   published: number[],
   /** The optional wave field in the wave indexes too (IFS ENS publishes mp2; AIFS ENS does not). */
   withOptional = false,
-  message: Uint8Array = new Uint8Array(Buffer.from('GRIB------'))
+  message: Uint8Array = gribShell()
 ): { client: EcmwfClient; indexed: number[]; fetched: () => number } {
   const indexed: number[] = [];
   let fetched = 0;
@@ -173,12 +173,17 @@ test('the GRIB cache and disk-use reads: missing is none; there but unreadable t
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-reads-'));
   try {
     assert.equal(isGribFile(path.join(root, 'none.grib2')), false);
-    fs.writeFileSync(path.join(root, 'a.grib2'), 'GRIB....');
+    // A cached message is a whole GRIB2 message by its own indicator section: GRIB, and exactly the length it states.
+    fs.writeFileSync(path.join(root, 'a.grib2'), gribShell(16));
     assert.equal(isGribFile(path.join(root, 'a.grib2')), true);
+    fs.writeFileSync(path.join(root, 'cut.grib2'), gribShell(32).subarray(0, 20));
+    assert.equal(isGribFile(path.join(root, 'cut.grib2')), false, 'cut short of the length it states');
+    fs.writeFileSync(path.join(root, 'head.grib2'), 'GRIB....');
+    assert.equal(isGribFile(path.join(root, 'head.grib2')), false, 'a header with no indicator section');
     fs.mkdirSync(path.join(root, 'folder.grib2'));
     assert.throws(() => isGribFile(path.join(root, 'folder.grib2')));
     assert.equal(dirBytes(path.join(root, 'none')), 0);
-    assert.equal(dirBytes(root), 8);
+    assert.equal(dirBytes(root), 16 + 20 + 8);
     assert.throws(() => dirBytes(path.join(root, 'a.grib2')), 'a file is not a folder to walk');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -191,7 +196,7 @@ test('a cycle not finished yet stops the model at its last step, before reading 
     // IFS ENS, 6 h: steps 0, 3, 6; the server has +0 h only. One +0 h message is cached from an earlier round.
     const kept = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, 'enfo', 0, '10u');
     fs.mkdirSync(path.dirname(kept), { recursive: true });
-    fs.writeFileSync(kept, 'GRIB------');
+    fs.writeFileSync(kept, gribShell());
     const { client, indexed, fetched } = fakeClient([0]);
     const [r] = await runEnsembleCycle(client, {
       cacheRoot: root,
@@ -218,10 +223,10 @@ test('a cycle not finished yet stops the model at its last step, before reading 
 test('the disk check is asked about exactly what the pass writes, and a no stops it before anything is fetched', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
   try {
-    // One message cached already: of the 5 fields × 3 steps of 10 bytes, 14 are still to fetch.
+    // One message cached already: of the 5 fields × 3 steps of 16 bytes, 14 are still to fetch.
     const kept = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, 'waef', 3, 'swh');
     fs.mkdirSync(path.dirname(kept), { recursive: true });
-    fs.writeFileSync(kept, 'GRIB------');
+    fs.writeFileSync(kept, gribShell());
     const { client, fetched } = fakeClient([0, 3, 6]);
     const asked: number[] = [];
     const [r] = await runEnsembleCycle(client, {
@@ -237,7 +242,7 @@ test('the disk check is asked about exactly what the pass writes, and a no stops
       },
     });
     // The messages by the indexes' own lengths, and one member's decoded run: 5 fields × 3 steps of one global float32 field.
-    assert.deepEqual(asked, [14 * 10 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
+    assert.deepEqual(asked, [14 * 16 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
     assert.match(r.error ?? '', /ECMWF IFS ENS 2026110500: not downloaded: no room/);
     assert.equal(fetched(), 0);
     assert.deepEqual(r.members, []);
@@ -268,10 +273,10 @@ test('the optional wave field is planned, fetched and counted only when the inde
     };
     // Without mp2 in the indexes: the five required fields, nothing else looked for.
     const without = await run(false);
-    assert.deepEqual(without.asked, [5 * 3 * 10 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
+    assert.deepEqual(without.asked, [5 * 3 * 16 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
     // With it: a sixth field per step is fetched and decoded for the member.
     const withIt = await run(true);
-    assert.deepEqual(withIt.asked, [6 * 3 * 10 + 1 * 6 * 3 * GLOBAL_CELLS * 4]);
+    assert.deepEqual(withIt.asked, [6 * 3 * 16 + 1 * 6 * 3 * GLOBAL_CELLS * 4]);
     assert.equal(withIt.fetched, 0, 'stopped by the disk check before any message');
     // A member whose required fields are all cached still has its index read, so an optional field it lacks is fetched.
     for (const step of [0, 3, 6])
@@ -279,10 +284,10 @@ test('the optional wave field is planned, fetched and counted only when the inde
         for (const p of params) {
           const f = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, stream, step, p);
           fs.mkdirSync(path.dirname(f), { recursive: true });
-          fs.writeFileSync(f, 'GRIB------');
+          fs.writeFileSync(f, gribShell());
         }
     const cachedRequired = await run(true);
-    assert.deepEqual(cachedRequired.asked, [1 * 3 * 10 + 1 * 6 * 3 * GLOBAL_CELLS * 4], 'only mp2 is still to fetch');
+    assert.deepEqual(cachedRequired.asked, [1 * 3 * 16 + 1 * 6 * 3 * GLOBAL_CELLS * 4], 'only mp2 is still to fetch');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -308,11 +313,11 @@ test('every step published: each index is read once; a step missing inside the l
       'each step file of each stream once'
     );
     assert.equal(all.fetched(), 15);
-    // A cached message that is not its index record's length (cut short on disk) is not a cached message: fetched
-    // again, by the one rule the fetch itself applies (ecmwf.ts isGribFile; until 2026-11-07 the pass skipped it by its
-    // header and its member failed to decode every round).
+    // A cached message cut short on disk is not a cached message (ecmwf.ts isGribFile: a whole message by the length it
+    // states): fetched again (until 2026-11-07 the pass skipped it by its header and its member failed to decode every
+    // round).
     const short = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, 'waef', 3, 'swh');
-    fs.writeFileSync(short, 'GRIB--');
+    fs.writeFileSync(short, gribShell().subarray(0, 6));
     const again = fakeClient([0, 3, 6]);
     await runEnsembleCycle(again.client, {
       cacheRoot: root,
@@ -324,7 +329,7 @@ test('every step published: each index is read once; a step missing inside the l
       diskCheck: () => null,
     });
     assert.equal(again.fetched(), 1, 'the short file alone');
-    assert.equal(fs.statSync(short).size, 10, 'written over');
+    assert.equal(fs.statSync(short).size, 16, 'written over');
     fs.rmSync(path.join(root, ENSEMBLE_GRIB_DIR), { recursive: true, force: true });
     // The last step is there but +3 h is not: the full read stops at the gap.
     const gap = fakeClient([0, 6]);

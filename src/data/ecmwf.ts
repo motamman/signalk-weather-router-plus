@@ -269,15 +269,18 @@ function parseIndex(text: string, url: string): IndexRecord[] {
 }
 
 /**
- * A cached message is there: the file starts with GRIB and, when its index record's `length` is known, is exactly that
- * long. The one rule for the main forecast's cache and the ensembles', wherever a message is taken from the cache or
- * skipped as cached (until 2026-11-07 the ensemble pass skipped a GRIB-headed file of any length, and only the fetch
- * checked the length: a file cut short was never fetched again, and its member failed to decode every round; PR #7
- * review). `length` null: the header alone, where no index has been read yet (the ensemble pass's first look at a
- * step, which decides whether to read its index at all). False when there is no such file; a file that is there but
- * cannot be read throws (a failing disk is reported, never taken for a message to fetch again).
+ * A cached message is there: the file is a whole GRIB2 message by its own indicator section (octets 1–16: GRIB,
+ * edition 2, and the message's total length in octets 9–16), that is, it starts so and is exactly the length it
+ * states. The one rule wherever a message is taken from the cache or skipped as cached, for the main forecast
+ * (hasCached, the loader's gate, and fetchField) and the ensembles (the pass's plan and fetchEnsembleField), and it
+ * needs no index: a cycle cached whole is still read with no network, and a message cut short on disk is fetched
+ * again on both paths (until 2026-11-07 the loader's gate and the ensemble pass read the header alone and only the
+ * fetch checked the index record's length, which the loader never reached, as it reads a step's index only for a
+ * field its gate finds not cached: a file cut short was never fetched again, and its step or member failed to decode
+ * every round; PR #7 review). False when there is no such file; a file that is there but cannot be read throws (a
+ * failing disk is reported, never taken for a message to fetch again).
  */
-export function isGribFile(p: string, length: number | null = null): boolean {
+export function isGribFile(p: string): boolean {
   let fd: number;
   try {
     fd = fs.openSync(p, 'r');
@@ -286,9 +289,10 @@ export function isGribFile(p: string, length: number | null = null): boolean {
     throw err;
   }
   try {
-    if (length !== null && fs.fstatSync(fd).size !== length) return false;
-    const head = Buffer.alloc(4);
-    return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
+    const indicator = Buffer.alloc(16);
+    if (fs.readSync(fd, indicator, 0, 16, 0) !== 16) return false;
+    if (indicator.toString('latin1', 0, 4) !== 'GRIB' || indicator[7] !== 2) return false;
+    return indicator.readBigUInt64BE(8) === BigInt(fs.fstatSync(fd).size);
   } finally {
     fs.closeSync(fd);
   }
@@ -439,7 +443,10 @@ export class EcmwfClient {
     return path.join(this.cacheDir, `${cycle.yyyymmdd}${cycle.hh}`, `${stream}-${String(step).padStart(3, '0')}h-${param}.grib2`);
   }
 
-  /** Is a cached message present and GRIB-headed? */
+  /**
+   * Is the message cached (isGribFile)? The loader's gate (loader.ts decodeSteps): a step's index is read only for a
+   * field this says no to, so the rule it applies must stand on the file alone.
+   */
   hasCached(cycle: Cycle, stream: string, step: number, param: string): boolean {
     return isGribFile(this.cachePath(cycle, stream, step, param));
   }
@@ -482,12 +489,11 @@ export class EcmwfClient {
    */
   async fetchField(cycle: Cycle, stream: string, step: number, param: string, index?: IndexRecord[]): Promise<Uint8Array | null> {
     const cached = this.cachePath(cycle, stream, step, param);
-    const ofParam = (r: IndexRecord): boolean => r.param === param && (r.levtype === undefined || r.levtype === 'sfc');
-    // From the cache when it holds the message (isGribFile: its length checked against the index when one was given);
-    // a file that is not one is written over (writeCached renames the fetched message into its place).
-    if (isGribFile(cached, index?.find(ofParam)?._length ?? null)) return new Uint8Array(fs.readFileSync(cached));
+    // From the cache when it holds the message (isGribFile); a file that is not one is written over (writeCached
+    // renames the fetched message into its place).
+    if (isGribFile(cached)) return new Uint8Array(fs.readFileSync(cached));
     const idx = index ?? (await this.fetchIndex(cycle, stream, step));
-    const rec = idx.find(ofParam);
+    const rec = idx.find(r => r.param === param && (r.levtype === undefined || r.levtype === 'sfc'));
     if (!rec) return null;
     const msg = await this.fetchMessage(this.stepPath(cycle, stream, step, 'grib2'), rec, step);
     writeCached(cached, msg);
@@ -530,8 +536,7 @@ export class EcmwfClient {
 
   /**
    * One record of an ensemble step file as a raw GRIB2 message, written to `cachePath` (one message per file, as the
-   * main forecast's cache); from the cache when it holds the message (isGribFile, the record's length), a file that is
-   * not one written over.
+   * main forecast's cache); from the cache when it holds the message (isGribFile), a file that is not one written over.
    */
   async fetchEnsembleField(
     cycle: Cycle,
@@ -542,7 +547,7 @@ export class EcmwfClient {
     rec: IndexRecord,
     cachePath: string
   ): Promise<Uint8Array> {
-    if (isGribFile(cachePath, rec._length)) return new Uint8Array(fs.readFileSync(cachePath));
+    if (isGribFile(cachePath)) return new Uint8Array(fs.readFileSync(cachePath));
     const msg = await this.fetchMessage(this.ensembleStepPath(cycle, model, stream, kind, step, 'grib2'), rec, step);
     writeCached(cachePath, msg);
     return msg;

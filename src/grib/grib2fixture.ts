@@ -9,6 +9,19 @@ import * as path from 'node:path';
 
 export const GRIB2_FIXTURE = path.join(__dirname, '..', '..', 'test-data', 'ecmwf_10u10v_3steps.grib2');
 
+/**
+ * A file that is a whole GRIB2 message by its indicator section alone: "GRIB", two reserved octets, discipline 0,
+ * edition 2, and `length` as the message's total length (octets 9–16), the rest zero. For the tests of the GRIB cache,
+ * whose rule reads nothing past the indicator (ecmwf.ts isGribFile); the decoder refuses it (no sections).
+ */
+export function gribShell(length = 16): Uint8Array {
+  if (length < 16) throw new Error(`a GRIB2 indicator section is 16 octets; ${length} asked for`);
+  const out = new Uint8Array(length);
+  out.set([0x47, 0x52, 0x49, 0x42, 0, 0, 0, 2]);
+  new DataView(out.buffer).setBigUint64(8, BigInt(length));
+  return out;
+}
+
 /** Byte offsets (0-based) of sections 1 and 4 of the first message of `b`. */
 export function sectionsOf(b: Uint8Array): { s1: number; s4: number } {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);

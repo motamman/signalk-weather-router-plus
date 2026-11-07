@@ -163,6 +163,7 @@ import * as path from 'node:path';
 import { EcmwfClient, latestExpectedCycle, nextCycle, parseRetryAfterMs, publishedAt } from './ecmwf';
 import { isOffline } from './http';
 import { resolveCycle } from './loader';
+import { gribShell } from '../grib/grib2fixture';
 
 test('latestExpectedCycle uses the measured publication times and skips short cycles for long horizons', () => {
   // 12z is published at 19:34Z.
@@ -209,7 +210,7 @@ test('resolveCycle with the connection already known down: the server is not ask
       for (const p of params) {
         const f = client.cachePath(cached, stream, step, p);
         fs.mkdirSync(path.dirname(f), { recursive: true });
-        fs.writeFileSync(f, Buffer.from('GRIB....'));
+        fs.writeFileSync(f, gribShell());
       }
     }
   }
@@ -363,7 +364,7 @@ test('resolveCycle uses a fully cached expected cycle without any network call',
       for (const p of params) {
         const f = client.cachePath(expected, stream, step, p);
         fs.mkdirSync(path.dirname(f), { recursive: true });
-        fs.writeFileSync(f, Buffer.from('GRIB....'));
+        fs.writeFileSync(f, gribShell());
       }
     }
   }
@@ -377,6 +378,36 @@ test('resolveCycle uses a fully cached expected cycle without any network call',
   assert.equal(r2.fromCache, true);
   assert.ok(r2.fallback && r2.fallback.includes('using cached cycle'));
   assert.equal(r2.cycle.yyyymmdd + r2.cycle.hh, expected.yyyymmdd + expected.hh);
+});
+
+test('the cache gate (hasCached, the loader’s): a whole message is read with no network; one cut short is not cached and is fetched again', async () => {
+  const dir = tmpDir();
+  const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
+  const whole = gribShell(64);
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 64 };
+  const calls: string[] = [];
+  const fetchImpl = (async (url: string | URL | Request) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.endsWith('.index')) return new Response(`${JSON.stringify(rec)}\n`, { status: 200 });
+    return new Response(whole, { status: 206 });
+  }) as unknown as typeof fetch;
+  const client = new EcmwfClient({ baseUrl: 'https://x', fallbackUrls: [], cacheDir: dir, fetchImpl, sleepImpl: async () => undefined });
+  const f = client.cachePath(cycle, 'oper', 0, '10u');
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, whole);
+  assert.equal(client.hasCached(cycle, 'oper', 0, '10u'), true);
+  assert.equal(client.cycleFullyCached(cycle, 0, ['10u'], []), true);
+  assert.deepEqual(await client.fetchField(cycle, 'oper', 0, '10u'), whole);
+  assert.deepEqual(calls, [], 'a whole message needs no network');
+  // The same file cut short on disk (a write that stopped): not a cached message, by the length the message itself
+  // states, so the loader reads the index (loader.ts decodeSteps) and the message is fetched again.
+  fs.writeFileSync(f, whole.subarray(0, 40));
+  assert.equal(client.hasCached(cycle, 'oper', 0, '10u'), false);
+  assert.equal(client.cycleFullyCached(cycle, 0, ['10u'], []), false);
+  assert.deepEqual(await client.fetchField(cycle, 'oper', 0, '10u'), whole);
+  assert.equal(calls.length, 2, 'the index and the message');
+  assert.equal(fs.statSync(f).size, 64, 'written over');
 });
 
 test('buildStep converts tprate from kg m⁻² s⁻¹ to a depth rate in m/s at ingestion', () => {
