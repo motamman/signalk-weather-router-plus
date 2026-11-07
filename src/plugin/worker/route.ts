@@ -899,7 +899,7 @@ export async function route(
      * over it plus a margin, read from the decoded run (the member's on a member route) or, before there is one, decoded
      * from the GRIB cache; the SMOC currents over it when the resident area does not cover it.
      */
-    const loadAreas = async (bbox: BBox, what: string): Promise<LegWind | null> => {
+    const loadAreas = async (bbox: BBox, what: string, band?: BBox): Promise<LegWind | null> => {
       if (useForecast) {
         // The route area of the forecast: the corridor box plus a margin, the
         // fields the engine reads, every step. Held only while this route runs.
@@ -949,8 +949,9 @@ export async function route(
         if (steps.length) {
           progress(0, 0, `currents: checking CMEMS SMOC coverage of the ${what}`);
           try {
-            await src.ensure(bbox, steps, { reason: `job ${id} ${what}`, shouldCancel });
-            smocLeg = { area: bbox, steps, as: src.answering(bbox, steps) };
+            // The band along the leg at 1/12° too when the world can be held only at 1/3° (smoc.ts ensureLeg).
+            const as = await src.ensureLeg(bbox, band ?? null, steps, { reason: `job ${id} ${what}`, shouldCancel });
+            smocLeg = { area: bbox, steps, as };
           } catch (err) {
             smocLeg = null;
             if (shouldCancel()) throw new RouteCancelled();

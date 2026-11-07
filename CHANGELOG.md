@@ -116,6 +116,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A long ocean leg has the currents' own cells along the route.** A leg's
+  SMOC currents were loaded over the whole area its search can reach; on a
+  long ocean leg that is too large for the model's 1/12° grid, so the
+  whole leg, the route's own band included, ran on the 1/3° grid. The band
+  along the leg is now loaded at 1/12° too, and the lookup answers from
+  it first. Measured on the test box (a Pi 5, 2026-11-07, SMOC run
+  2026111623, 26 steps, a fresh cache): Lisbon to Barbados held 63.1 MB
+  instead of 18.2 MB and downloaded 142.6 MB in 11.3 s instead of 35.5 MB
+  in 3.4 s; Cape Town to Fremantle held 32.4 MB instead of 18.9 MB and
+  downloaded 100.5 MB in 8.1 s instead of 35.5 MB in 3.3 s.
 - **A route on an ensemble member whose record cannot be read says so.**
   The check answered "not downloaded" while an ensemble set on the same
   ensemble was told what is wrong with its record; both now read the

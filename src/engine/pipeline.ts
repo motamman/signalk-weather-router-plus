@@ -89,8 +89,11 @@ export interface LegPipelineInputs {
   smootherTolerance: number;
   /** The smoother's simulation step, metres (absent: sim.simStepM, the search's). */
   smootherSimStepM?: number;
-  /** Load the leg's forecast (and current) areas for the box; the forecast for the leg, or null for calm wind. */
-  loadAreas: (bbox: BBox, what: string) => Promise<LegWind | null>;
+  /**
+   * Load the leg's forecast (and current) areas for the box; the forecast for the leg, or null for calm wind. `band`:
+   * the leg's own band inside the box (a coastline leg's world), where the currents are wanted at their finest.
+   */
+  loadAreas: (bbox: BBox, what: string, band?: BBox) => Promise<LegWind | null>;
   /** After a leg of a multi-leg route: the areas go with the leg. */
   releaseAreas?: () => void;
   /** The current source for the leg (after loadAreas), with the names of the stacked sources, or null when there are none. */
@@ -566,7 +569,7 @@ async function openWaterLeg(
   if (shouldCancel()) throw new RouteCancelled();
   // Forecast and SMOC areas per leg (measured on brain: the same time as
   // one area for all legs, and at most the same memory).
-  const legWind = await inp.loadAreas(bbox, multi ? `${tag}area` : 'route area');
+  const legWind = await inp.loadAreas(bbox, multi ? `${tag}area` : 'route area', band);
   const { source: current, names: currentNames } = inp.currents();
   if (currentNames && plan.index === 0) progress(0, 0, `currents: ${currentNames.join(' > ')}`);
 
