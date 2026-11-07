@@ -20,7 +20,7 @@
  * by default; `--water-grid <file>` for another, `--no-water-grid` for the
  * old per-route skeleton); `--allow-canals` opens known canals.
  * Limits: `--max-wind <m/s>`, `--max-swh <m>`, each `--max-wind-mode` /
- * `--max-swh-mode block|avoid` (default block), `--avoid-strength <n>` (the
+ * `--max-swh-mode block|avoid` (default: the settings' default, engine/legsim.ts DEFAULT_LIMIT_MODE), `--avoid-strength <n>` (the
  * extra seconds per second over a limit set to avoid; default 1).
  */
 
@@ -41,7 +41,7 @@ import { WaterGrid } from './geo/watergrid';
 import { chooseWaterGrid } from './geo/watergrid_store';
 import type { Route } from './engine/route';
 import { routeToGeoJSON } from './plugin/routeformat';
-import { LIMIT_MODES, type LegArrival, type LimitMode, type ModePolicy } from './engine/legsim';
+import { DEFAULT_LIMIT_MODE, LIMIT_MODES, type LegArrival, type LimitMode, type ModePolicy } from './engine/legsim';
 import { PolarDiagram } from './vessel/polar';
 import { makeVessel } from './vessel/vessel';
 
@@ -86,7 +86,7 @@ async function main(): Promise<void> {
     return n;
   };
   const limitMode = (name: string): LimitMode => {
-    const v = arg(name, 'block')!;
+    const v = arg(name, DEFAULT_LIMIT_MODE)!;
     if (!(LIMIT_MODES as readonly string[]).includes(v)) throw new Error(`--${name}: expected ${LIMIT_MODES.join(' or ')} (got "${v}")`);
     return v as LimitMode;
   };

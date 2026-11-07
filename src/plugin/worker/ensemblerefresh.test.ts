@@ -8,20 +8,19 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { refreshEnsembles } from './forecast';
+import { EnsemblePasses, refreshEnsembles } from './forecast';
 import type { WorkerState } from './state';
 import type { runChildTask } from '../childtask';
 import type { EnsembleModelId } from '../../data/ecmwf';
 import {
   ENSEMBLE_DECODED_DIR,
-  ENSEMBLE_FIELDS,
   ENSEMBLE_GRIB_DIR,
   memberComplete,
   readEnsembleCurrent,
   type EnsembleModelResult,
 } from '../../data/ensemble';
-import { DECODED_FORMAT, DECODED_VERSION, fieldFile, INDEX_FILE } from '../../data/decoded';
 import type { EnsembleDecodeTask, ForecastDecodeEvent } from '../forecastdecodetask';
+import { decodedMember as decodedMemberOf } from './ensemblefixture';
 
 const CYCLE = new Date('2026-11-06T00:00:00Z');
 const CYCLE_NAME = '2026110600';
@@ -48,36 +47,9 @@ function put(root: string, rel: string): string {
   return p;
 }
 
-/**
- * A complete decoded run of IFS ENS member `member` for the 6 h cycle, in the decoded-run format on a 2 × 2 grid: its
- * index and one float32 file per field and step (openDecodedRun checks every file's size against the grid).
- */
+/** A complete decoded run of IFS ENS member `member` for the 6 h cycle (ensemblefixture.ts). */
 function decodedMember(root: string, member: number): string {
-  const dir = path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', `m${String(member).padStart(2, '0')}`, CYCLE_NAME);
-  fs.mkdirSync(dir, { recursive: true });
-  const steps = [0, 3, 6];
-  const grid = { lat0: 0, lon0: 0, dLat: 1, dLon: 1, nLat: 2, nLon: 2, wrapLon: false };
-  for (const h of steps)
-    for (const p of ENSEMBLE_FIELDS) fs.writeFileSync(path.join(dir, fieldFile(h, p)), Buffer.alloc(grid.nLat * grid.nLon * 4));
-  fs.writeFileSync(
-    path.join(dir, INDEX_FILE),
-    JSON.stringify({
-      format: DECODED_FORMAT,
-      version: DECODED_VERSION,
-      byteOrder: 'LE',
-      cycle: CYCLE_NAME,
-      cycleTimeMs: CYCLE.getTime(),
-      request: { horizonHours: 6, params: ENSEMBLE_FIELDS },
-      stepHours: steps,
-      grid,
-      steps: steps.map(h => ({ stepHours: h, validMs: CYCLE.getTime() + h * 3600_000, params: ENSEMBLE_FIELDS })),
-      bytes: steps.length * ENSEMBLE_FIELDS.length * grid.nLat * grid.nLon * 4,
-      decodedAt: CYCLE.toISOString(),
-      decodeMs: 1,
-      complete: true,
-    })
-  );
-  return dir;
+  return decodedMemberOf(root, member, CYCLE);
 }
 
 /** A child-task runner that must not be called. */
@@ -253,10 +225,11 @@ test('a record of the cycle in use that cannot be read is reported each round, a
   }
 });
 
-test('a cycle complete on disk whose record cannot be written is not in use, and its status and the log say why', async () => {
+test('a cycle complete on disk whose record cannot be written is not in use, its status and the log say why, and it stays on disk for the next round', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ensref-'));
   try {
     for (const n of [1, 2, 3, 4, 5]) decodedMember(root, n);
+    const cache = put(root, path.join(ENSEMBLE_GRIB_DIR, 'ifs-ens', CYCLE_NAME, 'm01', 'enfo-000h-10u.grib2'));
     // A folder where the record's copy is written (on every OS): the record cannot be saved.
     fs.mkdirSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json.tmp', 'inside'), { recursive: true });
     const logged: string[] = [];
@@ -267,7 +240,70 @@ test('a cycle complete on disk whose record cannot be written is not in use, and
     assert.match(st.ensembles['ifs-ens']?.error ?? '', /^cycle 2026110600 complete but not in use: current\.json could not be written: /);
     assert.equal(st.ensembles['ifs-ens']?.loading, null);
     assert.ok(logged.some(m => m.startsWith('error: ensembles: ECMWF IFS ENS: cycle 2026110600 complete but not in use: ')));
+    // The cycle is pending, not gone: nothing of it is pruned, so the next round records it without a download.
+    for (const n of [1, 2, 3, 4, 5]) assert.ok(memberComplete(root, 'ifs-ens', n, CYCLE_NAME, 6), `member ${n} kept`);
+    assert.ok(fs.existsSync(cache), 'its GRIB cache kept');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('after a pass, a cycle it completed whose record cannot be written stays on disk for the next round, not downloaded again', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ensref-'));
+  try {
+    fs.mkdirSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json.tmp', 'inside'), { recursive: true });
+    const st = state(root, ['ifs-ens']);
+    let cache = '';
+    const run = (async () => {
+      for (const n of [1, 2, 3, 4, 5]) decodedMember(root, n);
+      cache = put(root, path.join(ENSEMBLE_GRIB_DIR, 'ifs-ens', CYCLE_NAME, 'm01', 'enfo-000h-10u.grib2'));
+      return [result('ifs-ens')];
+    }) as unknown as typeof runChildTask;
+    await refreshEnsembles(st, null, () => null, undefined, run);
+    assert.equal(readEnsembleCurrent(root, 'ifs-ens'), null, 'not in use');
+    assert.match(st.ensembles['ifs-ens']?.error ?? '', /^cycle 2026110600 complete but not in use: current\.json could not be written: /);
+    for (const n of [1, 2, 3, 4, 5]) assert.ok(memberComplete(root, 'ifs-ens', n, CYCLE_NAME, 6), `member ${n} kept`);
+    assert.ok(fs.existsSync(cache), 'its GRIB cache kept');
+    // The next round, the record writable again: recorded from the disk, no child task.
+    fs.rmSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json.tmp'), { recursive: true, force: true });
+    await refreshEnsembles(st, null, () => null, undefined, neverRun);
+    assert.equal(readEnsembleCurrent(root, 'ifs-ens')?.cycle, CYCLE_NAME);
+    assert.equal(st.ensembles['ifs-ens']?.error, null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('EnsemblePasses: one pass at a time; a start while one runs makes one more after it, the owner’s when any start was', async () => {
+  const runs: { offline: string | null; user: boolean }[] = [];
+  let changes = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(r => (release = r));
+  const passes = new EnsemblePasses(
+    async offline => {
+      runs.push({ offline, user: passes.userPass });
+      if (runs.length === 1) await gate;
+    },
+    () => changes++,
+    () => undefined
+  );
+  passes.start(null, () => null, false);
+  assert.equal(passes.active, true);
+  assert.equal(passes.userPass, false);
+  passes.start('skipped: no internet connection', () => null, true);
+  passes.start(null, () => null, false);
+  assert.equal(passes.userPass, true, "the owner's ask makes the pass under way theirs");
+  assert.equal(runs.length, 1, 'one pass runs');
+  release();
+  for (let i = 0; i < 3; i++) await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(runs, [
+    { offline: null, user: false },
+    { offline: null, user: true },
+  ]);
+  assert.equal(passes.active, false);
+  assert.equal(passes.userPass, false);
+  assert.equal(changes, 2, 'the status went out at the end of each pass');
+  // Nothing asked during the second pass: no third.
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(runs.length, 2);
 });

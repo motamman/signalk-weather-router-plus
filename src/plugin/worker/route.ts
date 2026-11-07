@@ -70,7 +70,7 @@ import { type DecodedRun, openDecodedRun } from '../../data/decoded';
 import { memberRunDir, readEnsembleCurrent } from '../../data/ensemble';
 
 /** One opened chart mesh (one cluster of a multi-cluster mesh): its name, folder and index. */
-type OpenMesh = { name: string; dir: string; store: MeshStore };
+export type OpenMesh = { name: string; dir: string; store: MeshStore };
 
 /**
  * The chart meshes for this route: the downloaded ones with a complete
@@ -167,6 +167,10 @@ async function ensureRoughCut(
   return file;
 }
 
+/** Why a mesh leg cannot be planned while the worker has no decoded forecast run (meshLegRunner leg). */
+export const NO_DECODED_RUN_FOR_MESH =
+  'no decoded forecast run yet: the chart mesh process reads the forecast from a decoded run only (the forecast status says what the data worker is doing with the first forecast)';
+
 /**
  * The meshes as the leg pipeline's runner, or undefined when there are
  * none. A leg is covered when one mesh covers all its points, and that leg
@@ -176,7 +180,7 @@ async function ensureRoughCut(
  * and the regional runs from this worker's files; this worker has already
  * fetched what needed the network (loadAreas) before the leg starts.
  */
-function meshLegRunner(
+export function meshLegRunner(
   st: WorkerState,
   cfg: ResolvedConfig,
   id: string,
@@ -286,8 +290,10 @@ function meshLegRunner(
     },
     leg: async (a: MeshLegArgs) => {
       // The child reads the forecast from the decoded run's files; without one it would plan the leg with no wind.
-      if (useForecast && !run)
-        return { refused: 'the forecast is still being decoded, and the mesh process reads only a decoded run; try again shortly' };
+      // What is said is what this worker knows: there is no decoded run (the first forecast is still being decoded, or
+      // its download failed and is retried; the forecast status says which), not when one will be (until 2026-11-07
+      // the refusal said "still being decoded, try again shortly" in both cases; PR #7 review).
+      if (useForecast && !run) return { refused: NO_DECODED_RUN_FOR_MESH };
       // The mesh the plan named; else the one holding the leg's points (a handover leg, with one end outside every
       // mesh: the one holding either).
       const m = a.meshId
@@ -1173,7 +1179,7 @@ export async function route(
  * An ensemble member's decoded run for a route (request.forecast_member): of the ensemble's cycle in use (its
  * current.json), refused when that ensemble or member is not on disk.
  */
-function memberRun(
+export function memberRun(
   st: WorkerState,
   want: NonNullable<RouteRequest['forecast_member']>
 ): { run: DecodedRun; model: EnsembleModelId; name: string; cycle: string; member: number } {

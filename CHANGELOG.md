@@ -116,6 +116,54 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **An ensemble cycle whose record cannot be written stays on disk.**
+  When `current.json` could not be written for a cycle complete on disk,
+  the prune kept only the cycle the old record named, so the complete
+  cycle's runs and GRIB cache were removed and downloaded again at the
+  next round, every round while the write failed. Such a cycle is now
+  pending: nothing of it is pruned, and the next round records it from
+  the disk without a download.
+- **A download that stalls is a timed-out attempt, not a wait without
+  end.** The ECMWF client read a message's body after the attempt had
+  returned, outside the attempt's timeout, so a stalled body was waited
+  for without end, and the ensemble pass (a child process with no
+  deadline of its own) could hang on one message. The body is read under
+  the timeout now: a stall is retried and failed over like a dead
+  connection.
+- **A settings change during an ensemble pass gets its own pass.** A new
+  forecast horizon or field set reloaded the forecast and left the
+  ensembles to the next scheduled round, and a pass under way went on
+  with the old horizon. A pass is started after the reload now, and a
+  start while a pass runs makes one more pass after it, with the new
+  settings.
+- **One rule for a cached GRIB message.** The ensemble pass skipped a
+  cached message by its header alone while the fetch checked the
+  record's length, so a message cut short on disk was never fetched
+  again and its member failed to decode every round. The one check
+  (header, and the length where the index is known) is used wherever a
+  message is taken from the cache or skipped as cached, for the main
+  forecast and the ensembles.
+- **An ensemble's `current.json` is checked whole.** Only its model,
+  cycle and member list were; a record with a missing or bad cycle time
+  made the status throw instead of answering. Every field is checked as
+  it is written, and a record that fails names the field.
+- **A GRIB message cut short on disk is refused by name.** A section
+  running past the end of the message, or past the bytes there, is
+  refused as such before any octet past the end is read; it used to
+  surface as "section undefined has length 0".
+- **A coarse skeleton's width at an endpoint on a land cell.** On a leg
+  without a corridor (no water grid, or a corridor search that failed),
+  the skeleton's exact endpoints are put back after the coarse A*, and
+  an endpoint in water by the polygons can sit in a land cell of the
+  conservative raster, where the width profile reads 0: the guide then
+  capped the steps there at its least and binned a narrow zone round the
+  endpoint. On that path a 0 is unknown water now; the corridor's path
+  re-traces such points and is unchanged.
+- **A mesh leg refused for want of a decoded forecast run says what is
+  true.** It said the forecast was still being decoded and to try again
+  shortly, also when the first download had failed and was being
+  retried. It now says there is no decoded run yet and that the forecast
+  status says what the data worker is doing.
 - **A depth-check detour keeps its own warnings.** When the final depth
   check splices a detour into the route, the replaced segment's
   wind-limit, wave-limit and wave-correction warnings go and the

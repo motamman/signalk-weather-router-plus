@@ -291,6 +291,41 @@ test('EcmwfClient retries 429 with backoff, honours Retry-After, then falls back
   assert.equal(client.baseUrl, 'https://secondary'); // sticks for the session
 });
 
+test('EcmwfClient: a download whose body never ends is a timed-out attempt, retried and then failed, never a wait without end', async () => {
+  let calls = 0;
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    calls++;
+    const signal = init?.signal;
+    // The headers at once, a body that never ends: only the attempt's own abort ends the read.
+    const body = new ReadableStream({
+      start(c) {
+        signal?.addEventListener('abort', () => c.error(new DOMException('the attempt timed out', 'AbortError')), { once: true });
+      },
+    });
+    return new Response(body, { status: 206 });
+  }) as unknown as typeof fetch;
+  const client = new EcmwfClient({
+    baseUrl: 'https://x',
+    fallbackUrls: [],
+    cacheDir: tmpDir(),
+    timeoutMs: 20,
+    retries: 2,
+    fetchImpl,
+    sleepImpl: async () => undefined,
+  });
+  const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 4 };
+  const outcome = await Promise.race([
+    client.fetchField(cycle, 'oper', 0, '10u', [rec]).then(
+      () => 'answered',
+      (e: Error) => `failed: ${e.name}`
+    ),
+    new Promise<string>(r => setTimeout(r, 3000, 'still waiting after 3 s').unref()),
+  ]);
+  assert.equal(outcome, 'failed: AbortError');
+  assert.equal(calls, 2, 'every attempt timed out and was retried');
+});
+
 test('EcmwfClient does not retry 404 and reports it', async () => {
   let n = 0;
   const fetchImpl = (async () => {

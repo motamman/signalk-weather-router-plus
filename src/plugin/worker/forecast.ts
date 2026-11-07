@@ -448,16 +448,24 @@ export async function refreshEnsembles(
     st.ensembles[m] = { loading: null, error: null, ...st.ensembles[m], ...s, checkedAt: new Date().toISOString() };
     changed();
   };
-  /** Model `m` complete on disk for this cycle: recorded as the ensemble in use, or why it could not be (its status, the log). */
+  /**
+   * Model `m` complete on disk for this cycle: recorded as the ensemble in use, or why it could not be (its status, the
+   * log). A cycle that could not be recorded stays pending: the prune keeps its runs and its GRIB cache, and the next
+   * round records it without downloading it again (until 2026-11-07 the prune kept only the cycle the record named, so
+   * a record that could not be written had the complete cycle removed and downloaded again every round; PR #7 review).
+   */
   const record = (m: EnsembleModelId): void => {
     const why = recordEnsembleCycle(st.cacheRoot, m, cycleTime, wanted(m), horizonHours);
     note(m, { loading: null, error: why ? `cycle ${cycle} complete but not in use: ${why}` : null });
-    if (why) st.log('error', `ensembles: ${ENSEMBLES[m].name}: cycle ${cycle} complete but not in use: ${why}`);
+    if (why) {
+      pending[m] = cycle;
+      st.log('error', `ensembles: ${ENSEMBLES[m].name}: cycle ${cycle} complete but not in use: ${why}`);
+    }
   };
   // A model complete on disk for this cycle is the ensemble in use, whatever stopped the pass that decoded it.
   for (const m of e.models) if (!missing.includes(m)) record(m);
   if (!missing.length) {
-    if (pruneEnsemblesReported(st, ensembleKeep(st, e, {}), '')) measureEnsembles(st, e.models);
+    if (pruneEnsemblesReported(st, ensembleKeep(st, e, pending), '')) measureEnsembles(st, e.models);
     return;
   }
   const why = offline ?? held();
@@ -508,6 +516,52 @@ export async function refreshEnsembles(
   pruneEnsemblesReported(st, ensembleKeep(st, e, pending), '');
   measureEnsembles(st, e.models);
   changed();
+}
+
+/**
+ * The data worker's ensemble passes (refreshEnsembles), one at a time: a pass downloads and decodes for many minutes,
+ * so the refresh round that starts it does not wait for it, and neither must the next round. A start while a pass runs
+ * asks for one more after it, with that start's arguments (the one rule for everything that starts a pass): a settings
+ * change during a pass (worker.ts 'config': the new horizon) is not left to a later round, and a round that overlaps a
+ * pass gets its own pass after it. The owner asking (`user`: Refresh, a route) makes the pass under way theirs, so the
+ * internet hold does not stop it (worker.ts 'internet-hold'). `changed` runs at each change a pass makes and at its end
+ * (the status).
+ */
+export class EnsemblePasses {
+  private running: Promise<void> | null = null;
+  private again: { offline: string | null; held: () => string | null; user: boolean } | null = null;
+  /** The pass under way is the owner's (none under way: false). */
+  userPass = false;
+
+  constructor(
+    private readonly pass: (offline: string | null, held: () => string | null, changed: () => void) => Promise<void>,
+    private readonly changed: () => void,
+    private readonly log: (message: string) => void
+  ) {}
+
+  /** A pass is under way. */
+  get active(): boolean {
+    return this.running !== null;
+  }
+
+  start(offline: string | null, held: () => string | null, user: boolean): void {
+    if (this.running) {
+      if (user) this.userPass = true;
+      this.again = { offline, held, user: user || (this.again?.user ?? false) };
+      return;
+    }
+    this.userPass = user;
+    this.running = this.pass(offline, held, this.changed)
+      .catch(err => this.log(`ensembles: ${(err as Error).message}`))
+      .finally(() => {
+        this.running = null;
+        this.userPass = false;
+        this.changed();
+        const next = this.again;
+        this.again = null;
+        if (next) this.start(next.offline, next.held, next.user);
+      });
+  }
 }
 
 export function keepCycles(current: Cycle, n: number): Cycle[] {

@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { iterateGrib2 } from './grib2';
+import { iterateGrib2, parseGrib2Message } from './grib2';
 import { aecDecode, AecError } from './ccsds';
 import { buildStep } from '../data/forecast';
+import { asEnsembleMember, firstMessage, GRIB2_FIXTURE, sectionsOf } from './grib2fixture';
 
-const fixture = path.join(__dirname, '..', '..', 'test-data', 'ecmwf_10u10v_3steps.grib2');
+const fixture = GRIB2_FIXTURE;
 const truthPath = path.join(__dirname, '..', '..', 'test-data', 'ecmwf_10u10v_3steps.truth.json');
 
 interface Truth {
@@ -109,18 +110,6 @@ test('CCSDS decoder handles a hand-built zero block', () => {
 // an empty range, all zeros); a copy is patched to the real 3 h header.
 const gustFixture = path.join(__dirname, '..', '..', 'test-data', 'ecmwf_10fg_0h.grib2');
 
-/** Byte offsets (0-based) of sections 1 and 4 of the first message. */
-function sectionsOf(b: Uint8Array): { s1: number; s4: number } {
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  const out: Record<number, number> = {};
-  for (let p = 16; p < b.length - 4;) {
-    if (b[p] === 0x37 && b[p + 1] === 0x37 && b[p + 2] === 0x37 && b[p + 3] === 0x37) break;
-    out[b[p + 4]] = p;
-    p += dv.getUint32(p);
-  }
-  return { s1: out[1], s4: out[4] };
-}
-
 /** The step-0 gust re-dated: reference `ref`, range from +startH for lenH hours. */
 function gustAt(ref: Date, startH: number, lenH: number): Uint8Array {
   const b = new Uint8Array(fs.readFileSync(gustFixture));
@@ -212,25 +201,7 @@ test('template 4.8: a range that ends before it starts is refused', () => {
 
 // Template 4.1 (one member of an ensemble): template 4.0 and three octets more, the type of ensemble forecast, the
 // member's number and the ensemble's size. ECMWF's ensemble files (enfo, waef) code every member this way. The fixture's
-// first message (4.0) is rebuilt as 4.1 with those three octets, as ECMWF writes them for member 7 of 50.
-function asEnsembleMember(type: number, member: number, size: number): Uint8Array {
-  const all = new Uint8Array(fs.readFileSync(fixture));
-  const first = new DataView(all.buffer, all.byteOffset).getUint32(12); // octets 13–16 of the 64-bit length (under 4 GB)
-  const b = all.subarray(0, first);
-  const { s4 } = sectionsOf(b);
-  const s4len = new DataView(b.buffer, b.byteOffset).getUint32(s4);
-  assert.equal(s4len, 34, 'the fixture is template 4.0');
-  const out = new Uint8Array(b.length + 3);
-  out.set(b.subarray(0, s4 + 34), 0);
-  out.set([type, member, size], s4 + 34);
-  out.set(b.subarray(s4 + 34), s4 + 37);
-  const dv = new DataView(out.buffer);
-  dv.setUint32(12, out.length); // total length
-  dv.setUint32(s4, 37); // section 4 length
-  dv.setUint16(s4 + 7, 1); // template 4.1
-  return out;
-}
-
+// first message (4.0) is rebuilt as 4.1 with those three octets (grib2fixture.ts), as ECMWF writes them for member 7 of 50.
 test('template 4.1: an ensemble member reads as its 4.0 field, with the member', () => {
   const [plain] = [...iterateGrib2(new Uint8Array(fs.readFileSync(fixture)))];
   const [m] = [...iterateGrib2(asEnsembleMember(4, 7, 50))];
@@ -248,9 +219,26 @@ test('template 4.1: an ensemble member reads as its 4.0 field, with the member',
     assert.equal(m.product[k], plain.product[k], k);
   assert.deepEqual(m.grid, plain.grid);
   assert.deepEqual(m.decode(), plain.decode());
-  // A 4.1 section cut short of the member's octets is refused.
-  const short = asEnsembleMember(4, 7, 50);
-  const { s4 } = sectionsOf(short);
-  new DataView(short.buffer).setUint32(s4, 36);
-  assert.throws(() => [...iterateGrib2(short)]);
+  // A 4.1 section cut short of the member's octets (two of the three, every length consistent) is refused by the
+  // template's own guard, by name. (Until 2026-11-07 the short message was made by lowering the section's length
+  // alone, which put the next section header one octet off: the scan threw "unknown section number" first, and the
+  // guard was never reached.)
+  const short = asEnsembleMember(4, 7, 50, 2);
+  assert.throws(() => [...iterateGrib2(short)], /product definition template 4\.1 section too short \(36 octets\)/);
+});
+
+test('a message cut short on disk is refused by the section that runs past its end, before any octet past the end is read', () => {
+  const whole = firstMessage();
+  assert.ok(parseGrib2Message(whole).grid.ni > 0, 'the whole message reads');
+  // The data section's header is there, its octets are not.
+  assert.throws(
+    () => parseGrib2Message(whole.subarray(0, whole.length - 100)),
+    /section 7 at \d+ runs past the message \(\d+ octets, \d+ left of \d+\)/
+  );
+  // Cut inside a section header.
+  const { s4 } = sectionsOf(whole);
+  assert.throws(
+    () => parseGrib2Message(whole.subarray(0, s4 + 2)),
+    /message at 0 is cut short: a section header at \d+, \d+ octets of \d+/
+  );
 });

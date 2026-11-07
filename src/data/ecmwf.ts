@@ -269,10 +269,15 @@ function parseIndex(text: string, url: string): IndexRecord[] {
 }
 
 /**
- * A cached message is there and starts with GRIB: false when there is no such file; a file that is there but cannot
- * be read throws (a failing disk is reported, never taken for a message to fetch again).
+ * A cached message is there: the file starts with GRIB and, when its index record's `length` is known, is exactly that
+ * long. The one rule for the main forecast's cache and the ensembles', wherever a message is taken from the cache or
+ * skipped as cached (until 2026-11-07 the ensemble pass skipped a GRIB-headed file of any length, and only the fetch
+ * checked the length: a file cut short was never fetched again, and its member failed to decode every round; PR #7
+ * review). `length` null: the header alone, where no index has been read yet (the ensemble pass's first look at a
+ * step, which decides whether to read its index at all). False when there is no such file; a file that is there but
+ * cannot be read throws (a failing disk is reported, never taken for a message to fetch again).
  */
-export function isGribFile(p: string): boolean {
+export function isGribFile(p: string, length: number | null = null): boolean {
   let fd: number;
   try {
     fd = fs.openSync(p, 'r');
@@ -281,6 +286,7 @@ export function isGribFile(p: string): boolean {
     throw err;
   }
   try {
+    if (length !== null && fs.fstatSync(fd).size !== length) return false;
     const head = Buffer.alloc(4);
     return fs.readSync(fd, head, 0, 4, 0) === 4 && head.toString('latin1') === 'GRIB';
   } finally {
@@ -350,8 +356,15 @@ export class EcmwfClient {
    * network errors. When a mirror is exhausted the next mirror takes
    * over for the rest of the session. 404/403 are returned as-is. No
    * connection at all (OfflineError) is thrown at once, mirrors untried.
+   * The body is read inside the attempt, under its timeout (http.ts
+   * readBody): a download that stalls is a timed-out attempt, retried and
+   * failed over like a dead connection, so no request of this client
+   * waits without end (until 2026-11-07 the callers read the body after
+   * the attempt had returned, outside any timeout, and the ensemble
+   * child, which has no deadline of its own, could hang on one stalled
+   * message; PR #7 review).
    */
-  private async request(pathSuffix: string, init: RequestInit = {}): Promise<Response> {
+  private async request(pathSuffix: string, init: RequestInit = {}): Promise<{ status: number; body: Uint8Array }> {
     let lastErr: unknown;
     for (let m = 0; m < this.mirrors.length; m++) {
       const url = this.baseUrl + pathSuffix;
@@ -363,8 +376,10 @@ export class EcmwfClient {
           sleepImpl: this.sleepImpl,
           log: this.log,
           makeError: msg => new EcmwfError(msg),
+          readBody: true,
         });
-        return r.response;
+        // readBody: every answer fetchWithRetry returns carries its body.
+        return { status: r.status, body: r.body! };
       } catch (err) {
         // No connection at all: another mirror is no more reachable.
         if (isOffline(err)) throw err;
@@ -417,7 +432,7 @@ export class EcmwfClient {
     const url = this.stepUrl(cycle, stream, step, 'index');
     const res = await this.request(this.stepPath(cycle, stream, step, 'index'));
     if (res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${url}`);
-    return parseIndex(await res.text(), url);
+    return parseIndex(new TextDecoder().decode(res.body), url);
   }
 
   cachePath(cycle: Cycle, stream: string, step: number, param: string): string {
@@ -467,13 +482,12 @@ export class EcmwfClient {
    */
   async fetchField(cycle: Cycle, stream: string, step: number, param: string, index?: IndexRecord[]): Promise<Uint8Array | null> {
     const cached = this.cachePath(cycle, stream, step, param);
-    if (fs.existsSync(cached)) {
-      const buf = fs.readFileSync(cached);
-      if (buf.length > 16 && buf.toString('latin1', 0, 4) === 'GRIB') return new Uint8Array(buf);
-      fs.unlinkSync(cached);
-    }
+    const ofParam = (r: IndexRecord): boolean => r.param === param && (r.levtype === undefined || r.levtype === 'sfc');
+    // From the cache when it holds the message (isGribFile: its length checked against the index when one was given);
+    // a file that is not one is written over (writeCached renames the fetched message into its place).
+    if (isGribFile(cached, index?.find(ofParam)?._length ?? null)) return new Uint8Array(fs.readFileSync(cached));
     const idx = index ?? (await this.fetchIndex(cycle, stream, step));
-    const rec = idx.find(r => r.param === param && (r.levtype === undefined || r.levtype === 'sfc'));
+    const rec = idx.find(ofParam);
     if (!rec) return null;
     const msg = await this.fetchMessage(this.stepPath(cycle, stream, step, 'grib2'), rec, step);
     writeCached(cached, msg);
@@ -488,7 +502,7 @@ export class EcmwfClient {
     const res = await this.request(pathSuffix, { headers: { Range: `bytes=${rec._offset}-${rec._offset + rec._length - 1}` } });
     if (res.status !== 206 && res.status !== 200)
       throw new EcmwfError(`HTTP ${res.status} fetching ${rec.param} from ${this.baseUrl}${pathSuffix}`);
-    const buf = new Uint8Array(await res.arrayBuffer());
+    const buf = res.body;
     const msg = res.status === 200 ? buf.subarray(rec._offset, rec._offset + rec._length) : buf;
     if (msg.length !== rec._length)
       throw new EcmwfError(`short read for ${rec.param} step ${step}: got ${msg.length} of ${rec._length} bytes`);
@@ -511,12 +525,13 @@ export class EcmwfClient {
     const res = await this.request(p);
     if (res.status === 404 || res.status === 403) return null;
     if (res.status !== 200) throw new EcmwfError(`HTTP ${res.status} fetching ${this.baseUrl}${p}`);
-    return parseIndex(await res.text(), this.baseUrl + p);
+    return parseIndex(new TextDecoder().decode(res.body), this.baseUrl + p);
   }
 
   /**
    * One record of an ensemble step file as a raw GRIB2 message, written to `cachePath` (one message per file, as the
-   * main forecast's cache); from the cache when it is there.
+   * main forecast's cache); from the cache when it holds the message (isGribFile, the record's length), a file that is
+   * not one written over.
    */
   async fetchEnsembleField(
     cycle: Cycle,
@@ -527,11 +542,7 @@ export class EcmwfClient {
     rec: IndexRecord,
     cachePath: string
   ): Promise<Uint8Array> {
-    if (fs.existsSync(cachePath)) {
-      const buf = fs.readFileSync(cachePath);
-      if (buf.length === rec._length && buf.toString('latin1', 0, 4) === 'GRIB') return new Uint8Array(buf);
-      fs.unlinkSync(cachePath);
-    }
+    if (isGribFile(cachePath, rec._length)) return new Uint8Array(fs.readFileSync(cachePath));
     const msg = await this.fetchMessage(this.ensembleStepPath(cycle, model, stream, kind, step, 'grib2'), rec, step);
     writeCached(cachePath, msg);
     return msg;

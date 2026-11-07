@@ -26,6 +26,7 @@ import {
   type Cycle,
   cycleFor,
   type EcmwfClient,
+  ENSEMBLE_MEMBER_CHOICES,
   ENSEMBLE_OPTIONAL_PARAMS,
   ENSEMBLE_PARAMS,
   ENSEMBLES,
@@ -175,6 +176,25 @@ export interface EnsembleCurrent {
 const CURRENT_FILE = 'current.json';
 
 /**
+ * Why `c` is not a record of `model`'s cycle in use, or null: every field as recordEnsembleCycle writes it, so what
+ * reads the record (the status, a member route: `new Date(cycleTimeMs)`, the members) never meets a value that is not
+ * one. (Until 2026-11-07 only the model, the cycle and the members' list were checked; PR #7 review.)
+ */
+function currentRecordProblem(c: unknown, model: EnsembleModelId): string | null {
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return 'not an object';
+  const r = c as Partial<EnsembleCurrent>;
+  if (r.model !== model) return `model ${String(r.model)}`;
+  if (typeof r.cycle !== 'string' || !/^\d{10}$/.test(r.cycle)) return `cycle ${String(r.cycle)}`;
+  if (typeof r.cycleTimeMs !== 'number' || !Number.isFinite(r.cycleTimeMs)) return `cycleTimeMs ${String(r.cycleTimeMs)}`;
+  const most = ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1];
+  if (!Array.isArray(r.members) || !r.members.every(m => Number.isInteger(m) && m >= 0 && m <= most))
+    return `members ${JSON.stringify(r.members)}`;
+  if (typeof r.horizonHours !== 'number' || !Number.isFinite(r.horizonHours)) return `horizonHours ${String(r.horizonHours)}`;
+  if (typeof r.at !== 'string') return `at ${String(r.at)}`;
+  return null;
+}
+
+/**
  * A model's record of its ensemble in use (current.json in its folder): the record, or null with no problem when there
  * is none yet, or null with the problem when the file is there but cannot be read or is not that model's record (the
  * data worker reports it each round until it records the cycle again: worker/forecast.ts refreshEnsembles).
@@ -190,15 +210,15 @@ export function ensembleCurrentFile(
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { current: null, problem: null };
     return { current: null, problem: `${CURRENT_FILE} cannot be read: ${(err as Error).message}` };
   }
-  let c: EnsembleCurrent;
+  let c: unknown;
   try {
-    c = JSON.parse(text) as EnsembleCurrent;
+    c = JSON.parse(text);
   } catch (err) {
     return { current: null, problem: `${CURRENT_FILE} is not JSON: ${(err as Error).message}` };
   }
-  if (!c || c.model !== model || typeof c.cycle !== 'string' || !Array.isArray(c.members))
-    return { current: null, problem: `${CURRENT_FILE} is not a record of ${model}'s cycle in use` };
-  return { current: c, problem: null };
+  const problem = currentRecordProblem(c, model);
+  if (problem) return { current: null, problem: `${CURRENT_FILE} is not a record of ${model}'s cycle in use (${problem})` };
+  return { current: c as EnsembleCurrent, problem: null };
 }
 
 /** A model's ensemble in use, or null when there is none to use (no record, or one that cannot be read: ensembleCurrentFile). */
@@ -332,7 +352,8 @@ async function downloadModel(
 ): Promise<{ steps: number[]; downloaded: number; bytes: number }> {
   /**
    * The members a step file holds that still have a message to fetch from it (none: every required and optional field
-   * is cached; whether an optional one exists is the index's to say, so it is read).
+   * is cached; whether an optional one exists is the index's to say, so it is read). By the header alone: no index has
+   * been read here yet, so no length is known (isGribFile); the plan below, with the index, checks each file's length.
    */
   const toGet = (file: EnsembleModel['files'][number], stream: string, params: readonly string[], step: number): number[] => {
     const inFile = members.filter(m => (m === 0) === file.control);
@@ -384,7 +405,7 @@ async function downloadModel(
           }))
         );
         for (const r of all) if (optional.includes(r.rec.param)) optionalPresent.add(r.rec.param);
-        const recs = all.filter(r => !isGribFile(r.path));
+        const recs = all.filter(r => !isGribFile(r.path, r.rec._length));
         for (const r of recs) toFetch += r.rec._length;
         plan.push({ step, stream, kind: file.kind, recs });
       }
@@ -401,7 +422,7 @@ async function downloadModel(
   for (const step of ladder) {
     for (const part of plan.filter(x => x.step === step)) {
       for (const { rec, path: p } of part.recs) {
-        if (isGribFile(p)) continue;
+        if (isGribFile(p, rec._length)) continue;
         const msg = await client.fetchEnsembleField(o.cycle, model, part.stream, part.kind, step, rec, p);
         downloaded++;
         bytes += msg.length;

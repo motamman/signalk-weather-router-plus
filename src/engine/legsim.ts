@@ -91,6 +91,8 @@ export interface SimOptions {
 /** What exceeding a wind or wave limit does: block (impassable) or avoid (allowed, at a price in the search). */
 export const LIMIT_MODES = ['block', 'avoid'] as const;
 export type LimitMode = (typeof LIMIT_MODES)[number];
+/** The mode of a limit when none is chosen: the settings' default, the config's and the CLI's, in one place. */
+export const DEFAULT_LIMIT_MODE: LimitMode = 'block';
 
 /** The avoid surcharge when none is set: time over a limit counts double. */
 export const DEFAULT_LIMIT_AVOID_STRENGTH = 1;
