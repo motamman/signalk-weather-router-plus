@@ -96,6 +96,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The conditions rows give their interval in seconds.** `interval_h`
+  (hours) is now `interval_s`, in `GET /api/conditions` and `GET /api/routes/{id}/meteogram`, as every other field is SI; a
+  client reading `interval_h` reads `interval_s` instead. The meteogram's
+  hovers show the interval in the account's time unit.
 - **Motoring legs are amber**, as their waypoint marks already were; they
   were black.
 - **An ensemble set's opened route sits on a white band** with a dark
@@ -116,6 +120,277 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A route on an ensemble member finds every member of the cycle in use.**
+  While an ensemble set ran, a route asking for a member of that same cycle
+  that the set had not taken was refused as "not on disk", though it was on
+  disk and recorded. The cycle in use now has all its recorded members, and
+  a set's older pinned cycle only the set's own.
+- **Every module import and re-export carries the web app's version tag.**
+  The tag written into the modules missed an import spread over several
+  lines and a re-export (`export … from`), so such a module was loaded
+  under its bare address as well as its tagged one: twice. The files on
+  disk and the plugin's `/ui` route now tag them by one rule.
+- **A route being computed no longer draws over a route opened or a map
+  cleared meanwhile.** Its progress stream went on after the route on
+  screen changed: its fronts were drawn over the route opened, its result
+  replaced it when done, and a failure put back the route from before it.
+  The stream now stops at its next event once its route is no longer the
+  one on screen; the route goes on computing on the server and Saved lists
+  it.
+- **The Signal K Admin panel reads its units as the web app does.** The
+  disk cap, the tiles' disk use, the chart and coastline downloads and the
+  ensembles on disk were worked out in GB by the panel itself; they now
+  take the user's data-size unit from their preset, and show "—" without
+  one. The distance and the hours of forecast kept ready are read with the
+  web app's own code (`rp-units.js`) too, in place of the panel's copy; a
+  time preference in a duration format ("1d 2h"), which has no single unit
+  to type a number in, shows "—" there as in the planner's settings, where
+  the panel typed it in hours it worked out itself.
+- **Relative humidity, a leg's time and the polar's performance show in
+  the account's units.** The conditions table and the Temp tab wrote
+  relative humidity as a percentage they worked out themselves, the
+  itinerary wrote each leg's time as hours and minutes, and the polar
+  picker the performance factor as a percentage, whatever the account had
+  chosen. They now go through the page's unit helpers, as the rest of the
+  page does.
+- **Best departure's and the ensemble's tables show times in the
+  account's time unit.** They converted seconds themselves and wrote d, h
+  and m beside the numbers, whatever unit the account had chosen; the
+  passage, motoring and upwind times now show as the rest of the page shows
+  times (days, hours and minutes from a day up).
+- **An accepted LIVE re-plan takes the departures compared and the
+  ensemble set off the screen**, with the route it replaces, as opening
+  another route does; they stayed, though the route on screen was no
+  longer one of theirs.
+- **The ensembles' cost note says which figures are arithmetic.** It
+  called every figure measured; the download per member is the measured
+  total divided by the members downloaded.
+- **A LIVE re-plan no longer replaces a route opened meanwhile.** Opening
+  a saved route, or clearing the map from the map menu, does not stop
+  LIVE, and a re-plan computing then, or its proposal waiting, was still
+  for the route before: once done it was drawn over the route opened (an
+  accepted one went straight onto the map), or a cleared map filled again.
+  A re-plan or proposal is now dropped, as Cancel drops it, when another
+  route is put on screen.
+- **A chart-mesh leg reads the forecast run the rest of the leg reads.** A
+  leg's forecast is read from the run in use when the leg starts, but the
+  chart mesh process was given the run in use when the route started, an
+  older one once a new cycle had loaded in between; the leg's memory check
+  sized that older run too. The mesh process now gets the run the leg's
+  forecast was read from, the memory check sizes that run, and the regional
+  wind's grid is matched to it.
+- **An ensemble's download line counts only the members decoded.** It
+  said every member still to do was "decoded now" when the download failed
+  before any was; it now counts the members on disk at the end of the
+  pass.
+- **The route's wind arrows are blue again, as the legend shows them.**
+  Their colour was written already escaped and then escaped again, which
+  no browser reads as a colour: the arrows drew black (checked in Chrome
+  154, 2026-11-07: the arrow's shaft read back as 0, 0, 0). The colour is
+  now written once (`ROUTE_STYLE.wind`) and the legend reads the same
+  one; so do the pressure layer's H and L centres and their legend.
+- **A saved set or window is checked before it is restored, by the rules
+  it was accepted by.** Only its id and its list of routes were checked, so
+  a file without the rest (a hand edit, an older format) was restored and
+  then failed every read of its owner's sets or windows. Its request is now
+  checked as the API checks it when the set or window is made, and the rest
+  against the record's schema; one that fails is left as it is and
+  reported, as an unreadable file is.
+- **The warnings list stays open while an ensemble set computes.** Each
+  poll of the set (every 3 s) redrew the route summary, and every redraw
+  closed the list, in the summary and in its Itinerary copy. Whether the
+  list is open is now the page's state: a redraw keeps it, and a route
+  put on screen starts it closed.
+- **A record with no JSON form is not saved over its file.** Saving a
+  value JSON cannot write (undefined, a function) with indentation wrote
+  the text "undefined" over the file, which then failed to load; it is
+  now refused, and the file left as it was.
+- **A server that answers "try again" cannot hold back the retry.** Its
+  answer's body was read before the next attempt; with the timeout now
+  ending when the server answers, a body that never came held the retry
+  up to fetch's own 300 s. The attempt now ends that body unread.
+- **Ensembles listed in the options file as something other than a list
+  are refused naming the setting** (`forecast.ensemble.models`), instead
+  of failing the start with a TypeError.
+- **A slow download is no longer cut off.** The data clients' per-attempt
+  timeout (60 s for the ECMWF and Zarr clients) ran until a download's
+  body had been read, so a download slower than that was aborted and
+  retried, and on a slow link could fail every time. The timeout now ends
+  when the server answers; the body is read to its end however long it
+  takes, and one that stops arriving is ended by Node's fetch itself, after
+  300 s of silence (measured on the test box, a Pi 5, node v24.22.1,
+  2026-11-07: 300.7 s).
+- **A failed removal of a route's forecast crop no longer fails the route.**
+  Between legs it threw out of the route; it is now logged, as at the
+  route's end, and the copy is removed at the worker's next start.
+- **A failed write leaves nothing behind.** A GRIB message whose write into
+  the cache failed partway (a full disk) left its partial copy in the
+  cycle's folder, and a route's forecast crop whose write failed left the
+  job's folder, empty or with a whole copy of the crop, until the worker
+  restarted. Both now remove what they wrote.
+- **An ensemble record keeps the members it names for its cycle.** Recording
+  the same cycle again with another member wanted rewrote the record with
+  the wanted members alone, so the others dropped out and the next prune
+  removed their runs, though sets started on that cycle may route on them.
+- **One status table and one cell for a row without a route.** The
+  ensemble set's table had its own copy of the departure window's status
+  words (without "skipped") and built its no-route cell itself; both
+  tables now use one.
+- **A long ocean leg has the currents' own cells along the route.** A leg's
+  SMOC currents were loaded over the whole area its search can reach; on a
+  long ocean leg that is too large for the model's 1/12° grid, so the
+  whole leg, the route's own band included, ran on the 1/3° grid. The band
+  along the leg is now loaded at 1/12° too, and the lookup answers from
+  it first. Measured on the test box (a Pi 5, 2026-11-07, SMOC run
+  2026111623, 26 steps, a fresh cache): Lisbon to Barbados held 63.1 MB
+  instead of 18.2 MB and downloaded 142.6 MB in 11.3 s instead of 35.5 MB
+  in 3.4 s; Cape Town to Fremantle held 32.4 MB instead of 18.9 MB and
+  downloaded 100.5 MB in 8.1 s instead of 35.5 MB in 3.3 s.
+- **A route on an ensemble member whose record cannot be read says so.**
+  The check answered "not downloaded" while an ensemble set on the same
+  ensemble was told what is wrong with its record; both now read the
+  record one way and say the same.
+- **Find Route cancels an ensemble set it replaces before the set's first
+  answer.** A set whose state the page did not know yet (its first poll
+  not answered, or its polls failing) was left computing on the server,
+  its members queued ahead of the new route.
+- **The wind and wave limit hints say what an empty limit does.** They
+  said "no limit"; an empty limit uses the server's own, when it has one.
+- **The route legend draws each mark as the map does.** The legend typed
+  its own copy of every route layer's colours and dashes, and three had
+  drifted: the line from a point on land to its water (dashed 4 4 in the
+  legend, 6 6 on the map), the arrival circle of an approximate waypoint
+  (3 2 against 6 4) and a leg past the forecast (grey, dashed 6 4; on the
+  map the leg's own colour, dashed 10 7). The layers and the legend now
+  read one table (`ROUTE_STYLE`, `rp-core.js`).
+- **A GRIB message that cannot be renamed into the cache fails its
+  fetch.** When the rename failed and any file was at the cached path, the
+  failure was taken for another writer's success, so a message cut short
+  on disk stayed there unsaid and was fetched again every round. It is now
+  taken only when a whole message is there (`isGribFile`).
+- **A failed row no longer hides the numbers of an ensemble set's table or
+  a departure window's.** A failed member's or departure's message sat on
+  one line in a cell across the five number columns (the tables' cells do
+  not wrap), so it set their width: the headers and every other row's
+  numbers were pushed out of view to the right. The message now wraps in
+  its cell; the whole error stays in the row's tooltip.
+- **A leg on a chart mesh is planned before the first decoded forecast
+  run.** Until the data worker has decoded a run, a route reads its area's
+  forecast from the GRIB cache into memory; a leg on a chart mesh is
+  planned in a child process that reads the forecast from a decoded run's
+  files only, so it was refused. The route's crop is now written as a run
+  of its own for that process (the same files and index, the crop's grid,
+  under `route-forecast/`), with every value the route holds, and removed
+  with the route's areas; what a stop leaves is removed when the route
+  worker starts. Measured on the test box (a Pi 5, 2026-11-07, the 06Z run
+  from the GRIB cache, `loadForecastForBBox` then `writeCropRun`): 4.6 MB in 520 files
+  written in 302 ms for a leg off Block Island, 9.7 MB in 315 ms for one
+  from Chesapeake Bay to Cape Cod.
+- **An ensemble set's cycle stays on disk until the set ends.** A set
+  routes every member on the cycle it was made on, but a newer cycle's
+  download pruned the older one, so members still waiting failed with their
+  data gone. A set now pins its cycle and members on disk when it is made
+  (`forecast-ens/<model>/pins/<set>.json`; a set that cannot write its pin
+  is refused), prune keeps what a pin names, and the pin goes when the set
+  has finished, failed or been cancelled. Pins left by a stop are cleared
+  at start.
+- **A route on one ensemble member is checked against the record on disk.**
+  `POST /api/routes` with `forecast_member` checked the member against the
+  data worker's last status, which is behind the ensemble's record
+  (`current.json`) between a new cycle's recording and the next status: a
+  member just recorded was refused as not on disk, and one just dropped was
+  accepted and then failed in the worker. The check and an ensemble set now
+  read the record, one helper for both.
+- **The minimum members of an ensemble set is the server's.** The page
+  held its own copy (5, twice in the script and once in the slider); it now
+  reads `ensemble_members_min` from `/api/status`, taken from the request
+  rule itself.
+- **The page no longer keeps one request handle per land-mask view.** The
+  land mask was fetched on a channel named for its box, and a channel keeps
+  its request until the next one on it, so every map view and resize added
+  an entry for the session. It is fetched on no channel; its cache already
+  answers a box asked twice.
+- **A route's finer coast stays the route's.** With no land buffer the route
+  drew its band's finer coast into the worker's cached land mask, where it
+  stayed after the route until the next route on the same box. Each route
+  now refines a view of its own (`LandMask.routeView`), which goes with it.
+- **An ensemble set is pinned to the cycle on disk when it is made.** The
+  set read the ensemble's cycle in use from the data worker's last status,
+  which is behind the record on disk from the moment a new cycle is
+  recorded until the next status; a set made then was pinned to the old
+  cycle, and every member of it failed as "no longer on disk" while the new
+  cycle was there. The set now reads the record itself (`current.json`, the
+  one the members' routes read), and a record that cannot be read refuses
+  the set with the record's own problem.
+- **Every chart mesh's water is land to the coastline search over the
+  whole world it searches.** The mask of charted water was built over the
+  leg's box alone (the route points plus a degree), while the search's
+  world is wider by the heading sweep's reach, so the charts of a mesh
+  further off were open water to the search, judged by the coastline
+  alone. The search's land now has the meshes' area over the whole world:
+  the triangles where the plan marked them, every mesh's tile extents
+  beyond (the mesh's own rule for the points it covers), the finer
+  answering first, as the land mask's own patches do.
+- **The OpenAPI document describes what `POST /api/windows` and
+  `POST /api/ensemble-sets` answer.** Their 202 was a description only;
+  it is a schema now (`WindowCreatedSchema`, `EnsembleSetCreatedSchema`:
+  the id, status, the count of departures or members, and links), and
+  the handlers answer a value of that schema, so the document and the
+  answer cannot drift apart. The cost figures of the ensemble downloads
+  (plugin configuration) name the horizon they were measured at from the
+  one place that holds them (`ENSEMBLE_MEMBER_COST.horizonHours`).
+- **An ensemble cycle whose record cannot be written stays on disk.**
+  When `current.json` could not be written for a cycle complete on disk,
+  the prune kept only the cycle the old record named, so the complete
+  cycle's runs and GRIB cache were removed and downloaded again at the
+  next round, every round while the write failed. Such a cycle is now
+  pending: nothing of it is pruned, and the next round records it from
+  the disk without a download.
+- **A download that stalls is a timed-out attempt, not a wait without
+  end.** The ECMWF client read a message's body after the attempt had
+  returned, outside the attempt's timeout, so a stalled body was waited
+  for without end, and the ensemble pass (a child process with no
+  deadline of its own) could hang on one message. The body is read under
+  the timeout now: a stall is retried and failed over like a dead
+  connection.
+- **A settings change during an ensemble pass gets its own pass.** A new
+  forecast horizon or field set reloaded the forecast and left the
+  ensembles to the next scheduled round, and a pass under way went on
+  with the old horizon. A pass is started after the reload now, and a
+  start while a pass runs makes one more pass after it, with the new
+  settings.
+- **A cached GRIB message is a whole message, by its own length.** The
+  main forecast's loader and the ensemble pass took a cached message by
+  its header alone, and the loader reads a step's index only for a
+  field it finds not cached, so the fetch's length check was never
+  reached there. A message cut short on disk was never fetched again:
+  its step failed the forecast load, or its member failed to decode,
+  every round. A cached message is now a whole GRIB2 message by its
+  indicator section, which states the message's length: that one check
+  is used wherever a message is taken from the cache or skipped as
+  cached, for the main forecast and the ensembles, and it needs no
+  index, so a cycle cached whole is still read with no network.
+- **An ensemble's `current.json` is checked whole.** Only its model,
+  cycle and member list were; a record with a missing or bad cycle time
+  made the status throw instead of answering. Every field is checked as
+  it is written, and a record that fails names the field.
+- **A GRIB message cut short on disk is refused by name.** A section
+  running past the end of the message, or past the bytes there, is
+  refused as such before any octet past the end is read; it used to
+  surface as "section undefined has length 0".
+- **A coarse skeleton's width at an endpoint on a land cell.** On a leg
+  without a corridor (no water grid, or a corridor search that failed),
+  the skeleton's exact endpoints are put back after the coarse A*, and
+  an endpoint in water by the polygons can sit in a land cell of the
+  conservative raster, where the width profile reads 0: the guide then
+  capped the steps there at its least and binned a narrow zone round the
+  endpoint. On that path a 0 is unknown water now; the corridor's path
+  re-traces such points and is unchanged.
+- **A mesh leg refused for want of a decoded forecast run says what is
+  true.** It said the forecast was still being decoded and to try again
+  shortly, also when the first download had failed and was being
+  retried. It now says there is no decoded run yet and that the forecast
+  status says what the data worker is doing.
 - **A depth-check detour keeps its own warnings.** When the final depth
   check splices a detour into the route, the replaced segment's
   wind-limit, wave-limit and wave-correction warnings go and the

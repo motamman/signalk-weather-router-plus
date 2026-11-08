@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import { HOUR_S } from '../geo/units';
 import assert from 'node:assert/strict';
-import { availableSteps, cycleFor } from './ecmwf';
+import { availableSteps, cycleFor, ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MEMBER_MAX, ENSEMBLES } from './ecmwf';
 import { buildStep, cropField, nanFillLimited, sampleField, ForecastStore, type FieldGrid } from './forecast';
 import type { Grib2Grid, Grib2Message } from '../grib/grib2';
 
@@ -17,6 +17,18 @@ test('cycle naming and stream selection', () => {
   assert.equal(c06.atmStream, 'oper');
   assert.equal(c06.waveStream, 'wave');
   assert.equal(c06.maxStep, 144);
+});
+
+test('the ensemble member choices are in fives up to the members each model has; the highest member number is theirs', () => {
+  assert.deepEqual(
+    Object.values(ENSEMBLES).map(m => [m.id, m.members]),
+    [
+      ['ifs-ens', 50],
+      ['aifs-ens', 50],
+    ]
+  );
+  assert.deepEqual([...ENSEMBLE_MEMBER_CHOICES], [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]);
+  assert.equal(ENSEMBLE_MEMBER_MAX, 50, 'the highest member number: every schema and the record check read it');
 });
 
 test('published step lists', () => {
@@ -159,10 +171,13 @@ test('ForecastStore blends steps in time and reports wind FROM direction', () =>
 
 import * as os from 'node:os';
 import * as fs from 'node:fs';
+// The module object itself, to replace one of its functions in a test: a namespace import is read-only getters over it.
+import nodeFs from 'node:fs';
 import * as path from 'node:path';
 import { EcmwfClient, latestExpectedCycle, nextCycle, parseRetryAfterMs, publishedAt } from './ecmwf';
 import { isOffline } from './http';
 import { resolveCycle } from './loader';
+import { gribShell } from '../grib/grib2fixture';
 
 test('latestExpectedCycle uses the measured publication times and skips short cycles for long horizons', () => {
   // 12z is published at 19:34Z.
@@ -209,7 +224,7 @@ test('resolveCycle with the connection already known down: the server is not ask
       for (const p of params) {
         const f = client.cachePath(cached, stream, step, p);
         fs.mkdirSync(path.dirname(f), { recursive: true });
-        fs.writeFileSync(f, Buffer.from('GRIB....'));
+        fs.writeFileSync(f, gribShell());
       }
     }
   }
@@ -291,6 +306,55 @@ test('EcmwfClient retries 429 with backoff, honours Retry-After, then falls back
   assert.equal(client.baseUrl, 'https://secondary'); // sticks for the session
 });
 
+test('EcmwfClient: a download slower than the timeout that keeps arriving is read whole; one fetch ends is retried, then failed', async () => {
+  const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
+  const whole = gribShell(64);
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 64 };
+  const client = (fetchImpl: typeof fetch) =>
+    new EcmwfClient({
+      baseUrl: 'https://x',
+      fallbackUrls: [],
+      cacheDir: tmpDir(),
+      timeoutMs: 20,
+      retries: 2,
+      fetchImpl,
+      sleepImpl: async () => undefined,
+    });
+  // The headers at once, then the body in four pieces 15 ms apart: 60 ms in all, three times the 20 ms timeout. As fetch
+  // does, the request's signal aborting ends the body.
+  const slow = (async (_url: string | URL | Request, init?: RequestInit) =>
+    new Response(
+      new ReadableStream({
+        async start(c) {
+          init?.signal?.addEventListener('abort', () => c.error(new DOMException('aborted', 'AbortError')), { once: true });
+          for (let k = 0; k < 4 && !init?.signal?.aborted; k++) {
+            await new Promise(r => setTimeout(r, 15));
+            if (!init?.signal?.aborted) c.enqueue(whole.subarray(k * 16, (k + 1) * 16));
+          }
+          if (!init?.signal?.aborted) c.close();
+        },
+      }),
+      { status: 206 }
+    )) as unknown as typeof fetch;
+  assert.deepEqual(await client(slow).fetchField(cycle, 'oper', 0, '10u', [rec]), whole, 'read to its end');
+  // A body that stops arriving: fetch ends it (undici's body timeout, http.ts), and the attempt is retried.
+  let calls = 0;
+  const ended = (async () => {
+    calls++;
+    return new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(whole.subarray(0, 16));
+          setTimeout(() => c.error(Object.assign(new TypeError('terminated'), { cause: { code: 'UND_ERR_BODY_TIMEOUT' } })), 5);
+        },
+      }),
+      { status: 206 }
+    );
+  }) as unknown as typeof fetch;
+  await assert.rejects(client(ended).fetchField(cycle, 'oper', 0, '10u', [rec]), /terminated/);
+  assert.equal(calls, 2, 'retried as a failed connection, then failed');
+});
+
 test('EcmwfClient does not retry 404 and reports it', async () => {
   let n = 0;
   const fetchImpl = (async () => {
@@ -328,7 +392,7 @@ test('resolveCycle uses a fully cached expected cycle without any network call',
       for (const p of params) {
         const f = client.cachePath(expected, stream, step, p);
         fs.mkdirSync(path.dirname(f), { recursive: true });
-        fs.writeFileSync(f, Buffer.from('GRIB....'));
+        fs.writeFileSync(f, gribShell());
       }
     }
   }
@@ -342,6 +406,95 @@ test('resolveCycle uses a fully cached expected cycle without any network call',
   assert.equal(r2.fromCache, true);
   assert.ok(r2.fallback && r2.fallback.includes('using cached cycle'));
   assert.equal(r2.cycle.yyyymmdd + r2.cycle.hh, expected.yyyymmdd + expected.hh);
+});
+
+test('the cache gate (hasCached, the loader’s): a whole message is read with no network; one cut short is not cached and is fetched again', async () => {
+  const dir = tmpDir();
+  const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
+  const whole = gribShell(64);
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 64 };
+  const calls: string[] = [];
+  const fetchImpl = (async (url: string | URL | Request) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.endsWith('.index')) return new Response(`${JSON.stringify(rec)}\n`, { status: 200 });
+    return new Response(whole, { status: 206 });
+  }) as unknown as typeof fetch;
+  const client = new EcmwfClient({ baseUrl: 'https://x', fallbackUrls: [], cacheDir: dir, fetchImpl, sleepImpl: async () => undefined });
+  const f = client.cachePath(cycle, 'oper', 0, '10u');
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, whole);
+  assert.equal(client.hasCached(cycle, 'oper', 0, '10u'), true);
+  assert.equal(client.cycleFullyCached(cycle, 0, ['10u'], []), true);
+  assert.deepEqual(await client.fetchField(cycle, 'oper', 0, '10u'), whole);
+  assert.deepEqual(calls, [], 'a whole message needs no network');
+  // The same file cut short on disk (a write that stopped): not a cached message, by the length the message itself
+  // states, so the loader reads the index (loader.ts decodeSteps) and the message is fetched again.
+  fs.writeFileSync(f, whole.subarray(0, 40));
+  assert.equal(client.hasCached(cycle, 'oper', 0, '10u'), false);
+  assert.equal(client.cycleFullyCached(cycle, 0, ['10u'], []), false);
+  assert.deepEqual(await client.fetchField(cycle, 'oper', 0, '10u'), whole);
+  assert.equal(calls.length, 2, 'the index and the message');
+  assert.equal(fs.statSync(f).size, 64, 'written over');
+});
+
+test('a fetched message whose rename into the cache fails fails the fetch, unless a whole message is there', async () => {
+  const dir = tmpDir();
+  const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
+  const whole = gribShell(64);
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 64 };
+  const fetchImpl = (async (url: string | URL | Request) =>
+    String(url).endsWith('.index')
+      ? new Response(`${JSON.stringify(rec)}\n`, { status: 200 })
+      : new Response(whole, { status: 206 })) as unknown as typeof fetch;
+  const client = new EcmwfClient({ baseUrl: 'https://x', fallbackUrls: [], cacheDir: dir, fetchImpl, sleepImpl: async () => undefined });
+  const f = client.cachePath(cycle, 'oper', 0, '10u');
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  // A message cut short on disk, and a rename over it that fails (Windows: a reader holding the file open).
+  fs.writeFileSync(f, whole.subarray(0, 40));
+  const busy = (): never => {
+    throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+  };
+  const rename = mock.method(nodeFs, 'renameSync', busy);
+  try {
+    await assert.rejects(client.fetchField(cycle, 'oper', 0, '10u'), /EPERM/);
+    assert.equal(fs.statSync(f).size, 40, 'the cut-short file is left, and said');
+    assert.deepEqual(fs.readdirSync(path.dirname(f)), [path.basename(f)], 'no temporary file left');
+    // Another writer put the whole message in place meanwhile: that is this fetch's answer.
+    rename.mock.mockImplementation((...a: unknown[]) => {
+      fs.writeFileSync(f, whole);
+      fs.rmSync(String(a[0]));
+      busy();
+    });
+    assert.deepEqual(await client.fetchField(cycle, 'oper', 0, '10u'), whole);
+  } finally {
+    rename.mock.restore();
+  }
+});
+
+test('a fetched message whose write into the cache fails (a full disk) fails the fetch and leaves no partial copy', async () => {
+  const dir = tmpDir();
+  const cycle = cycleFor(new Date('2026-09-27T00:00:00Z'));
+  const whole = gribShell(64);
+  const rec = { param: '10u', step: '0', levtype: 'sfc', _offset: 0, _length: 64 };
+  const fetchImpl = (async (url: string | URL | Request) =>
+    String(url).endsWith('.index')
+      ? new Response(`${JSON.stringify(rec)}\n`, { status: 200 })
+      : new Response(whole, { status: 206 })) as unknown as typeof fetch;
+  const client = new EcmwfClient({ baseUrl: 'https://x', fallbackUrls: [], cacheDir: dir, fetchImpl, sleepImpl: async () => undefined });
+  const f = client.cachePath(cycle, 'oper', 0, '10u');
+  const write = nodeFs.writeFileSync;
+  // The temporary copy cut short by a full disk: part of it written, then the error.
+  const full = mock.method(nodeFs, 'writeFileSync', (file: fs.PathOrFileDescriptor, data: Uint8Array) => {
+    write(file, data.subarray(0, 10));
+    throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  });
+  try {
+    await assert.rejects(client.fetchField(cycle, 'oper', 0, '10u'), /ENOSPC/);
+  } finally {
+    full.mock.restore();
+  }
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), [], 'no partial copy left, and no message cached');
 });
 
 test('buildStep converts tprate from kg m⁻² s⁻¹ to a depth rate in m/s at ingestion', () => {

@@ -45,7 +45,7 @@ import { type MainToWorker, type WorkerRole, type WorkerToMain } from './protoco
 import { rtofsLoadSame, smocLoadSame } from './config';
 import { setNetworkObserver } from '../data/http';
 import { noteNetwork, requireInit } from './worker/state';
-import { refreshEnsembles, refreshForecast } from './worker/forecast';
+import { EnsemblePasses, refreshEnsembles, refreshForecast } from './worker/forecast';
 import { prepareWaterGrid } from './worker/landgrid';
 import {
   adoptCurrentsRef,
@@ -61,6 +61,7 @@ import {
 import { makeSeaLevelClient, refreshTides, tideSettings } from './worker/tides';
 import { refreshRegional } from './worker/regional';
 import { route } from './worker/route';
+import { clearCropRuns, ROUTE_CROP_DIR } from './worker/routecrop';
 import { refreshQueue } from './worker/refreshqueue';
 import { buildTile, dataStatus, query } from './worker/query';
 import type { WorkerState } from './worker/state';
@@ -117,6 +118,7 @@ const st: WorkerState = {
   reportedLandBuilds: 0,
   reportedSmocRev: -1,
   cacheRoot: '',
+  cropRoot: '',
   regional: new Map(),
   seaLevelClient: null,
   tides: null,
@@ -141,31 +143,23 @@ const st: WorkerState = {
 if (role === 'data') setNetworkObserver((state, reason) => noteNetwork(st, state, reason));
 
 /**
- * The ensemble pass (worker/forecast.ts refreshEnsembles), started by a refresh round after the forecast and not waited
- * for: a pass downloads and decodes for many minutes, and the round's own status (forecast, SMOC, tides, regional) and
- * the next round must not wait behind it. One pass at a time; a round that finds one running leaves it, and the next
- * round after it ends starts what is still missing. The status goes out at each change the pass makes and at its end.
+ * The ensemble passes (worker/forecast.ts EnsemblePasses, refreshEnsembles): started by a refresh round after the
+ * forecast and by a forecast reload, not waited for; the status goes out at each change a pass makes and at its end.
  */
-let ensemblePass: Promise<void> | null = null;
-let ensembleUserPass = false;
+const ensembles = new EnsemblePasses(
+  (offline, held, changed) => refreshEnsembles(st, offline, held, changed),
+  () => st.send({ type: 'data-status', status: dataStatus(st) }),
+  m => st.log('error', m)
+);
+
 /**
- * Start the ensemble pass (refreshEnsembles) unless one is under way; `user`: the owner asked (Refresh, a route), and
- * the pass is not stopped by a hold (internet-hold below). The owner asking while a background pass runs makes that
- * pass the owner's: it is the download they asked for. Its end sends the status.
+ * Why a round's sources are not asked now, or null: the internet state holds (`held`), or a request of this round
+ * (since `t0`) found no connection.
  */
-function startEnsembles(st: WorkerState, offline: string | null, held: () => string | null, user: boolean): void {
-  if (ensemblePass) {
-    if (user) ensembleUserPass = true;
-    return;
-  }
-  ensembleUserPass = user;
-  const changed = (): void => st.send({ type: 'data-status', status: dataStatus(st) });
-  ensemblePass = refreshEnsembles(st, offline, held, changed)
-    .catch(err => st.log('error', `ensembles: ${(err as Error).message}`))
-    .finally(() => {
-      ensemblePass = null;
-      changed();
-    });
+function roundOffline(st: WorkerState, t0: number, held: () => string | null): string | null {
+  const h = held();
+  if (h) return `skipped: ${h}`;
+  return st.lastOfflineMs >= t0 ? `skipped: ${st.connectivity.reason ?? 'no internet connection'}` : null;
 }
 
 /**
@@ -185,19 +179,15 @@ export async function refresh(st: WorkerState, force: boolean, user = false): Pr
   const networkAllowed = st.role === 'data';
   const t0 = Date.now();
   const held = (): string | null => (user ? null : st.internetHold);
-  const offline = (): string | null => {
-    const h = held();
-    if (h) return `skipped: ${h}`;
-    return st.lastOfflineMs >= t0 ? `skipped: ${st.connectivity.reason ?? 'no internet connection'}` : null;
-  };
+  const offline = (): string | null => roundOffline(st, t0, held);
   st.backgroundRound = !user;
   try {
     await refreshRtofs(st, networkAllowed, offline());
     sendCurrents(st);
     if (st.role === 'data') {
       await refreshForecast(st, force, offline(), held);
-      // The ensembles of the run in use: started after it, not waited for (startEnsembles).
-      startEnsembles(st, offline(), held, user);
+      // The ensembles of the run in use: started after it, not waited for (EnsemblePasses).
+      ensembles.start(offline(), held, user);
       // After the forecast, so a first boot is not held up by the SMOC resident download.
       await refreshSmoc(st, offline());
       sendCurrents(st);
@@ -217,6 +207,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
     case 'init': {
       st.config = msg.config;
       st.cacheRoot = msg.cacheDir;
+      st.cropRoot = path.join(msg.cacheDir, ROUTE_CROP_DIR);
       st.client = new EcmwfClient({
         baseUrl: ECMWF_MIRRORS[st.config.forecast.mirror],
         cacheDir: path.join(msg.cacheDir, 'ecmwf'),
@@ -255,6 +246,8 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
       } else st.harmonic = [];
       rebuildStack(st);
       if (st.role === 'route') {
+        // What a stop left of a route's forecast crop written for the chart mesh process (worker/routecrop.ts).
+        clearCropRuns(st.cropRoot);
         try {
           prepareWaterGrid(st, st.config);
         } catch (err) {
@@ -341,7 +334,13 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
           'info',
           `forecast settings changed (horizon ${prev.forecast.horizonS / HOUR_S} → ${st.config.forecast.horizonS / HOUR_S} h, extra fields ${prev.forecast.extraFields} → ${st.config.forecast.extraFields}, solar and radiation fields ${prev.forecast.energyFields} → ${st.config.forecast.energyFields}); reloading`
         );
+        const t0 = Date.now();
         await refreshForecast(st, false);
+        // The ensembles follow the forecast's horizon and fields: a pass for the new settings now, one more after a
+        // pass under way (until 2026-11-07 nothing started one here, and a pass under way went on with the old
+        // horizon). A background pass: the internet hold applies to it.
+        const held = (): string | null => st.internetHold;
+        ensembles.start(roundOffline(st, t0, held), held, false);
       }
       if (st.role === 'data') st.send({ type: 'data-status', status: dataStatus(st) });
       return;
@@ -473,7 +472,7 @@ port.on('message', (msg: MainToWorker) => {
     // A background round's decode stops, its download with it; the owner's round goes on.
     if (msg.hold && st.backgroundRound) st.decodeAbort?.abort();
     // So does an ensemble pass a background round started.
-    if (msg.hold && !ensembleUserPass) st.ensembleAbort?.abort();
+    if (msg.hold && !ensembles.userPass) st.ensembleAbort?.abort();
     return;
   }
   // Initialised first (its own message chain); the rest of the data worker's network work beside the queries.

@@ -21,11 +21,8 @@ import type { WorkerState } from './state';
 export function landMaskFor(st: WorkerState, bbox: BBox, maxCells: number, shapefiles: string[]): LandMask {
   const res = LandMask.chooseResolution(bbox, maxCells);
   const key = `${shapefiles.join('|')}|${bbox.west.toFixed(3)},${bbox.south.toFixed(3)},${bbox.east.toFixed(3)},${bbox.north.toFixed(3)}|${res}`;
-  if (st.landCache && st.landCache.key === key) {
-    // Local refinements belong to the route that made them; each route adds its own.
-    st.landCache.mask.clearPatches();
-    return st.landCache.mask;
-  }
+  // Never refined itself: a route refines a view of its own (route.ts landFor, LandMask.routeView).
+  if (st.landCache && st.landCache.key === key) return st.landCache.mask;
   const t = Date.now();
   const mask = LandMask.fromCoastline(CoastTiles.open(shapefiles, st.cacheRoot), bbox, { resolutionDeg: res });
   st.log(

@@ -5,8 +5,8 @@ import * as path from 'node:path';
 import { SETTINGS_GROUPS, SETTINGS_SPEC, type SettingSpec } from './settings';
 import { routeRequestSchema } from './request_schema';
 import { JobPublicSchema } from './response_schema';
-import { WindowPublicSchema, WindowRequestSchema } from './windows';
-import { EnsembleSetPublicSchema, EnsembleSetRequestSchema } from './ensembles';
+import { WindowCreatedSchema, WindowPublicSchema, WindowRequestSchema } from './windows';
+import { EnsembleSetCreatedSchema, EnsembleSetPublicSchema, EnsembleSetRequestSchema } from './ensembles';
 
 /** JSON schema of one setting's value (SI). */
 function settingValueSchema(s: SettingSpec): Record<string, unknown> {
@@ -108,7 +108,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           description:
             'Top level: plugin, started, workers {data, route}, forecast, forecast_error, forecast_loading, currents, currents_route_worker, rtofs, overlay_land, overlay_tiles, overlay_prebuild, ' +
             'weather_provider_registered, jobs, vessel, polar, land, harmonic_dir, extra_fields, tides, tides_enabled, tides_error, process_rss_bytes, ' +
-            'meshes (the managed chart meshes, as GET /api/meshes), ensembles (per ensemble chosen in the plugin config: {model, name, cycle (ISO, null before the first complete pass), members (the member numbers on disk, 0 = the control), bytes, loading, error, checkedAt}), router (the open-water router the next route runs: "standard" | "refined"), checks, freshness, connectivity. ' +
+            'meshes (the managed chart meshes, as GET /api/meshes), ensembles (per ensemble chosen in the plugin config: {model, name, cycle (ISO, null before the first complete pass), members (the member numbers on disk, 0 = the control), bytes, loading, error, checkedAt}), ensemble_members_min (the fewest members an ensemble set may ask for), router (the open-water router the next route runs: "standard" | "refined"), checks, freshness, connectivity. ' +
             '`forecast_error` clears only on a check that reached ECMWF (the newest run in use, or a new one loaded). ' +
             '`checks`: what the last check of each source found, {ecmwf, smoc, tides, "rtofs:<product>" per RTOFS product loaded}, each {outcome: "newest" | "could-not-check" (the server could not be asked: ' +
             'no connection, or it failed; the run in use stays) | "new-run" | "failed" (the server answered but the new run could not be loaded), at, reason}. ' +
@@ -377,7 +377,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           summary:
             'Hourly point series of every conditions field, plus tide height, total water level and surge with the high and low waters',
           description:
-            'Rows: every conditions field (wind_ms, gust_ms, wind_dir_deg, swh_m, mwp_s, mwd_deg, current_ms, current_dir_deg, msl_pa, t2m_k, skt_k, precip_rate_ms, precip_type, precip_type_label, precip_m, snowfall_m, ssrd_wm2, strd_wm2, str_wm2, interval_h, cloud_cover, mucape_jkg, dewpoint_k, rh, feels_like_k, feels_like_basis, wind_chill_k, heat_index_k, beaufort, douglas, douglas_label, sea_state_index, sea_state, sea_state_partial) (current_ms and current_dir_deg are null where no current source has data: not slack water; gust_ms, precip_m, snowfall_m, the fluxes and interval_h are null when the extra or energy fields are off — precip_m/snowfall_m and the W/m² fluxes are the values of the interval_h-hour interval containing the sample time, 3 h to 144 h and 6 h past it) plus `time` and the tide fields `tide_m` (tide height above mean sea level, m; Copernicus Marine ocean_tide, FES2014), ' +
+            'Rows: every conditions field (wind_ms, gust_ms, wind_dir_deg, swh_m, mwp_s, mwd_deg, current_ms, current_dir_deg, msl_pa, t2m_k, skt_k, precip_rate_ms, precip_type, precip_type_label, precip_m, snowfall_m, ssrd_wm2, strd_wm2, str_wm2, interval_s, cloud_cover, mucape_jkg, dewpoint_k, rh, feels_like_k, feels_like_basis, wind_chill_k, heat_index_k, beaufort, douglas, douglas_label, sea_state_index, sea_state, sea_state_partial) (current_ms and current_dir_deg are null where no current source has data: not slack water; gust_ms, precip_m, snowfall_m, the fluxes and interval_s are null when the extra or energy fields are off — precip_m/snowfall_m and the W/m² fluxes are the values of the interval (interval_s seconds long) containing the sample time, 3 h to 144 h and 6 h past it) plus `time` and the tide fields `tide_m` (tide height above mean sea level, m; Copernicus Marine ocean_tide, FES2014), ' +
             '`water_level_m` (total water level above local mean sea level, m = total_sea_level − local mean), `surge_m` (non-tidal residual = water level − tide, m), ' +
             '`tide_extrapolated` (a bilinear corner is model land and took the value of valid cells within 2 cells, ~18 km), `tide_tendency` (rising / falling / steady within ±2 cm/h). ' +
             'Tide fields are null when tides are off or there is no model water within 2 cells. ' +
@@ -647,7 +647,7 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           responses: {
             204: { description: 'Deleted' },
             404: { description: 'Not found' },
-            409: { description: "Job is running, or a departure window's (deleted with its window)" },
+            409: { description: "Job is running, or a departure window's or an ensemble set's route (deleted with its window or set)" },
             503: { description: 'Plugin not started' },
           },
         },
@@ -751,7 +751,10 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
           summary: 'Departure window: the route computed for a series of departures, one route job each, one at a time',
           requestBody: { required: true, content: { 'application/json': { schema: openApi30(WindowRequestSchema) } } },
           responses: {
-            202: { description: '{id, status: "running", departures, links}' },
+            202: {
+              description: 'The window started: its id, status, how many departures it has, and links; Location header = links.self',
+              content: { 'application/json': { schema: openApi30(WindowCreatedSchema) } },
+            },
             400: { description: '{error}' },
             413: { description: 'The request body is over 64 KB' },
             429: { description: 'Two windows are being computed already' },
@@ -804,7 +807,10 @@ export function openApiDocument(basePath: string): Record<string, unknown> {
             "Ensemble set: the route computed on each member of an ensemble on disk (its own route search on that member's forecast), one route job each, one at a time",
           requestBody: { required: true, content: { 'application/json': { schema: openApi30(EnsembleSetRequestSchema) } } },
           responses: {
-            202: { description: '{id, status: "running", members, links}' },
+            202: {
+              description: 'The set started: its id, status, how many members it routes, and links; Location header = links.self',
+              content: { 'application/json': { schema: openApi30(EnsembleSetCreatedSchema) } },
+            },
             400: { description: '{error}: a bad request, or the ensemble or that many members not on disk' },
             413: { description: 'The request body is over 64 KB' },
             429: { description: 'Two sets are being computed already' },

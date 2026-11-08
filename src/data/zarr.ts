@@ -6,8 +6,8 @@
  * decoded to Float32Array / Float64Array in C order with the fill value
  * mapped to NaN.
  *
- * HTTP follows the plugin's other clients: per-request timeout (the
- * body is read while the timer is armed), up to `retries` attempts with
+ * HTTP follows the plugin's other clients: per-request timeout for the
+ * server's answer (data/http.ts), up to `retries` attempts with
  * exponential backoff 2, 4, 8 … s (capped at 60 s), `Retry-After`
  * honoured on 429/503, retries only on 408/429/5xx and network errors;
  * 404/403 are returned to the caller (a missing chunk is legal in Zarr:
@@ -16,7 +16,7 @@
 
 import { bloscDecompress } from './blosc';
 import { MINUTE_MS } from '../geo/units';
-import { fetchWithRetry } from './http';
+import { fetchBodyWithRetry } from './http';
 
 export interface ZarrArrayMeta {
   shape: number[];
@@ -229,7 +229,7 @@ export interface ZarrHttpOptions {
 
 /** GET with timeout, retries, backoff and Retry-After (data/http.ts). */
 export async function httpGet(url: string, opts: ZarrHttpOptions = {}): Promise<HttpResult> {
-  const r = await fetchWithRetry(
+  const r = await fetchBodyWithRetry(
     url,
     {},
     {
@@ -240,10 +240,9 @@ export async function httpGet(url: string, opts: ZarrHttpOptions = {}): Promise<
       log: opts.log,
       tag: opts.tag ?? 'zarr',
       makeError: msg => new ZarrError(msg),
-      readBody: true,
     }
   );
-  return { status: r.status, body: r.body!, headers: r.headers };
+  return { status: r.status, body: r.body, headers: r.headers };
 }
 
 export interface ConsolidatedStore {

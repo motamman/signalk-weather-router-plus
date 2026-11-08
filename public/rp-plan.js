@@ -4,7 +4,7 @@
 // result strip, itinerary, route library, waypoint and conditions popups,
 // Live mode with the Signal K vessel.
 
-import { oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, abortRouteRequests, ROUTE_OPEN_CHANNEL, ROUTE_SKELETON_CHANNEL, ROUTE_FRONTS_CHANNEL, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
+import { olStroke, ROUTE_STYLE, oneOpenAtATime, _apiErrorText, _fmt, _shortUtc, _polarAngles, fetchPolarAngles, fmtClock, clockParts, toClockInput, fromClockInput, API, authFetch, AuthGate, drawPolarDiagram, escapeHtml, fmtAngleDeg, unitText, unitTextHtml, fmtDepth, fmtDist, fmtPrecip, fmtPressure, fmtSpeed, fmtSwh, fmtTemp, fmtTime, fmtWavePeriod, fmtWhen, loadPluginStatus, abortRouteRequests, ROUTE_OPEN_CHANNEL, ROUTE_SKELETON_CHANNEL, ROUTE_FRONTS_CHANNEL, MOTOR_COLOR, TACK_COLOR, tackSide, UI_UNITS, UNIT_MISSING, unitDesc, setStatusArea, redrawStatusLine } from './rp-core.js';
 import { createLiveTriggers, createPassageTracker, createRouteSimulator, createTrackRecorder, haversineM, VESSEL_STALE_MS } from './rp-live.js';
 import { prefs } from './rp-prefs.js';
 import { _overlayTimeIso, centreOnVesselOnce, cancelCentreOnVessel, clearSearchBoat, showSearchBoat, seaBand, notesLayer, loadNotes, avoidRing, condMarkerFeature, meteoMarkerFeature, drawFront, drawFronts, endFeature, frontSource, map, markerLayer, markerSource, pastRouteSource, proposedRouteSource, reloadOverlays, ringSource, routeLayer, routeSource, selectedRouteFeature, setSelectedRouteFeature, setTimeOverride, skeletonSource, startFeature, timeOverride, trackSource, vesselMarkerSource, unwrapLonLats, watchEnsembleLegend } from './rp-layers.js';
@@ -46,7 +46,8 @@ let _ensTimer = null;
 // The set's place on the screen, and every request made for it: a set being started, polled, its lines fetched, a
 // route's set looked up, a member's route opened. Each request holds the screen it was asked for, and acts only while
 // that screen has not ended. _ensGone ends it, saying whether the set is to be cancelled; a new screen takes its place.
-let _ensScreen = { ended: false, cancel: false, pollFailing: false };
+// `setId`: the set the screen follows, from its first poll on (before any poll has answered, _ens is still null).
+let _ensScreen = { ended: false, cancel: false, pollFailing: false, setId: null };
 
 let _activeReplanES = null;
 function closeReplanStream() { if (_activeReplanES) { try { _activeReplanES.close(); } catch (_) {} _activeReplanES = null; } }
@@ -127,6 +128,8 @@ function displayRoute(geojson) {
     const p = lineFeat.getProperties();
     const navWarns = _drawSnapConnectors(p);
     _routeWarnings = Array.isArray(p.warnings) ? p.warnings : [];
+    // A route put on screen: its warnings list starts closed.
+    _warnListOpen = false;
     renderResultStrip(p, navWarns);
     const nameInput = /** @type {HTMLInputElement} */ (document.getElementById('routeNameInput'));
     if (nameInput) nameInput.value = p.name || _currentRouteName || '';
@@ -270,7 +273,7 @@ function _drawRouteLegs(pts) {
         beyond,
       });
       segLine.setStyle(new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: segColor, width: 3, lineDash: beyond ? [10, 7] : undefined })
+        stroke: new ol.style.Stroke({ color: segColor, width: ROUTE_STYLE.legWidth, lineDash: beyond ? ROUTE_STYLE.beyondDash : undefined })
       }));
       routeSource.addFeature(segLine);
     }
@@ -302,11 +305,7 @@ function _markForecastEnd(pts, snapProps) {
 function _drawSnapConnectors(p) {
   // Maroon dashed connector(s): intent → anchor where the server
   // snapped an unnavigable endpoint to the nearest navigable cell.
-  const _dashedStyle = new ol.style.Style({
-    stroke: new ol.style.Stroke({
-      color: '#7F0000', width: 2, lineDash: [6, 6]
-    })
-  });
+  const _dashedStyle = new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.snap) });
   if (p.start_original && p.start_anchor && p.start_snap_distance_m > 0) {
     const f = new ol.Feature({
       geometry: new ol.geom.LineString([
@@ -390,13 +389,16 @@ let _currentRouteJobId = null;
 /**
  * The route on screen becomes job `id` (null: none) named `name`. Every change of the screen goes through here, and
  * each one supersedes every request still in flight for the route before (its route, skeleton and fronts:
- * abortRouteRequests): aborted, a body read with it, so no answer from before the change is ever drawn, a Clear with
- * nothing on screen included.
+ * abortRouteRequests): aborted, a body read with it; a route job's event stream stops being followed at its next event
+ * (attachToJob onScreen), and a LIVE re-plan fired for the route before is dropped (rp:route-on-screen). So no answer
+ * from before the change is ever drawn, a Clear with nothing on screen included.
  */
 function _setRouteOnScreen(id, name) {
   abortRouteRequests();
   _currentRouteJobId = id;
   _currentRouteName = name;
+  // LIVE drops a re-plan fired for the route before (rp:route-on-screen).
+  window.dispatchEvent(new CustomEvent('rp:route-on-screen', { detail: id }));
 }
 
 function _jobLabel(j) {
@@ -522,10 +524,7 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
     return;
   }
   _setRouteOnScreen(id, job && job.request ? (job.request.name || '') : '');
-  // Another saved route: the departures compared for the one before leave the screen; one of the window's own keeps them.
-  if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
-  // The same for the ensemble set: one of its members' routes keeps it, another route takes it off the screen.
-  if (!_ens || !(_ens.members.some(m => m.job_id === id) || (_ens.main && _ens.main.job_id === id))) _ensGone(false);
+  _routeTakesScreen(id);
   _ensForRoute(id);
   authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
@@ -1824,6 +1823,15 @@ const RouteProgress = (function () {
 // One line of what the route is, from the LineString properties, plus
 // a badge that opens the validator's warnings.
 let _lastRouteProps = null, _lastNavWarns = null;
+// Whether the warnings list is open: the page's state, not the list element's, so a redraw of the strip (a set's
+// poll every 3 s, units, markers moved) and of its Itinerary copy keeps it; a route put on screen, or none, starts it
+// closed. Until 2026-11-07 every redraw closed it.
+let _warnListOpen = false;
+/** Open or close the warnings list, in the strip and its Itinerary copy alike. */
+function _setWarnListOpen(open) {
+  _warnListOpen = open;
+  document.querySelectorAll('#rsWarnList, #itinSummary [data-rs="list"]').forEach(list => { /** @type {HTMLElement} */ (list).hidden = !open; });
+}
 // The final depth check (worker: depth_check on the LineString): one line, totals over the legs, in the user's units.
 function _depthCheckLine(dc) {
   if (!dc || !Array.isArray(dc.legs) || !dc.legs.length) return '';
@@ -1884,7 +1892,7 @@ function renderResultStrip(p, navWarns) {
   if (navWarns && navWarns.length) html += '<div class="rs-notes">' + navWarns.join(' · ') + '</div>';
   if (_routeStale) html += '<div class="rs-stale">Markers changed since this route was computed.</div>';
   if (warns.length) {
-    html += '<div class="rs-warnlist" id="rsWarnList" hidden>' + warns.map(w => {
+    html += '<div class="rs-warnlist" id="rsWarnList"' + (_warnListOpen ? '' : ' hidden') + '>' + warns.map(w => {
       if (typeof w !== 'object' || w === null) return '<div>' + String(w) + '</div>';
       const kind = _warningKind(w);
       const where = Array.isArray(w.to) ? ' at ' + w.to[1].toFixed(4) + ', ' + w.to[0].toFixed(4) : '';
@@ -1896,7 +1904,7 @@ function renderResultStrip(p, navWarns) {
   }
   el.innerHTML = html;
   const b = /** @type {HTMLElement} */ (el.querySelector('#rsBadge')), list = /** @type {HTMLElement} */ (el.querySelector('#rsWarnList'));
-  if (b && list) b.onclick = () => { list.hidden = !list.hidden; };
+  if (b && list) b.onclick = () => { _setWarnListOpen(!_warnListOpen); };
   const toSettings = () => { showTab('srvSettingsSection'); };
   const bb = /** @type {HTMLElement} */ (el.querySelector('#rsBeyond')), bl = /** @type {HTMLElement} */ (el.querySelector('#rsBeyondLink'));
   if (bb) bb.onclick = toSettings;
@@ -1915,7 +1923,7 @@ function renderResultStrip(p, navWarns) {
       .replace(/id="rsBeyond"/g, 'data-rs="beyond"').replace(/id="rsBeyondLink"/g, 'data-rs="beyond"');
     dst.classList.toggle('stale', src.classList.contains('stale'));
     const b = /** @type {HTMLElement} */ (dst.querySelector('[data-rs="badge"]')), list = /** @type {HTMLElement} */ (dst.querySelector('[data-rs="list"]'));
-    if (b && list) b.onclick = () => { list.hidden = !list.hidden; };
+    if (b && list) b.onclick = () => { _setWarnListOpen(!_warnListOpen); };
     /** @type {NodeListOf<HTMLElement>} */ (dst.querySelectorAll('[data-rs="beyond"]')).forEach(e => { e.onclick = () => { showTab('srvSettingsSection'); }; });
   };
   new MutationObserver(copy).observe(src, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
@@ -1952,6 +1960,7 @@ function showModal() {
   _clearRouteTime();
   const nameInput = /** @type {HTMLInputElement} */ (document.getElementById('routeNameInput'));
   if (nameInput) nameInput.value = '';
+  _warnListOpen = false;
   renderResultStrip(null);
   // The set of the route before leaves the screen with it (a new request, Find Route, also cancels it).
   _ensGone(false);
@@ -2096,7 +2105,7 @@ function _legDescription(p, isArrival) {
   const add = (label, v) => { if (v != null && v !== '') parts.push(label + ' ' + v); };
   if (!isArrival) {
     add('Distance', p.leg_distance_m != null ? fmtDist(p.leg_distance_m) : null);
-    if (p.leg_time_s != null) { const m = Math.round(p.leg_time_s / 60); add('Time', Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0')); }
+    add('Time', p.leg_time_s != null ? fmtTime(p.leg_time_s) : null);
     add('SOG', p.next_sog_ms != null ? fmtSpeed(p.next_sog_ms) : null);
     if (cogDeg != null) add('COG', degToCardinal(cogDeg) + ' ' + fmtAngleDeg(cogDeg));
   }
@@ -2323,15 +2332,8 @@ function _legCardHtml(f, i, cw) {
   // has no next leg so both fields are absent (filtered out by _kv).
   const distStr = p.leg_distance_m != null
                 ? fmtDist(p.leg_distance_m) : null;
-  // Leg time in H:MM (zero-padded minutes; hours unbounded).
-  const legTimeStr = (() => {
-    const s = p.leg_time_s;
-    if (s == null) return null;
-    const totalMin = Math.round(s / 60);
-    const h = Math.floor(totalMin / 60);
-    const m = totalMin % 60;
-    return `${h}:${String(m).padStart(2, '0')}`;
-  })();
+  // Leg time in the account's time unit.
+  const legTimeStr = p.leg_time_s != null ? fmtTime(p.leg_time_s) : null;
 
   const fields = [
     _kv('Distance', distStr),
@@ -2558,7 +2560,7 @@ window.addEventListener('rp:units', _initLimitInputs);
 // there), with what each is doing; they can be used once one is on disk (a run, and at least the fewest members a request
 // may ask for): on or off, which ensemble, how many of its members on disk (the server takes the first that many, the
 // control first). Remembered per browser and Signal K user (rp-prefs.js).
-const ENSEMBLE_MIN_MEMBERS = 5;   // request_schema.ts ENSEMBLE_MEMBERS_RANGE
+let _ensembleMinMembers = null;   // status `ensemble_members_min`: the fewest members a set may ask for (request_schema.ts)
 let _ensembleStatus = [];         // status `ensembles`, as the server sends them
 let _ensembles = [];              // those on disk: [{ model, name, cycle, members (how many) }]
 /** The ensemble picked in the Ensemble list, as on disk ({ model, name, cycle, members }), or null. */
@@ -2611,11 +2613,12 @@ function _ensembleRender() {
     const want = prefs.get('routeVar:ensembleModel');
     sel.value = _ensembles.some(e => e.model === want) ? want : _ensembles[0].model;
     const e = _ensembleChosen();
+    slider.min = String(_ensembleMinMembers);
     slider.max = String(e.members);
     // The members remembered, at most those on disk now (a choice above that stays remembered for a run that has
     // them); nothing remembered: all of them.
     const saved = Number(prefs.get('routeVar:ensembleMembers'));
-    slider.value = String(Number.isInteger(saved) && saved >= ENSEMBLE_MIN_MEMBERS ? Math.min(saved, e.members) : e.members);
+    slider.value = String(Number.isInteger(saved) && saved >= _ensembleMinMembers ? Math.min(saved, e.members) : e.members);
   }
   _ensembleLabel();
 }
@@ -2639,9 +2642,10 @@ window.addEventListener('rp:status', (/** @type {CustomEvent} */ e) => {
   const st = e.detail;
   if (!st) return;
   _ensembleStatus = Array.isArray(st.ensembles) ? st.ensembles : [];
+  _ensembleMinMembers = st.ensemble_members_min;
   // `members` there is the member numbers on disk (0 = the control); here, how many.
   _ensembles = _ensembleStatus
-    .filter(x => x.cycle && Array.isArray(x.members) && x.members.length >= ENSEMBLE_MIN_MEMBERS)
+    .filter(x => x.cycle && Array.isArray(x.members) && x.members.length >= _ensembleMinMembers)
     .map(x => ({ model: x.model, name: x.name, cycle: x.cycle, members: x.members.length }));
   _ensembleRender();
 });
@@ -2658,12 +2662,9 @@ const _ensSource = new ol.source.Vector();
 const _ENS_STYLE = {
   // The route opened: a white band with a dark edge, under its legs (no route colour is white: a yellow band hid the
   // amber motoring legs).
-  open: [
-    new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(0, 0, 0, 0.45)', width: 13 }) }),
-    new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(255, 255, 255, 0.9)', width: 11 }) }),
-  ],
-  main: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#1f6b8d', width: 2 }) }),
-  member: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#00b8d4', width: 3.5, lineDash: [1, 7], lineCap: 'round' }) }),
+  open: ROUTE_STYLE.ensOpen.map(s => new ol.style.Style({ stroke: olStroke(s) })),
+  main: new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.ensMain) }),
+  member: new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.ensMember) }),
 };
 map.addLayer(new ol.layer.Vector({
   source: _ensSource,
@@ -2677,8 +2678,8 @@ const _ensCorridorSource = new ol.source.Vector();
 map.addLayer(new ol.layer.Vector({
   source: _ensCorridorSource,
   zIndex: 3,
-  opacity: 0.15,
-  style: new ol.style.Style({ fill: new ol.style.Fill({ color: '#00b8d4' }) }),
+  opacity: ROUTE_STYLE.ensCorridor.opacity,
+  style: new ol.style.Style({ fill: new ol.style.Fill({ color: ROUTE_STYLE.ensCorridor.fill }) }),
 }));
 // The route legend (rp-layers.js) names what of the set is on the map, as the layer changes.
 watchEnsembleLegend(_ensSource, () => {
@@ -2712,6 +2713,7 @@ function _ensStart(route, want, mainJobId) {
 }
 /** Follow set `id` on `screen` (_ensScreen) while that screen lasts. */
 function _ensPoll(id, screen) {
+  screen.setId = id;
   clearTimeout(_ensTimer);
   authFetch(API + '/ensemble-sets/' + encodeURIComponent(id), { cache: 'no-store' }, 'ensemble-set')
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status })))))
@@ -2746,11 +2748,14 @@ function _ensCancel(id) {
 }
 /** The set leaves the screen; `cancel`: a set still computing, or one still being started, is cancelled on the server too. */
 function _ensGone(cancel) {
+  // The set to cancel: a running one as its last poll said, or, before any poll has answered (or while they fail), the
+  // one the screen follows; a cancel of a set that has finished meanwhile changes nothing on the server (202).
+  const id = _ens ? (_ens.status === 'running' ? _ens.id : null) : _ensScreen.setId;
   _ensScreen.ended = true;
   _ensScreen.cancel = cancel;
-  _ensScreen = { ended: false, cancel: false, pollFailing: false };
+  _ensScreen = { ended: false, cancel: false, pollFailing: false, setId: null };
   clearTimeout(_ensTimer);
-  if (cancel && _ens && _ens.status === 'running') _ensCancel(_ens.id);
+  if (cancel && id) _ensCancel(id);
   _ens = null;
   _ensSource.clear();
   _ensCorridorSource.clear();
@@ -2843,6 +2848,21 @@ function _ensCorridor() {
 }
 /** A table cell's number in the user's unit (`ud`: unitDesc), or — when there is none or the unit is not known (Best departure's and the ensemble's tables). */
 function _unitCell(v, ud) { return v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p); }
+/** A duration in a table cell (Best departure's and the ensemble's tables), in the account's time unit (fmtTime); "—" without one. */
+function _timeCell(s) {
+  return s == null ? '—' : fmtTime(s);
+}
+/** A route job's status in words, for a row without a route (Best departure's and the ensemble's tables). */
+const _JOB_STATUS_TEXT = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled', skipped: 'skipped' };
+/**
+ * The cell across the five number columns of a row without a route (Best departure's and the ensemble's tables): its
+ * status in words and, when given, why. It wraps: on one line (the tables' cells do not wrap) a long reason set the
+ * width of the number columns, and pushed their headers and every other row's numbers out of view.
+ */
+function _noRouteCell(status, why) {
+  return '<td colspan="5" style="text-align:left; white-space:normal;">' + escapeHtml(_JOB_STATUS_TEXT[status] || status)
+    + (why ? ': ' + escapeHtml(unitText(why)) : '') + '</td>';
+}
 /** A member's name in the table: "control" for member 0, else "member N". */
 function _ensWho(m) { return m.member === 0 ? 'control' : 'member ' + m.member; }
 /** The result strip's line: how far the set is, and the arrivals of the members' routes. */
@@ -2870,20 +2890,17 @@ function _ensRender() {
   const was = el.querySelector('details');
   const open = was ? /** @type {HTMLDetailsElement} */ (was).open : true;
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
-  const STATUS = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled' };
   // The main forecast's route first, so it can be opened again after a member's.
   const main = set.main ? [{ ...set.main, who: 'main forecast' }] : [];
   const rows = main.concat(set.members).map(m => {
     const opened = m.job_id && m.job_id === _currentRouteJobId ? ' class="win-open"' : '';
     const who = m.who || _ensWho(m);
-    if (!m.metrics) {
-      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + who + '</td><td colspan="5" style="text-align:left;">'
-        + escapeHtml(STATUS[m.status] || m.status) + (m.error && m.status === 'failed' ? ': ' + escapeHtml(unitText(m.error)) : '') + '</td></tr>';
-    }
+    if (!m.metrics)
+      return '<tr' + opened + ' title="' + escapeHtml(m.error || '') + '"><td>' + who + '</td>' + _noRouteCell(m.status, m.status === 'failed' ? m.error : null) + '</tr>';
     const x = m.metrics;
     return '<tr data-job="' + escapeHtml(m.job_id) + '" style="cursor:pointer;"' + opened + ' title="Click to open this member\'s route">'
       + '<td>' + (m.who ? '<b>' + who + '</b>' : who) + '</td><td title="' + escapeHtml(fmtWhen(x.arrival)) + '">' + escapeHtml(_winWhen(x.arrival)) + '</td>'
-      + '<td>' + _winDuration(x.total_time_s, true) + '</td><td>' + _winDuration(x.motoring_time_s) + '</td>'
+      + '<td>' + _timeCell(x.total_time_s) + '</td><td>' + _timeCell(x.motoring_time_s) + '</td>'
       + '<td>' + _unitCell(x.max_wind_ms, speedU) + '</td><td>' + _unitCell(x.max_swh_m, waveU) + '</td></tr>';
   });
   el.innerHTML = '<details' + (open ? ' open' : '') + '><summary>' + escapeHtml(set.name) + ' (' + _shortUtc(set.cycle) + '): the route on each of ' + set.members.length + ' members</summary>'
@@ -2914,12 +2931,24 @@ function _ensOpen(jobId) {
     });
 }
 window.addEventListener('rp:units', _ensRender);
+/** Whether route job `id` is one of the ensemble set's on screen: its main forecast's route or a member's. */
+function _ensHolds(id) {
+  return !!_ens && ((_ens.main && _ens.main.job_id === id) || _ens.members.some(m => m.job_id === id));
+}
+/**
+ * Route job `id` takes the screen (opened from Saved, a departure or a member, an accepted LIVE re-plan): the
+ * departures compared and the ensemble set on screen leave it, unless the route is one of theirs.
+ */
+function _routeTakesScreen(id) {
+  if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
+  if (!_ensHolds(id)) _ensGone(false);
+}
 /**
  * The set of a route: its main forecast's route names it (request.main_job_id). Looked up whenever that route is
  * opened or followed (a saved route, a reload while it computes), so the set comes and goes with its route.
  */
 function _ensForRoute(id) {
-  if (_ens && ((_ens.main && _ens.main.job_id === id) || _ens.members.some(m => m.job_id === id))) return;
+  if (_ensHolds(id)) return;
   const screen = _ensScreen;
   authFetch(API + '/ensemble-sets?limit=12', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
@@ -3023,8 +3052,19 @@ function attachToJob(id, jobRow) {
   // current), timing, the line count, and the last front seen.
   const wps = jobRow && jobRow.request && Array.isArray(jobRow.request.waypoints) ? jobRow.request.waypoints.length : 0;
   const job = { id, es, statusEl, t0: Date.now(), lineCount: 0, lastFrontLeg: -1, lastFrontStage: 0, legs: wps + 1 };
+  // The stream acts only while its job is the route on screen: once another route is opened or the map cleared
+  // (_setRouteOnScreen), its next event ends the following here (the job goes on computing on the server and Saved lists
+  // it), and nothing of it is drawn over the route on screen, its done, error, fronts and progress included.
+  const onScreen = () => {
+    if (_activeJobES !== es) return false;
+    if (_currentRouteJobId === id) return true;
+    _closeJobStream();
+    _computeUiIdle();
+    RouteProgress.hide();
+    return false;
+  };
   const mine = handler => ev => {
-    if (_activeJobES !== es) return;
+    if (!onScreen()) return;
     let d = null; try { d = JSON.parse(ev.data); } catch (_) {}
     if (d) handler(job, d);
   };
@@ -3033,13 +3073,13 @@ function attachToJob(id, jobRow) {
   es.addEventListener('frontier', mine(_jobOnFrontier));
   es.addEventListener('route', () => { /* the result is fetched separately (large payload) */ });
   es.addEventListener('done', ev => {
-    if (_activeJobES !== es) return;
+    if (!onScreen()) return;
     _closeJobStream();
     let d = null; try { d = JSON.parse(ev.data); } catch (_) {}
     _jobOnDone(job, d);
   });
   es.addEventListener('error', ev => {
-    if (_activeJobES !== es) return;
+    if (!onScreen()) return;
     _jobOnError(job, ev);
   });
 }
@@ -3564,6 +3604,19 @@ function _fmtHpa(pa)   { return fmtPressure(pa) || '—'; }
 function _fmtDegC(k)   { return fmtTemp(k) || '—'; }
 function _fmtMmH(rate) { return fmtPrecip(rate) || '—'; }
 function _fmtDir(deg)  { return deg == null ? '' : ' ' + degToCardinal(deg) + ' (' + fmtAngleDeg(deg) + ')'; }
+// ======================================================================
+// EXCEPTION TO THE UNITS RULE (the owner's decision, 2026-11-08). The
+// energy fields' fluxes (W/m²) and MUCAPE (J/kg) are SI and written in
+// them, their symbols here: Signal K defines no unit for either (its unit
+// definitions on the test box, 2026-11-08), so there is no account unit to
+// show them in. Every flux and MUCAPE on the page is written with these.
+// ======================================================================
+const _FLUX_UNIT = { fn: v => v, u: 'W/m²', p: 0 };
+const _CAPE_UNIT = { fn: v => v, u: 'J/kg', p: 0 };
+/** A flux or MUCAPE value in its unit above; "—" without a value. */
+function _energyText(v, unit) {
+  return v == null ? '—' : unit.fn(v).toFixed(unit.p) + ' ' + unit.u;
+}
 function _rowCells(r) {
   return '<td>' + (fmtSpeed(r.wind_ms) || '—') + (r.gust_ms != null ? ' / ' + fmtSpeed(r.gust_ms) : '') + _fmtDir(r.wind_dir_deg) + '</td>'
        + '<td>' + (r.swh_m == null ? '—' : (fmtSwh(r.swh_m) + (r.mwp_s != null ? ' / ' + fmtWavePeriod(r.mwp_s) : '') + _fmtDir(r.mwd_deg))) + '</td>'
@@ -3572,10 +3625,10 @@ function _rowCells(r) {
        + '<td>' + _fmtDegC(r.t2m_k) + ' / ' + ((_cond && _cond.isLand) ? '—' : _fmtDegC(r.skt_k)) + '</td>'
        + '<td>' + _fmtMmH(r.precip_rate_ms) + (r.precip_m != null ? ' / ' + fmtDepth(r.precip_m) : '') + '</td>'
        + '<td>' + (r.precip_type_label || '—') + '</td>'
-       + '<td>' + (r.ssrd_wm2 == null ? '—' : r.ssrd_wm2.toFixed(0) + ' W/m²') + '</td>'
+       + '<td>' + _energyText(r.ssrd_wm2, _FLUX_UNIT) + '</td>'
        + '<td>' + (r.cloud_cover == null ? '—' : _fmt(r.cloud_cover, 'ratio')) + '</td>'
        + '<td>' + _fmtDegC(r.feels_like_k) + (r.feels_like_basis && r.feels_like_basis !== 'air' ? ' (' + r.feels_like_basis.replace('_', ' ') + ')' : '') + '</td>'
-       + '<td>' + (r.rh == null ? '—' : (r.rh * 100).toFixed(0) + ' %') + '</td>'
+       + '<td>' + (r.rh == null ? '—' : _fmt(r.rh, 'ratio')) + '</td>'
        + '<td>' + (r.beaufort == null ? '—' : 'F' + r.beaufort) + '</td>'
        + '<td>' + (r.douglas == null ? '—' : r.douglas + ' ' + (r.douglas_label || '')) + '</td>'
        + '<td>' + (r.sea_state_index == null ? '—' : r.sea_state_index.toFixed(0) + ' ' + (r.sea_state || '') + (r.sea_state_partial ? '*' : '')) + '</td>'
@@ -3660,7 +3713,7 @@ const _COND_TABS = [
             { key: 'feels_like_k', unit: () => unitDesc('temperature'), color: '#8e24aa', name: 'feels like', width: 2.4 },
             { key: 'wind_chill_k', unit: () => unitDesc('temperature'), color: '#00838f', name: 'wind chill', dash: [4, 3] },
             { key: 'heat_index_k', unit: () => unitDesc('temperature'), color: '#c62828', name: 'heat index', dash: [4, 3] }],
-    hover: r => (r.rh == null ? '' : ' · RH ' + (r.rh * 100).toFixed(0) + ' %')
+    hover: r => (r.rh == null ? '' : ' · RH ' + _fmt(r.rh, 'ratio'))
               + (r.dewpoint_k == null ? '' : ' · dew point ' + _fmtDegC(r.dewpoint_k)) },
   { id: 'precip', label: 'Precip', overlays: [['precipToggle', 'Precip']],
     lines: [{ key: 'precip_rate_ms', unit: () => unitDesc('precip'), color: '#2e7d32', name: 'rate' },
@@ -3668,16 +3721,17 @@ const _COND_TABS = [
             { key: 'snowfall_m', unit: () => unitDesc('depth'), color: '#546e7a', name: 'snow (water eq.)', dash: [4, 3], axis: 'right' }],
     colorBy: { key: 'precip_type_label', colors: _PRECIP_COLORS },
     hover: r => (r.precip_type_label && r.precip_type_label !== 'none' ? ' · ' + r.precip_type_label : '')
-              + (r.interval_h != null ? ' · depth over ' + r.interval_h + ' h' : '') },
+              + (r.interval_s != null ? ' · depth over ' + fmtTime(r.interval_s) : '') },
   // Surface fluxes from the energy fields (off by default): average solar
   // and thermal radiation over each step's interval (the tab hides when
-  // they carry no data), with instability in the readout.
+  // they carry no data), with instability in the readout; in _FLUX_UNIT and
+  // _CAPE_UNIT (the exception to the units rule there).
   { id: 'energy', label: 'Energy',
-    lines: [{ key: 'ssrd_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#f9a825', name: 'solar' },
-            { key: 'strd_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#ef6c00', name: 'IR down', dash: [4, 3] },
-            { key: 'str_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#6d4c41', name: 'IR net', dash: [2, 3] }],
-    hover: r => (r.interval_h != null ? ' · average over ' + r.interval_h + ' h' : '')
-              + (r.mucape_jkg == null ? '' : ' · MUCAPE ' + r.mucape_jkg.toFixed(0) + ' J/kg') },
+    lines: [{ key: 'ssrd_wm2', unit: () => _FLUX_UNIT, color: '#f9a825', name: 'solar' },
+            { key: 'strd_wm2', unit: () => _FLUX_UNIT, color: '#ef6c00', name: 'IR down', dash: [4, 3] },
+            { key: 'str_wm2', unit: () => _FLUX_UNIT, color: '#6d4c41', name: 'IR net', dash: [2, 3] }],
+    hover: r => (r.interval_s != null ? ' · average over ' + fmtTime(r.interval_s) : '')
+              + (r.mucape_jkg == null ? '' : ' · MUCAPE ' + _energyText(r.mucape_jkg, _CAPE_UNIT)) },
   { id: 'raw', label: 'Raw' },
 ];
 let _condTab = 'wind';
@@ -4275,7 +4329,6 @@ const _WIN_SORTS = {
   waves:    { label: 'smallest highest waves', key: m => (m.max_swh_m == null ? Infinity : m.max_swh_m) },
   upwind:   { label: 'least time close-hauled', key: m => m.upwind_time_s },
 };
-const _WIN_STATUS_TEXT = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled', skipped: 'skipped' };
 // (Its state is declared with the route state at the top: markRouteStale and _clearRoute reach it from start-up code.)
 
 // The window on screen belongs to a route that is gone (Reset, a new Find Route, another saved route opened): it leaves
@@ -4399,15 +4452,6 @@ function _winPoll(id) {
     });
 }
 
-// A duration for the table: to the minute for the passage (departures a few
-// minutes apart must compare), "4d 5h 47m"; to the hour otherwise, "2d 17h",
-// minutes only under an hour.
-function _winDuration(s, toMinute) {
-  if (s == null) return '—';
-  const m = Math.round(s / 60), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mi = m % 60;
-  if (!toMinute && m >= 60) { const hr = Math.round(m / 60); return (hr >= 24 ? Math.floor(hr / 24) + 'd ' : '') + (hr % 24) + 'h'; }
-  return (d ? d + 'd ' : '') + (d || h ? h + 'h ' : '') + mi + 'm';
-}
 // A departure in the table: weekday, day and time in ship's time ("Wed 21, 16:00").
 function _winWhen(iso) {
   return fmtClock(iso, { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -4446,7 +4490,6 @@ function _winRender() {
     + (running ? ', ' + left + ' to go' + (w.progress ? ' · ' + unitText(w.progress) : '') : w.status === 'done' ? '' : ' · ' + w.status + (w.error ? ' (' + w.error + ')' : ''));
   const sortId = _winSortId();
   const best = _winBest(w, sortId);
-  const t = _winDuration;
   // Numbers in the cells, the unit in the header (the panel is narrow).
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
   let html = '<div class="win-sort"><label for="windowSort" style="margin:0;">Best by</label><select id="windowSort" aria-label="Rank the departures by">'
@@ -4458,12 +4501,12 @@ function _winRender() {
     const cls = [m ? 'win-row' : 'win-off', i === best ? 'win-best' : '', d.job_id && d.job_id === _winOpenJob ? 'win-open' : ''].filter(Boolean).join(' ');
     const lead = (i === best ? '★ ' : '') + '<span title="' + escapeHtml(fmtWhen(d.departure)) + '">' + escapeHtml(_winWhen(d.departure)) + '</span>';
     if (!m) {
-      html += '<tr class="' + cls + '" title="' + escapeHtml(d.error || '') + '"><td>' + lead + '</td><td colspan="5" style="text-align:left;">' + escapeHtml(_WIN_STATUS_TEXT[d.status] || d.status) + (d.error && d.status !== 'cancelled' ? ': ' + escapeHtml(unitText(d.error)) : '') + '</td></tr>';
+      html += '<tr class="' + cls + '" title="' + escapeHtml(d.error || '') + '"><td>' + lead + '</td>' + _noRouteCell(d.status, d.status !== 'cancelled' ? d.error : null) + '</tr>';
       return;
     }
     html += '<tr class="' + cls + '" data-job="' + escapeHtml(d.job_id) + '" title="Arrives ' + escapeHtml(fmtWhen(m.arrival)) + '. Click to open this departure’s route' + (m.beyond_forecast ? ' (arrives after the forecast ends: its last legs ran on conditions held at the last step)' : '') + '">'
-      + '<td>' + lead + '</td><td>' + t(m.total_time_s, true) + (m.beyond_forecast ? ' *' : '') + '</td>'
-      + '<td>' + _unitCell(m.max_wind_ms, speedU) + '</td><td>' + _unitCell(m.max_swh_m, waveU) + '</td><td>' + t(m.motoring_time_s) + '</td><td>' + t(m.upwind_time_s) + '</td></tr>';
+      + '<td>' + lead + '</td><td>' + _timeCell(m.total_time_s) + (m.beyond_forecast ? ' *' : '') + '</td>'
+      + '<td>' + _unitCell(m.max_wind_ms, speedU) + '</td><td>' + _unitCell(m.max_swh_m, waveU) + '</td><td>' + _timeCell(m.motoring_time_s) + '</td><td>' + _timeCell(m.upwind_time_s) + '</td></tr>';
   });
   html += '</tbody></table></div>';
   if (w.departures.some(d => d.metrics && d.metrics.beyond_forecast)) html += '<div class="ctl-hint">* arrives after the forecast ends; not ranked.</div>';
@@ -4832,6 +4875,7 @@ function _meteoRouteChanged() {
   const triggers = createLiveTriggers();
   let replanBusy = false;     // a re-plan job is running
   let replanGen = 0;          // bumped when Live stops: a late result is dropped
+  let replanRouteId = null; // the route on screen the re-plan computing or proposed was fired for
 
   // SIMULATE: Live mode with a simulated boat sailing the route on the
   // map instead of the Signal K position, for trying the triggers ashore.
@@ -5259,6 +5303,7 @@ function _meteoRouteChanged() {
   // then; its route goes on the map without a second prompt.
   function fireReplan({ kind, distM, start, vias, departureMs, autoAccept = false }) {
     lastReplanVias = vias;
+    replanRouteId = _currentRouteJobId;
     // SIMULATE: hold the boat where the re-plan starts from, now, not at the next update.
     if (simMode && sim) { sim.holdAt(departureMs, Date.now()); simPaused = true; }
     const reason = replanReason(kind, distM);
@@ -5396,6 +5441,15 @@ function _meteoRouteChanged() {
     dismissProposal();
   }
 
+  // A re-plan computing, or its proposal waiting, is for the route on screen it was fired for (replanRouteId): another
+  // route put on screen (opened from Saved, the map cleared from the map menu: neither stops LIVE) drops it as Cancel
+  // does, so it is never drawn or accepted over that route.
+  window.addEventListener('rp:route-on-screen', (/** @type {CustomEvent} */ e) => {
+    if (e.detail === replanRouteId) return;
+    if (replanBusy) cancelReplan();
+    else if (banner.dataset.geojson) dismissProposal();
+  });
+
   function renderProposal(geojson, reason) {
     setBannerButtons('ready');
     proposedRouteSource.clear();
@@ -5442,7 +5496,12 @@ function _meteoRouteChanged() {
 
   // Put an accepted re-plan on the map in place of the route being followed.
   function applyRoute(geojson, jobId) {
-    if (jobId) _setRouteOnScreen(jobId, _currentRouteName);
+    if (jobId) {
+      // The re-plan's own route: the screen moves to it, which drops nothing (rp:route-on-screen).
+      replanRouteId = jobId;
+      _setRouteOnScreen(jobId, _currentRouteName);
+      _routeTakesScreen(jobId);
+    }
     // The route being followed stays as a faint line (pastRouteSource).
     if (_routePoints.length >= 2) {
       pastRouteSource.addFeature(new ol.Feature(new ol.geom.LineString(unwrapLonLats(_routePoints.map(p => p.lonLat)).map(c => ol.proj.fromLonLat(c)))));

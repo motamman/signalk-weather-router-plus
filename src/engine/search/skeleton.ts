@@ -50,6 +50,21 @@ function snapToPassable(grid: NavigabilityGrid, p: [number, number], maxRadius: 
   return p;
 }
 
+/**
+ * The water's width at each point of a coarse skeleton (corridor.ts widthProfile), as the guide reads it (zones.ts).
+ * A point whose raster cell is land reads 0 from the profile: on a corridor that means a narrow stretch, which the
+ * corridor refines and re-traces into the water (planCorridor). This path does not: its endpoints are the exact ones,
+ * put back after the coarse A*, and an exact endpoint in water by the polygons can sit in a land cell of the
+ * conservative raster (a start 150 m off the shore, the clearance the snap gives it, in a 220 m cell the coastline
+ * crosses). So here a 0 is unknown (Infinity), not narrow: as narrow, the guide capped the steps there at its least
+ * and binned a narrow zone round the endpoint (until 2026-11-07).
+ */
+export function skeletonWidths(land: LandMask, skeleton: { lon: number; lat: number }[]): Float64Array {
+  const widths = widthProfile(land, skeleton);
+  for (let i = 0; i < widths.length; i++) if (widths[i] === 0) widths[i] = Infinity;
+  return widths;
+}
+
 /** Cumulative great-circle distance along a polyline, metres, per point. */
 export function cumulativeM(points: { lon: number; lat: number }[]): number[] {
   const cum = [0];
@@ -127,7 +142,7 @@ export function buildSkeleton(ctx: SearchContext): SkeletonData {
       // bins occupied at every stage), so no detour round rough water or water over a limit could ever form on a
       // leg without a corridor. The profile needs the coastline raster; the mesh as land has no raster.
       const tw = Date.now();
-      if (ctx.landMask instanceof LandMask) widths = widthProfile(ctx.landMask, skeleton);
+      if (ctx.landMask instanceof LandMask) widths = skeletonWidths(ctx.landMask, skeleton);
       progress(
         0,
         ctx.K,

@@ -1,9 +1,11 @@
 # CodeRabbit review configuration for signalk-weather-router-plus.
 # Schema: https://coderabbit.ai/integrations/schema.v2.json
 #
-# The rules below are the project's own (see CLAUDE.md). A review that ignores
-# them is noise; a review that cites the rule, the file and the line is what we
-# want.
+# The rules below are the project's own (see CLAUDE.md).
+#
+# Strictness comes from the numbered rules, not from the review profile. A
+# finding cites a rule, the file and the line, and names the one structural
+# fix. Anything that cites no rule and shows no reachable defect is noise.
 
 language: en-US
 
@@ -15,7 +17,10 @@ knowledge_base:
       - "CLAUDE.md"
 
 reviews:
-  profile: assertive
+  # chill, not assertive: the rules below set the bar; the profile only adds
+  # comments outside them, and every inline thread must be resolved before
+  # approval.
+  profile: chill
   high_level_summary: true
   review_status: true
   poem: false
@@ -27,10 +32,11 @@ reviews:
   auto_approvals:
     enabled: true
 
+  # The docstring coverage check is off: a coverage threshold rewards
+  # docstrings that restate the signature, which rule 7 then has to police.
   pre_merge_checks:
     docstrings:
-      mode: warning
-      threshold: 80
+      mode: "off"
 
   path_filters:
     - "!dist/**"
@@ -42,10 +48,23 @@ reviews:
   path_instructions:
     - path: "src/**/*.ts"
       instructions: |
-        Review against the project's rules, in this order of weight.
+        SCOPE. Comment only on a violation of a numbered rule below, or on a
+        defect you can show is reachable (name the input or path that reaches
+        it). No style, naming, formatting or refactor suggestions outside these
+        rules. If a finding cites no rule and shows no reachable defect, do not
+        post it.
 
-        0. NO HACKS. A change fixes the cause at the one place it lives, or it
-           is not accepted. Flag, by name, each of these:
+        SEVERITY. Each rule is marked [blocking] or [advisory].
+        - A [blocking] finding is an inline comment and requests changes.
+        - An [advisory] finding goes in the review summary under "Advisory",
+          not as an inline thread, and does not hold up approval.
+        - A class of defect that reaches beyond this PR's purpose is a
+          follow-up (rule 9), not a blocking finding on this PR, unless this
+          PR's own change introduces or extends it.
+
+        0. NO HACKS [blocking]. A change fixes the cause at the one place it
+           lives. Flag, by name, each of these when the diff adds or extends
+           it:
            - a tuned factor, budget, margin or threshold picked to make a case
              pass, and a ladder of fallbacks tried one after another;
            - a try/catch that swallows an error to make a failure go away;
@@ -58,83 +77,103 @@ reviews:
            - router behaviour changed, or a test loosened, to make a test or a
              reviewer pass.
            When the diff fixes a reported site but the same defect exists
-           elsewhere, say so: the fix is the class, not the site. Do not ask
-           for a guard against a case the code cannot reach; show how it is
-           reached, or drop the finding.
+           elsewhere, say so and list the other sites you found: the fix is the
+           class, not the site. Do not ask for a guard against a case the code
+           cannot reach; show how it is reached, or drop the finding.
 
-        1. UNITS: everything the plugin emits (to Signal K, in the API, in
-           route files) is SI, dimensionless values as a ratio or an index,
-           converted once where the data comes in. Flag any value emitted in
-           display units, and any conversion done twice.
+        1. UNITS [blocking]: everything the plugin emits (to Signal K, in the
+           API, in route files) is SI, dimensionless values as a ratio or an
+           index, converted once where the data comes in. Flag any value
+           emitted in display units, and any conversion done twice.
 
-        2. ONE RULE, ONE PLACE: a rule kept in two places (a formula, a
-           validation, a threshold, a lookup table) is a defect even when both
-           copies agree today. Point at the second copy and name the one place
-           it should live.
+        2. ONE RULE, ONE PLACE [advisory]: a rule kept in two places (a
+           formula, a validation, a threshold, a lookup table) is a defect even
+           when both copies agree today. Point at the second copy and name the
+           one place it should live. A copy the diff itself adds is rule 0
+           [blocking].
 
-        3. MEMORY: large data stays on disk and a request reads the slice it
-           needs, as the decoded forecast, the land rasters and the tile store
-           already do. Every worker thread pays separately for what it holds,
-           and the allocator keeps a thread's peak. Flag new data held in
-           worker memory beyond a request, and copies of data another thread
-           already holds.
+        3. MEMORY [advisory]: large data stays on disk and a request reads the
+           slice it needs, as the decoded forecast, the land rasters and the
+           tile store already do. Every worker thread pays separately for what
+           it holds, and the allocator keeps a thread's peak. Flag new data
+           held in worker memory beyond a request, and copies of data another
+           thread already holds, with an estimate of its size and where the
+           estimate comes from.
 
-        4. OPTIONAL INTEGRATIONS: a feature that is off, or a Signal K plugin
-           that is not installed, changes nothing: no behaviour, no download,
-           nothing shown. Flag code that acts differently when the other side
-           is absent.
+        4. OPTIONAL INTEGRATIONS [blocking]: a feature that is off, or a
+           Signal K plugin that is not installed, changes nothing: no
+           behaviour, no download, nothing shown. Flag code that acts
+           differently when the other side is absent.
 
-        5. ROUTES: the route a user drew is never changed; the weather result
-           is a separate route with its own name. A route never crosses water
-           too shallow for the boat; a failure fails the route rather than
-           falling back to a weaker check.
+        5. ROUTES [blocking]: the route a user drew is never changed; the
+           weather result is a separate route with its own name. A route never
+           crosses water too shallow for the boat; a failure fails the route
+           rather than falling back to a weaker check.
 
-        6. GLOBAL USE: the plugin serves boats anywhere. Data sources are
-           global by default; a regional source is an addition, never a
-           requirement.
+        6. GLOBAL USE [blocking]: the plugin serves boats anywhere. Data
+           sources are global by default; a regional source is an addition,
+           never a requirement.
 
-        7. HONESTY: a comment, a doc string, a log line or a UI string
-           describes only what exists. Every number in a comment names where it
-           was measured, or says it was not. Flag comments that describe
-           planned or removed behaviour.
+        7. HONESTY [advisory]: a comment, a doc string, a log line or a UI
+           string describes only what exists. A measured or benchmarked figure
+           in a comment names where and when it was measured, or says it was
+           not. Constants, counts and indices are not measurements. Flag
+           comments that describe planned or removed behaviour.
 
-        8. TESTS: a behaviour change in src/ or public/ with no test in the
-           same PR is a finding: name the test file and what it should
-           assert. (This rule sits here, not under the test files, so it
-           applies to a PR that changes no test.)
+        8. TESTS [blocking]: a behaviour change in src/ or public/ with no
+           test in the same PR is a finding: name the test file and what it
+           should assert. (This rule sits here, not under the test files, so
+           it applies to a PR that changes no test.)
 
-        When you flag a rule above, quote its number and name, cite the file and
+        9. FOLLOW-UPS [advisory]: when the structural fix for a finding lies
+           outside this PR's purpose, write it up in the summary under
+           "Follow-ups": where the cause lives, every instance you found, and
+           the one change that removes the class. Do not ask this PR to make
+           it. A reply in a thread saying the class fix is deferred to a named
+           follow-up resolves that thread, unless leaving the site as it is
+           would ship a defect.
+
+        When you flag a rule, quote its number and name, cite the file and
         line, and say what the one structural fix is.
 
-    - path: "public/*.js"
+    - path: "public/**/*.js"
       instructions: |
+        Apply the SCOPE and SEVERITY sections of the src/**/*.ts instructions.
         The web app shows every quantity in the units the Signal K user chose
         (their unit preferences); there is no unit selector in the plugin and
-        no fallback: a quantity without a known unit shows "—". The one
-        approved exception: settings measured in seconds show in seconds.
-        Flag, as a defect:
+        no fallback: a quantity without a known unit shows "—". The approved
+        exceptions: settings measured in seconds show in seconds; the energy
+        fields' fluxes (W/m²) and MUCAPE (J/kg), for which Signal K defines no
+        unit, are written in SI with their symbols, kept in rp-plan.js
+        _FLUX_UNIT and _CAPE_UNIT (the owner's decision, 2026-11-08). Flag, as
+        [blocking]:
         - a conversion written by hand (a constant that turns an SI value into
           a display value) outside the unit helpers;
         - a unit symbol written as a literal beside a number;
         - a quantity formatted with toFixed instead of through the unit
-          helpers.
-        Also apply rules 0, 2, 7 and 8 of the src/**/*.ts instructions. An answer
-        that arrives after the screen moved on (another route opened, cleared,
-        replaced) must not be applied.
+          helpers;
+        - an answer applied after the screen moved on (another route opened,
+          cleared, replaced).
+        Also apply rules 0, 2, 7, 8 and 9 of the src/**/*.ts instructions.
+
+    - path: "public/**/*.{html,css}"
+      instructions: |
+        Apply rule 7 of the src/**/*.ts instructions. Comment on nothing else.
 
     - path: "src/**/*.test.ts"
       instructions: |
         A test that is loosened, skipped, or given an allowlist is unfinished
-        unless the list is empty; flag it and ask what blocks removing it.
-        Tests must not call the network. (Missing tests for a behaviour change
-        are rule 8 of the src/**/*.ts instructions.)
+        unless the list is empty; flag it [blocking] and ask what blocks
+        removing it. Tests must not call the network [blocking]. (Missing
+        tests for a behaviour change are rule 8 of the src/**/*.ts
+        instructions.)
 
     - path: "{README,CHANGELOG,WHATSNEW}.md"
       instructions: |
-        These describe only what is built. Flag an entry that claims a feature
-        or a fix the diff does not contain, a measurement without where and
-        when it was taken, and text left describing behaviour the diff
-        changed.
+        These describe only what is built. Flag [blocking] an entry that
+        claims a feature or a fix the diff does not contain, and text left
+        describing behaviour the diff changed. Flag [advisory] a measurement
+        without where and when it was taken.
 
   auto_review:
     enabled: true

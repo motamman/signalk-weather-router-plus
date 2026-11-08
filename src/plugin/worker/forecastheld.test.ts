@@ -52,6 +52,7 @@ function state(sent: WorkerToMain[], cacheRoot: string): WorkerState {
     reportedLandBuilds: 0,
     reportedSmocRev: -1,
     cacheRoot,
+    cropRoot: '',
     regional: new Map(),
     seaLevelClient: null,
     tides: null,

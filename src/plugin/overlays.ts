@@ -9,7 +9,7 @@ import type { ForecastStore } from '../data/forecast';
 import { norm360 } from '../geo/angles';
 import { latOfMercY, mercY } from '../geo/mercator';
 import { wrapLon } from '../geo/angles';
-import { HOUR_MS } from '../geo/units';
+import { HOUR_MS, HOUR_S } from '../geo/units';
 import type { CurrentStack } from '../currents/stack';
 import type { OverlayLand } from '../geo/landcache';
 import { bboxWidth, type BBox } from '../geo/geodesy';
@@ -431,7 +431,7 @@ export interface ConditionsRow {
   precip_rate_ms: number | null;
   precip_type: number | null;
   precip_type_label: string | null;
-  /** Total precipitation depth in m over `interval_h`, the interval containing the sample time (energy fields). */
+  /** Total precipitation depth in m over `interval_s`, the interval containing the sample time (energy fields). */
   precip_m: number | null;
   /** Snowfall water-equivalent depth in m over the same interval (energy fields). */
   snowfall_m: number | null;
@@ -441,8 +441,8 @@ export interface ConditionsRow {
   strd_wm2: number | null;
   /** Average net surface thermal radiation, W/m², over the same interval (energy fields; ECMWF str). */
   str_wm2: number | null;
-  /** Hours the interval fields of this row cover (3 below 144 h, 6 past; null when none are loaded). */
-  interval_h: number | null;
+  /** Seconds the interval fields of this row cover (3 h below 144 h, 6 h past; null when none are loaded). */
+  interval_s: number | null;
   /** Total cloud cover, ratio 0..1 (extra fields). */
   cloud_cover: number | null;
   /** Most-unstable convective available potential energy, J/kg (energy fields). */
@@ -466,7 +466,7 @@ export interface ConditionsRow {
  * One sample row at a position and time. Everything is SI or
  * dimensionless: `precip_rate_ms` in m/s, `rh` a ratio 0..1. The interval
  * fields (`precip_m`, `snowfall_m`, the fluxes) are the values of the
- * interval containing the sample time, `interval_h` hours long.
+ * interval containing the sample time, `interval_s` seconds long.
  * `windAt`: the wind to use instead of the forecast's (speed m/s, FROM
  * degrees), such as regional wind layered over it; what is worked out from
  * the wind (Beaufort, sea state, feels-like) uses it too.
@@ -567,7 +567,8 @@ export function sampleConditions(src: OverlaySources, lon: number, lat: number, 
     ssrd_wm2: rnd(ssrd, 1),
     strd_wm2: rnd(strd, 1),
     str_wm2: rnd(str, 1),
-    interval_h: intervalH,
+    // The forecast keeps its intervals in hours, as GRIB gives its steps (ForecastStep.intervals); the row gives seconds.
+    interval_s: intervalH === null ? null : intervalH * HOUR_S,
     cloud_cover: rnd(cloud, 3),
     mucape_jkg: rnd(mucape, 0),
     dewpoint_k: rnd(d2m, 2),

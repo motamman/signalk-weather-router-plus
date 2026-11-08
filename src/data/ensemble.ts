@@ -26,6 +26,7 @@ import {
   type Cycle,
   cycleFor,
   type EcmwfClient,
+  ENSEMBLE_MEMBER_MAX,
   ENSEMBLE_OPTIONAL_PARAMS,
   ENSEMBLE_PARAMS,
   ENSEMBLES,
@@ -36,7 +37,7 @@ import {
 } from './ecmwf';
 import { buildStep, FloatSlab, type NanFillScratch } from './forecast';
 import { GLOBAL_CELLS } from './loader';
-import { saveJson } from '../util/jsonfiles';
+import { loadJsonFiles, removeJson, saveJson } from '../util/jsonfiles';
 
 /** The GRIB cache of the ensembles, and their decoded runs, below the plugin data directory. */
 export const ENSEMBLE_GRIB_DIR = 'ecmwf-ens';
@@ -173,6 +174,120 @@ export interface EnsembleCurrent {
 }
 
 const CURRENT_FILE = 'current.json';
+/** The folder of a model's pins (pinEnsembleCycle), beside its members' folders. */
+const PINS_DIR = 'pins';
+
+/**
+ * An ensemble set's hold on the runs it routes on: its id, the cycle (yyyymmddHH) and the members of that cycle. While
+ * the file is there, the prune keeps those runs (pruneEnsembles) and a member route may read them
+ * (worker/route.ts memberRun), also after the record of the cycle in use has moved on to a newer cycle.
+ */
+export interface EnsemblePin {
+  id: string;
+  cycle: string;
+  members: number[];
+}
+
+function pinFile(cacheRoot: string, model: EnsembleModelId, setId: string): string {
+  return path.join(cacheRoot, ENSEMBLE_DECODED_DIR, model, PINS_DIR, `${setId}.json`);
+}
+
+/**
+ * Keep `cycle`'s runs of `members` on disk while ensemble set `setId` routes on them (plugin/ensembles.ts: written when
+ * the set is made, removed once it has ended and none of its routes runs). Until 2026-11-07 a new cycle recorded while
+ * a set ran had the set's cycle pruned under it, and its members not yet routed failed as "no longer on disk".
+ * Null when kept, else why not.
+ */
+export function pinEnsembleCycle(
+  cacheRoot: string,
+  model: EnsembleModelId,
+  setId: string,
+  cycle: string,
+  members: number[]
+): string | null {
+  const file = pinFile(cacheRoot, model, setId);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+  } catch (err) {
+    return (err as Error).message;
+  }
+  const pin: EnsemblePin = { id: setId, cycle, members };
+  return saveJson(file, pin);
+}
+
+/** The set's pin removed (none there is removed); null, else why it could not be. */
+export function unpinEnsembleCycle(cacheRoot: string, model: EnsembleModelId, setId: string): string | null {
+  return removeJson(pinFile(cacheRoot, model, setId));
+}
+
+/** The pins of a model; a pin file that cannot be read, or holds no pin, is reported through `log` and left. */
+export function ensemblePins(cacheRoot: string, model: EnsembleModelId, log: (msg: string) => void): EnsemblePin[] {
+  const dir = path.join(cacheRoot, ENSEMBLE_DECODED_DIR, model, PINS_DIR);
+  // No folder: no set has pinned this model (existsSync never throws).
+  if (!fs.existsSync(dir)) return [];
+  const isPin = (v: unknown): v is EnsemblePin => {
+    const p = v as Partial<EnsemblePin> | null;
+    return (
+      !!p &&
+      typeof p === 'object' &&
+      typeof p.id === 'string' &&
+      typeof p.cycle === 'string' &&
+      /^\d{10}$/.test(p.cycle) &&
+      Array.isArray(p.members) &&
+      p.members.every(m => Number.isInteger(m) && m >= 0)
+    );
+  };
+  return loadJsonFiles(dir, { one: `${model} pin`, a: 'a pin', many: `${model} pins` }, isPin, log).records;
+}
+
+/** The members of `model` that sets pin on `cycle`, or null when no set pins it. */
+export function pinnedMembers(cacheRoot: string, model: EnsembleModelId, cycle: string, log: (msg: string) => void): number[] | null {
+  const pins = ensemblePins(cacheRoot, model, log).filter(p => p.cycle === cycle);
+  return pins.length ? [...new Set(pins.flatMap(p => p.members))] : null;
+}
+
+/**
+ * Remove every pin: at the plugin's start no set runs (a set running at a stop ends failed: plugin/jobseries.ts), so
+ * none holds a cycle. The problems, each a folder that could not be removed.
+ */
+export function clearEnsemblePins(cacheRoot: string): string[] {
+  const root = path.join(cacheRoot, ENSEMBLE_DECODED_DIR);
+  if (!fs.existsSync(root)) return [];
+  const problems: string[] = [];
+  let models: string[];
+  try {
+    models = fs.readdirSync(root);
+  } catch (err) {
+    return [`${root} could not be read: ${(err as Error).message}`];
+  }
+  for (const model of models) {
+    const dir = path.join(root, model, PINS_DIR);
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (err) {
+      problems.push(`${dir} could not be removed: ${(err as Error).message}`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * Why `c` is not a record of `model`'s cycle in use, or null: every field as recordEnsembleCycle writes it, so what
+ * reads the record (the status, a member route: `new Date(cycleTimeMs)`, the members) never meets a value that is not
+ * one. (Until 2026-11-07 only the model, the cycle and the members' list were checked.)
+ */
+function currentRecordProblem(c: unknown, model: EnsembleModelId): string | null {
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return 'not an object';
+  const r = c as Partial<EnsembleCurrent>;
+  if (r.model !== model) return `model ${String(r.model)}`;
+  if (typeof r.cycle !== 'string' || !/^\d{10}$/.test(r.cycle)) return `cycle ${String(r.cycle)}`;
+  if (typeof r.cycleTimeMs !== 'number' || !Number.isFinite(r.cycleTimeMs)) return `cycleTimeMs ${String(r.cycleTimeMs)}`;
+  if (!Array.isArray(r.members) || !r.members.every(m => Number.isInteger(m) && m >= 0 && m <= ENSEMBLE_MEMBER_MAX))
+    return `members ${JSON.stringify(r.members)}`;
+  if (typeof r.horizonHours !== 'number' || !Number.isFinite(r.horizonHours)) return `horizonHours ${String(r.horizonHours)}`;
+  if (typeof r.at !== 'string') return `at ${String(r.at)}`;
+  return null;
+}
 
 /**
  * A model's record of its ensemble in use (current.json in its folder): the record, or null with no problem when there
@@ -190,20 +305,36 @@ export function ensembleCurrentFile(
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { current: null, problem: null };
     return { current: null, problem: `${CURRENT_FILE} cannot be read: ${(err as Error).message}` };
   }
-  let c: EnsembleCurrent;
+  let c: unknown;
   try {
-    c = JSON.parse(text) as EnsembleCurrent;
+    c = JSON.parse(text);
   } catch (err) {
     return { current: null, problem: `${CURRENT_FILE} is not JSON: ${(err as Error).message}` };
   }
-  if (!c || c.model !== model || typeof c.cycle !== 'string' || !Array.isArray(c.members))
-    return { current: null, problem: `${CURRENT_FILE} is not a record of ${model}'s cycle in use` };
-  return { current: c, problem: null };
+  const problem = currentRecordProblem(c, model);
+  if (problem) return { current: null, problem: `${CURRENT_FILE} is not a record of ${model}'s cycle in use (${problem})` };
+  return { current: c as EnsembleCurrent, problem: null };
 }
 
 /** A model's ensemble in use, or null when there is none to use (no record, or one that cannot be read: ensembleCurrentFile). */
 export function readEnsembleCurrent(cacheRoot: string, model: EnsembleModelId): EnsembleCurrent | null {
   return ensembleCurrentFile(cacheRoot, model).current;
+}
+
+/**
+ * Which members of a model are on disk to route on now, as its record says at this moment: the cycle in use (ISO) and
+ * its members; null when there is no record; or what is wrong with the record. The one answer for the main thread
+ * (index.ts: a route's forecast_member, a set's members), as the member routes read the same record
+ * (worker/route.ts memberRun). Never the data worker's last status, which is behind the record between a new
+ * cycle's recording and the next status.
+ */
+export function ensembleInUse(
+  cacheRoot: string,
+  model: EnsembleModelId
+): { cycle: string; members: number[] } | { problem: string } | null {
+  const { current, problem } = ensembleCurrentFile(cacheRoot, model);
+  if (problem) return { problem };
+  return current ? { cycle: new Date(current.cycleTimeMs).toISOString(), members: [...current.members] } : null;
 }
 
 /**
@@ -223,12 +354,16 @@ export function recordEnsembleCycle(
 ): string | null {
   const cycle = cycleName(cycleTime);
   const cur = readEnsembleCurrent(cacheRoot, model);
-  if (cur && cur.cycle === cycle && cur.horizonHours === horizonHours && wanted.every(n => cur.members.includes(n))) return null;
+  const same = cur !== null && cur.cycle === cycle && cur.horizonHours === horizonHours;
+  if (same && wanted.every(n => cur.members.includes(n))) return null;
+  // The same cycle and horizon: the members already recorded stay with the new ones (sets started on this cycle may be
+  // routing on them; prune keeps what the record names). Another cycle or horizon: the wanted members alone.
+  const members = same ? [...new Set([...cur.members, ...wanted])].sort((a, b) => a - b) : wanted;
   const record: EnsembleCurrent = {
     model,
     cycle,
     cycleTimeMs: cycleTime.getTime(),
-    members: wanted,
+    members,
     horizonHours,
     at: new Date().toISOString(),
   };
@@ -305,8 +440,10 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
     }
     // What is on disk now; the data worker records the cycle in use from it (recordEnsembleCycle).
     r.members = want.filter(m => memberComplete(o.cacheRoot, id, m, name, horizonHours));
+    // Decoded now: those this pass set out to decode that are on disk now (a download that stopped decoded none).
+    const decodedNow = todo.filter(m => r.members.includes(m)).length;
     log(
-      `${model.name} ${name}: ${r.members.length} of ${want.length} members on disk (${todo.length - r.failed.length} decoded now, ${r.downloaded} fields downloaded, ${r.failed.length} failed)`
+      `${model.name} ${name}: ${r.members.length} of ${want.length} members on disk (${decodedNow} decoded now, ${r.downloaded} fields downloaded, ${r.failed.length} failed)`
     );
     out.push(r);
   }
@@ -332,7 +469,7 @@ async function downloadModel(
 ): Promise<{ steps: number[]; downloaded: number; bytes: number }> {
   /**
    * The members a step file holds that still have a message to fetch from it (none: every required and optional field
-   * is cached; whether an optional one exists is the index's to say, so it is read).
+   * is cached, isGribFile; whether an optional one exists is the index's to say, so it is read).
    */
   const toGet = (file: EnsembleModel['files'][number], stream: string, params: readonly string[], step: number): number[] => {
     const inFile = members.filter(m => (m === 0) === file.control);
@@ -479,8 +616,9 @@ function decodeMember(
 
 /**
  * What stays of each chosen model: the members wanted, in the cycle in use (current.json) and, while a pass has not
- * completed, the cycle it is decoding (`pending`: its decoded members and its GRIB cache, so the next pass resumes).
- * Everything else goes: other members, other cycles, a completed cycle's GRIB cache, models no longer chosen.
+ * completed, the cycle it is decoding (`pending`: its decoded members and its GRIB cache, so the next pass resumes);
+ * and the cycles and members running ensemble sets pin (pinEnsembleCycle), with their pins. Everything else goes: other
+ * members, other cycles, a completed cycle's GRIB cache, models no longer chosen (their pins with them).
  * Returns what was removed, and each folder that could not be read or removed (left as it is; the caller reports it).
  */
 export function pruneEnsembles(
@@ -514,11 +652,14 @@ export function pruneEnsembles(
       rm(path.join(decodedRoot, model), `${model} (decoded)`);
       continue;
     }
-    const cycles = k.pending ? [...k.cycles, k.pending] : k.cycles;
+    // What running sets hold (pinEnsembleCycle): their cycles and members, kept whatever else changed.
+    const pins = ensemblePins(cacheRoot, model as EnsembleModelId, m => problems.push(m));
+    const cycles = [...k.cycles, ...(k.pending ? [k.pending] : []), ...pins.map(p => p.cycle)];
+    const members = [...k.members, ...pins.flatMap(p => p.members)];
     for (const m of list(path.join(decodedRoot, model))) {
-      if (m === CURRENT_FILE || m.startsWith('.')) continue;
+      if (m === CURRENT_FILE || m === PINS_DIR || m.startsWith('.')) continue;
       const root = path.join(decodedRoot, model, m);
-      if (!k.members.some(x => memberDir(x) === m)) rm(root, `${model} ${m}`);
+      if (!members.some(x => memberDir(x) === m)) rm(root, `${model} ${m}`);
       else
         try {
           for (const c of pruneDecodedRuns(root, cycles)) removed.push(`${model} ${m} ${c}`);

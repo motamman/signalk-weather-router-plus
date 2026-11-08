@@ -15,7 +15,7 @@
  */
 
 import type { DrawbridgeChoice } from '../engine/mesh/route';
-import { DEFAULT_LIMIT_AVOID_STRENGTH, type LimitMode } from '../engine/legsim';
+import { DEFAULT_LIMIT_AVOID_STRENGTH, DEFAULT_LIMIT_MODE, type LimitMode } from '../engine/legsim';
 import { makeVessel, type VesselParams } from '../vessel/vessel';
 import type { RouterKind } from '../engine/router';
 import { DEFAULT_MESH_CATALOG_URL } from './meshes';
@@ -251,6 +251,8 @@ export const DEFAULT_MIRROR: EcmwfMirror = 'ecmwf';
  * mp2: its figures stand.
  */
 export const ENSEMBLE_MEMBER_COST = {
+  /** The forecast horizon the figures are for (hours): every page that shows them names it, as a longer horizon costs more in proportion. */
+  horizonHours: 72,
   downloadBytes: { 'ifs-ens': 350_757_112 / 5 + 25 * 440_100, 'aifs-ens': 206_788_659 / 6 } satisfies Record<EnsembleModelId, number>,
   diskBytes: { 'ifs-ens': (519_126_603 * 6) / 5, 'aifs-ens': 269_947_987 } satisfies Record<EnsembleModelId, number>,
 };
@@ -258,12 +260,12 @@ export const ENSEMBLE_MEMBER_COST = {
 /** What the ensemble downloads cost and do, for the plugin config's schema and the configuration pages (configChoices). */
 export const ENSEMBLE_DOWNLOAD_NOTE =
   "Also download ECMWF ensembles, each cycle after the forecast (wind and waves, to the forecast's horizon), so Find Route " +
-  "can compute the route on each member's forecast as well: where each member's route goes and when it arrives. At 72 h, " +
+  `can compute the route on each member's forecast as well: where each member's route goes and when it arrives. At ${ENSEMBLE_MEMBER_COST.horizonHours} h, ` +
   `per member and cycle: an IFS ENS member about ${Math.round(ENSEMBLE_MEMBER_COST.downloadBytes['ifs-ens'] / 1e6)} MB downloaded and ` +
   `${Math.round(ENSEMBLE_MEMBER_COST.diskBytes['ifs-ens'] / 1e6)} MB on disk (arithmetic from the test box's measures with five fields, ` +
   "2026-11-05 and 2026-11-06, plus its sixth field, the wave period mp2, at the main forecast's measured message size), an AIFS ENS member about " +
   `${Math.round(ENSEMBLE_MEMBER_COST.downloadBytes['aifs-ens'] / 1e6)} MB downloaded and ${Math.round(ENSEMBLE_MEMBER_COST.diskBytes['aifs-ens'] / 1e6)} MB on disk ` +
-  '(measured on the test box, Pi 5, 2026-11-05 and 2026-11-06).';
+  '(on disk: measured on the test box, Pi 5, 2026-11-06; downloaded: arithmetic, per member from the total measured there on 2026-11-05).';
 
 /** The ensemble downloads when the config says nothing: off; on, IFS ENS with 5 members. The schema and resolveEnsemble read these. */
 export const ENSEMBLE_DEFAULTS: { enabled: boolean; models: EnsembleModelId[]; members: number } = {
@@ -489,9 +491,13 @@ export function ensembleMembersProblem(members: number): string | null {
     : `${String(members)} is not one of ${ENSEMBLE_MEMBER_CHOICES.join(', ')}`;
 }
 
-/** Why `models` are not ensembles this plugin downloads (the first unknown one), or null. */
-export function ensembleModelsProblem(models: readonly string[]): string | null {
-  const bad = models.find(m => !(ENSEMBLE_MODELS as readonly string[]).includes(m));
+/**
+ * Why `models` are not ensembles this plugin downloads, or null: not a list (the options file is edited by hand, and
+ * its type is only the compiler's), or the first entry that is not one of them.
+ */
+export function ensembleModelsProblem(models: unknown): string | null {
+  if (!Array.isArray(models)) return `${JSON.stringify(models)} is not a list of ensembles (${ENSEMBLE_MODELS.join(', ')})`;
+  const bad = models.find(m => !(ENSEMBLE_MODELS as readonly unknown[]).includes(m));
   return bad === undefined ? null : `${bad} is not one of ${ENSEMBLE_MODELS.join(', ')}`;
 }
 
@@ -601,8 +607,8 @@ export function resolveConfig(raw: PluginConfig | undefined, settings: AppSettin
       noGoMinAngleDeg: r.noGoMinAngle ?? 0,
       maxWindMs: r.maxWind ?? null,
       maxSwhM: r.maxSwh ?? null,
-      maxWindMode: r.maxWindMode ?? 'block',
-      maxSwhMode: r.maxSwhMode ?? 'block',
+      maxWindMode: r.maxWindMode ?? DEFAULT_LIMIT_MODE,
+      maxSwhMode: r.maxSwhMode ?? DEFAULT_LIMIT_MODE,
       limitAvoidStrength: r.limitAvoidStrength ?? DEFAULT_LIMIT_AVOID_STRENGTH,
       comfortWeight: r.comfortWeight ?? 0,
       simStepM: r.simStep,

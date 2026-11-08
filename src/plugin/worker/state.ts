@@ -67,6 +67,8 @@ export interface WorkerState {
   reportedSmocRev: number;
   /** Plugin data directory (cache root). */
   cacheRoot: string;
+  /** Route worker: the folder of its routes' forecast crops written for the chart mesh process (worker/routecrop.ts). */
+  cropRoot: string;
   /** Regional runs decoded from signalk-grib-downloader, per source (data worker). */
   regional: Map<string, import('../protocol').RegionalDecodeState>;
   /** Copernicus Marine sea level (data worker only). */

@@ -12,12 +12,14 @@
 
 import { randomUUID } from 'node:crypto';
 import { Type, type Static } from 'typebox';
+import { Value } from 'typebox/value';
 import type { Job, JobManager, JobSeriesOf } from './jobs';
 import type { RouteRequest } from './protocol';
 import { RouteRequestSchema, validateRouteRequest, ENSEMBLE_MEMBERS_RANGE } from './request_schema';
 import { DepartureMetricsSchema, departureMetrics, JobSeries, type SeriesDeps, type SeriesItem } from './jobseries';
-import { ENSEMBLE_MEMBER_CHOICES, ENSEMBLE_MODELS, ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
+import { ENSEMBLE_MEMBER_MAX, ENSEMBLE_MODELS, type EnsembleModelId, ENSEMBLES } from '../data/ecmwf';
 import { cycleName } from '../data/decoded';
+import { clearEnsemblePins, pinEnsembleCycle, unpinEnsembleCycle } from '../data/ensemble';
 
 export const ENSEMBLE_SET_LIMITS = {
   /** Finished sets kept (with their route jobs). */
@@ -59,7 +61,7 @@ export type MemberStatus = Static<typeof MemberStatusSchema>;
 export const SetMemberSchema = Type.Object({
   member: Type.Integer({
     minimum: 0,
-    maximum: ENSEMBLE_MEMBER_CHOICES[ENSEMBLE_MEMBER_CHOICES.length - 1],
+    maximum: ENSEMBLE_MEMBER_MAX,
     description: '0 = the control',
   }),
   job_id: Type.Union([Type.String(), Type.Null()]),
@@ -88,6 +90,12 @@ export const EnsembleSetSchema = Type.Object({
 });
 export type EnsembleSet = Static<typeof EnsembleSetSchema>;
 
+/** A saved set's fields but its request, which validateEnsembleSetRequest checks (EnsembleSetManager.holds). */
+const SET_RECORD_SCHEMA = Type.Omit(EnsembleSetSchema, ['request']);
+
+/** A set's links (jobseries.ts links): itself, and its cancel. */
+export const EnsembleSetLinksSchema = Type.Object({ self: Type.String(), cancel: Type.String() });
+
 /** A set as the API answers it (EnsembleSetManager.toPublic): the member computing's last progress line, and links. */
 export const EnsembleSetPublicSchema = Type.Object({
   ...EnsembleSetSchema.properties,
@@ -106,11 +114,24 @@ export const EnsembleSetPublicSchema = Type.Object({
     }
   ),
   progress: Type.Union([Type.String(), Type.Null()]),
-  links: Type.Object({ self: Type.String(), cancel: Type.String() }),
+  links: EnsembleSetLinksSchema,
 });
 export type EnsembleSetPublic = Static<typeof EnsembleSetPublicSchema>;
 
-/** Why a set request is not acceptable, or null (what is on disk is checked by the API: membersOnDisk). */
+/**
+ * The answer to POST /api/ensemble-sets (202): the set started, by id, with how many members it routes and its links;
+ * the set itself is GET /api/ensemble-sets/{id} (EnsembleSetPublicSchema). The one shape the handler answers and the
+ * OpenAPI document describes.
+ */
+export const EnsembleSetCreatedSchema = Type.Object({
+  id: Type.String(),
+  status: EnsembleSetStatusSchema,
+  members: Type.Integer({ description: 'How many members the set routes' }),
+  links: EnsembleSetLinksSchema,
+});
+export type EnsembleSetCreated = Static<typeof EnsembleSetCreatedSchema>;
+
+/** Why a set request is not acceptable, or null (what is on disk is checked when the set is made: EnsembleSetManager.create). */
 export function validateEnsembleSetRequest(b: unknown): string | null {
   if (!b || typeof b !== 'object' || Array.isArray(b)) return 'JSON body required: {route: {start, end, …}, model, members}';
   const r = b as Partial<EnsembleSetRequest>;
@@ -131,14 +152,21 @@ export function validateEnsembleSetRequest(b: unknown): string | null {
 }
 
 export interface EnsembleSetDeps extends SeriesDeps {
-  /** The cycle (ISO) and members on disk of an ensemble's cycle in use, or null when none is. */
-  onDisk: (model: EnsembleModelId) => { cycle: string; members: number[] } | null;
+  /**
+   * The cycle (ISO) and members on disk of an ensemble's cycle in use, read now from its record on disk (data/ensemble.ts
+   * ensembleCurrentFile, the one record of what is in use, which the members' routes read too: worker/route.ts
+   * memberRun); null when it has none; or what is wrong with the record. Until 2026-11-07 it was the data worker's
+   * last status, which is behind the record from the moment a new cycle is recorded until the next status: a set made
+   * then was pinned to the old cycle, and every member of it failed as "no longer on disk".
+   */
+  onDisk: (model: EnsembleModelId) => { cycle: string; members: number[] } | { problem: string } | null;
 }
 
 export class EnsembleSetManager extends JobSeries<EnsembleSet> {
   constructor(
     jobs: JobManager,
-    dataDir: string,
+    /** The plugin data directory: the sets' files, and the ensembles' runs their pins hold (data/ensemble.ts). */
+    private readonly dataDir: string,
     private readonly setDeps: EnsembleSetDeps,
     basePath = ''
   ) {
@@ -156,17 +184,20 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
       },
       basePath
     );
+    // No set runs now (one that ran at the stop ended failed: jobseries.ts loadPersisted): no pin holds a cycle.
+    for (const p of clearEnsemblePins(dataDir)) setDeps.log(`ensemble sets: a pin left from before could not be removed: ${p}`);
   }
 
   /**
    * Start a set (the request validated by validateEnsembleSetRequest): the first `members` members on disk of the
-   * ensemble's cycle in use, the control first where there is one. Refused, with why, when the ensemble or that many
-   * members are not on disk.
+   * ensemble's cycle in use, read now, the control first where there is one. Refused, with why, when the ensemble or
+   * that many members are not on disk, or its record cannot be read.
    */
   create(req: EnsembleSetRequest): { set: EnsembleSet } | { refused: string } {
     const disk = this.setDeps.onDisk(req.model);
     const name = ENSEMBLES[req.model].name;
     if (!disk) return { refused: `${name} is not on disk (plugin config: Ensemble downloads)` };
+    if ('problem' in disk) return { refused: `${name}: ${disk.problem}` };
     if (disk.members.length < req.members) return { refused: `${name} has ${disk.members.length} members on disk, ${req.members} asked` };
     const s: EnsembleSet = {
       id: randomUUID(),
@@ -177,6 +208,15 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
       cycle: disk.cycle,
       members: disk.members.slice(0, req.members).map(member => ({ member, job_id: null, status: 'pending' })),
     };
+    // The set's cycle and members held on disk until it has settled (settled), so a newer cycle does not prune them.
+    const why = pinEnsembleCycle(
+      this.dataDir,
+      req.model,
+      s.id,
+      cycleName(new Date(s.cycle)),
+      s.members.map(m => m.member)
+    );
+    if (why) return { refused: `${name}: its run could not be held on disk while the set routes on it (${why})` };
     this.start(s);
     return { set: s };
   }
@@ -201,8 +241,20 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
     return s.members;
   }
 
+  /** Ended, none of its routes running: its pin goes, and the prune may remove its cycle once it is not in use. */
+  protected settled(s: EnsembleSet): void {
+    const why = unpinEnsembleCycle(this.dataDir, s.request.model, s.id);
+    if (why) this.setDeps.log(`ensemble set ${s.id}: its pin could not be removed (${why}); its run stays until the next start`);
+  }
+
+  /**
+   * A saved file holds a set when its request passes the check the API makes before the set is created
+   * (validateEnsembleSetRequest: one rule for a set request, at creation and at restore) and its other fields fit the
+   * set's schema (EnsembleSetSchema), every field the manager reads later included. One that does not (a hand edit, an
+   * older format) is left as it is and not restored, rather than restored and failing every read of its owner's sets.
+   */
   protected holds(v: unknown): v is EnsembleSet {
-    return !!v && typeof v === 'object' && !!(v as EnsembleSet).id && Array.isArray((v as EnsembleSet).members);
+    return Value.Check(SET_RECORD_SCHEMA, v) && validateEnsembleSetRequest((v as { request?: unknown }).request) === null;
   }
 
   protected of(s: EnsembleSet): JobSeriesOf {

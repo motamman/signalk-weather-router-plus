@@ -189,6 +189,12 @@ export abstract class JobSeries<S extends SeriesRecord> {
   protected abstract nextRoute(s: S, k: number): RouteRequest | null;
   /** Series `s` has finished (`done`, `cancelled`), after its last save. */
   protected finished(_s: S): void {}
+  /**
+   * Series `s` has ended and none of its routes runs any more (a cancelled series' route still stopping ends later):
+   * nothing of it is in use. Called each time the series is found so, which can be more than once: what the kind does
+   * here must be the same done twice (an ensemble set's pin removed, plugin/ensembles.ts).
+   */
+  protected settled(_s: S): void {}
 
   /** Stop listening (plugin stop). */
   close(): void {
@@ -288,7 +294,10 @@ export abstract class JobSeries<S extends SeriesRecord> {
       d.error = ev.data.message;
     } else return;
     if (s.status === 'running') this.advance(s);
-    else this.persist(s);
+    else {
+      this.persist(s);
+      if (!this.stopping(s)) this.settled(s);
+    }
   }
 
   /** Submit the next pending item's route, or finish the series when none is left. */
@@ -317,6 +326,7 @@ export abstract class JobSeries<S extends SeriesRecord> {
     this.persist(s);
     this.trim();
     this.finished(s);
+    if (!this.stopping(s)) this.settled(s);
   }
 
   /**

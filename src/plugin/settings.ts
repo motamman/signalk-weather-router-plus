@@ -16,7 +16,7 @@
  */
 
 import { DRAWBRIDGE_CHOICES, type DrawbridgeChoice } from '../engine/mesh/route';
-import { LIMIT_MODES, type LimitMode } from '../engine/legsim';
+import { DEFAULT_LIMIT_AVOID_STRENGTH, DEFAULT_LIMIT_MODE, LIMIT_MODES, type LimitMode } from '../engine/legsim';
 import * as fs from 'node:fs';
 import { HOUR_S } from '../geo/units';
 import * as path from 'node:path';
@@ -613,7 +613,7 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     label: 'Over the wind limit',
     type: 'enum',
     enum: LIMIT_MODES,
-    default: 'block',
+    default: DEFAULT_LIMIT_MODE,
     help: "block: a leg is not allowed where the wind is above the maximum (the route goes round, or fails when it cannot). avoid: it is allowed, but each hour over the maximum counts extra in the search's choices (Avoid strength), and the route shows a warning on each leg that goes over. A route request can choose (max_wind_mode).",
     reload: 'next_job',
   },
@@ -623,7 +623,7 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     label: 'Over the wave limit',
     type: 'enum',
     enum: LIMIT_MODES,
-    default: 'block',
+    default: DEFAULT_LIMIT_MODE,
     help: "block: a leg is not allowed where the significant wave height is above the maximum (the route goes round, or fails when it cannot). avoid: it is allowed, but each hour over the maximum counts extra in the search's choices (Avoid strength), and the route shows a warning on each leg that goes over. A route request can choose (max_swh_mode).",
     reload: 'next_job',
   },
@@ -635,7 +635,7 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     min: 0,
     max: 10,
     step: 0.5,
-    default: 1,
+    default: DEFAULT_LIMIT_AVOID_STRENGTH,
     help: 'How hard the route tries to stay under a limit set to avoid. Higher means it will sail further out of its way to avoid it; 0 means it never detours, it only warns. The times shown stay the real times. A route request can override it (limit_avoid_strength).',
     reload: 'next_job',
   },

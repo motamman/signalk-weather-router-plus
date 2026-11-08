@@ -38,6 +38,9 @@ function meshWestOf(eastEdge: number): { mesh: MeshLegRunner; calls: [number, nu
       // findHandover asks only `covers`; the pipeline no longer hands legs over this way (part 5, chartsLeg).
       meets: () => true,
       plan: async () => ({ refused: 'not used by these tests' }),
+      area: () => {
+        throw new Error('not used by these tests');
+      },
       leg: async a => {
         const start = a.legStart;
         const end = a.plan.end;

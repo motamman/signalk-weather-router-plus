@@ -988,7 +988,7 @@
     <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" title="Find Route computes the route on the main forecast as always, and then a route of its own on each chosen ensemble member's forecast (one after the other on the server): where each goes and when it arrives. On the map they show dotted, with the corridor they all lie in shaded under them; on the Itinerary tab, in a table."><input type="checkbox" id="ensembleOn">Route each ensemble member too</label>
     <div style="display:flex;gap:var(--s-2);align-items:flex-end;">
       <div style="flex:1;"><label for="ensembleModel">Ensemble</label><select id="ensembleModel" aria-label="Ensemble"></select></div>
-      <div style="flex:1;"><label for="ensembleMembers">Members: <span id="ensembleMembersLabel">—</span></label><input type="range" id="ensembleMembers" min="5" max="5" step="1" value="5" aria-label="Ensemble members"></div>
+      <div style="flex:1;"><label for="ensembleMembers">Members: <span id="ensembleMembersLabel">—</span></label><input type="range" id="ensembleMembers" step="1" aria-label="Ensemble members"></div>
     </div>
     <div id="ensembleRowHint" class="ctl-hint"></div>
   </div>
@@ -1075,10 +1075,10 @@
        through its first option, a slider through its "Use server setting" link. -->
   <label>Max wind: <input type="number" id="maxWind" min="0" step="1" placeholder="none" style="width:5em;" aria-label="Maximum wind speed"> <span class="unitOf" data-q="speed"></span></label>
   <label>Over the wind limit: <select id="maxWindMode" aria-label="Over the wind limit"><option value="">Server setting</option><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
-  <div class="ctl-hint">Block: legs where the forecast wind is above the limit are not allowed. Avoid: they are allowed, but time over it counts extra when choosing the route, and the route warns. Server setting: as on the Defaults tab. Empty limit = no limit.</div>
+  <div class="ctl-hint">Block: legs where the forecast wind is above the limit are not allowed. Avoid: they are allowed, but time over it counts extra when choosing the route, and the route warns. Server setting: the mode on the Defaults tab. An empty limit uses the Defaults tab's limit; with none set there, there is no limit.</div>
   <label>Max wave height: <input type="number" id="maxSwh" min="0" step="0.5" placeholder="none" style="width:5em;" aria-label="Maximum wave height"> <span class="unitOf" data-q="wave_height"></span></label>
   <label>Over the wave limit: <select id="maxSwhMode" aria-label="Over the wave limit"><option value="">Server setting</option><option value="block">Block</option><option value="avoid">Avoid</option></select></label>
-  <div class="ctl-hint">Block: legs where the significant wave height is above the limit are not allowed. Avoid: they are allowed, but time over it counts extra when choosing the route, and the route warns. Server setting: as on the Defaults tab. Empty limit = no limit.</div>
+  <div class="ctl-hint">Block: legs where the significant wave height is above the limit are not allowed. Avoid: they are allowed, but time over it counts extra when choosing the route, and the route warns. Server setting: the mode on the Defaults tab. An empty limit uses the Defaults tab's limit; with none set there, there is no limit.</div>
   <label id="limitStrengthRow" hidden>Avoid strength: <input type="range" id="limitAvoidStrength" min="0" max="10" step="0.5" value="1" style="width:8em;vertical-align:middle;" aria-label="Avoid strength"> <span id="limitAvoidStrengthValue"></span> <button type="button" class="srv-reset" id="limitAvoidStrengthReset" hidden>Use server setting</button></label>
   <div class="ctl-hint" id="limitStrengthHint" hidden>How hard the route tries to stay under a limit set to Avoid. Higher means it will sail further out of its way to avoid it. 0 means it never detours, it only warns.</div>
   <label>Comfort: <input type="range" id="comfortWeight" min="0" max="3" step="0.1" value="1" style="width:8em;vertical-align:middle;" aria-label="Comfort"> <span id="comfortWeightValue"></span> <button type="button" class="srv-reset" id="comfortWeightReset" hidden>Use server setting</button></label>

@@ -299,6 +299,24 @@ test('delete takes the window’s route jobs with it; the job trim leaves window
   fs.rmSync(h.dir, { recursive: true, force: true });
 });
 
+test('a window the API accepts is restored after a restart: its request is checked by the same rule (an empty departure: now)', () => {
+  const h = harness();
+  const req = {
+    route: { ...ROUTE, departure: '' },
+    from: new Date(T0).toISOString(),
+    to: new Date(T0 + 6 * H).toISOString(),
+    step_s: 6 * 3600,
+  };
+  assert.equal(validateWindowRequest(req), null);
+  const w = h.windows.create(req);
+  h.finish();
+  h.finish();
+  h.windows.close();
+  const h2 = harness({ dir: h.dir });
+  assert.equal(h2.windows.get(w.id)?.status, 'done');
+  fs.rmSync(h.dir, { recursive: true, force: true });
+});
+
 test('a restart: a finished window is back as it was; one in progress ends failed; jobs of windows that are gone are deleted', () => {
   const h = harness();
   const a = h.windows.create({ route: ROUTE, from: new Date(T0).toISOString(), to: new Date(T0 + 6 * H).toISOString(), step_s: 6 * 3600 });
@@ -516,6 +534,11 @@ test('a window file that cannot be read at start-up is reported and left as it i
   try {
     fs.mkdirSync(store, { recursive: true });
     fs.writeFileSync(path.join(store, 'broken.json'), '{"id": "broken", "depa');
+    // Its id and list, but none of the rest the manager reads later (its request): not one, by its schema.
+    fs.writeFileSync(
+      path.join(store, 'norequest.json'),
+      JSON.stringify({ id: 'norequest', status: 'done', created_at: '2026-11-07T00:00:00.000Z', departures: [] })
+    );
     fs.writeFileSync(path.join(store, 'other.json'), JSON.stringify({ hello: 'world' }));
     const logged: string[] = [];
     const jobs = new JobManager(dir, 50, '', m => assert.fail(`unexpected log: ${m}`));
@@ -526,6 +549,10 @@ test('a window file that cannot be read at start-up is reported and left as it i
     });
     assert.ok(logged.some(m => /^departure window file broken\.json cannot be read \(.*\); left as it is, not restored$/.test(m)));
     assert.ok(logged.includes('departure window file other.json does not hold a departure window; left as it is, not restored'));
+    assert.ok(
+      logged.includes('departure window file norequest.json does not hold a departure window; left as it is, not restored'),
+      'one without its request'
+    );
     assert.ok(fs.existsSync(path.join(store, 'broken.json')), 'left as it is');
     // A finished window whose file is a folder now (on every OS, not one that is missing): deleted from the list, the
     // folder stays, and that is said.

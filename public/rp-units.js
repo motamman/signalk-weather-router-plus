@@ -167,3 +167,43 @@ export async function fetchPresetUnits(cats) {
     return [c, { category: c, targetUnit: cat.targetUnit, displayFormat: cat.displayFormat, ...conv }];
   }));
 }
+
+// What a value whose unit is not known shows: no fallback unit.
+export const UNIT_MISSING = '—';
+// Format helpers — null-safe, return null if input is null.
+// Durations of a day or more are written as days, hours and minutes
+// (Signal K's own duration-compact format, "9d 7h 0m") whatever the user's
+// time unit: a passage of "223.0 hour" reads badly. A deliberate exception
+// to following the Signal K unit preference, for durations only; shorter
+// ones follow the preference as everything else does.
+export const LONG_DURATION_S = 86400;
+export function longDurationText(s) {
+  return Number.isFinite(s) && Math.abs(s) >= LONG_DURATION_S ? DURATION_FORMATS.formatDurationCompact(s) : null;
+}
+// The unit after the number: a space before "kn", "m", "hPa"; none before "°" and "%".
+export function unitSuffix(unit) {
+  return unit ? (unit === '°' || unit === '%' ? unit : ' ' + unit) : '';
+}
+/**
+ * A value in its base unit, written in unit `u` (unitFromDisplayUnits; null when not known: UNIT_MISSING) of quantity
+ * `key`: from a day up a 'time' is written as longDurationText writes it. The page's _fmt (rp-core.js), and pages
+ * without rp-core, write through it.
+ */
+export function formatQuantity(u, siValue, key) {
+  if (key === 'time') {
+    const long = longDurationText(siValue);
+    if (long) return long;
+  }
+  if (!u) return UNIT_MISSING;
+  if (u.text) return u.text(siValue);
+  const t = u.fn(siValue).toFixed(u.precision);
+  return (t === '-0' ? '0' : t) + unitSuffix(u.unit);
+}
+/**
+ * Unit `u` (unitFromDisplayUnits) when a number can be typed in it, else null: a duration format ("1d 2h") has no
+ * single unit to type a number in. The planner's settings (rp-settings.js) and the Signal K Admin panel
+ * (remoteEntry.js) edit durations through it.
+ */
+export function typedUnit(u) {
+  return u && u.inv && !u.text ? u : null;
+}

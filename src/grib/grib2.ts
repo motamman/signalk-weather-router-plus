@@ -188,7 +188,8 @@ export function parseGrib2Message(msg: Uint8Array): Grib2Message {
 /**
  * Read one GRIB2 message (`absOffset`: where it starts in its file, for the errors): where each section starts, then
  * its identification, grid, product (templates 4.0, 4.1 and 4.8), data representation and bit map, and its data,
- * unpacked only when asked (decode). Throws on a section that is missing, of unknown number or too short, and on a template it does not read.
+ * unpacked only when asked (decode). Throws on a section that is missing, of unknown number, too short or running past
+ * the message, and on a template it does not read.
  */
 function parseMessage(m: Uint8Array, absOffset: number): Grib2Message {
   const discipline = u8(m, 6);
@@ -196,12 +197,19 @@ function parseMessage(m: Uint8Array, absOffset: number): Grib2Message {
 
   const sec: Partial<Sections> = {};
   let p = 16;
+  // What a section may reach: the message's own length, and the buffer when it holds less (a cached message cut
+  // short on disk is refused here, by name, before any octet past the end is read).
+  const end = Math.min(length, m.length);
   while (p < length) {
     // Section 8 is the literal "7777".
     if (m[p] === 0x37 && m[p + 1] === 0x37 && m[p + 2] === 0x37 && m[p + 3] === 0x37) break;
+    if (p + 5 > end)
+      throw new Grib2Error(`message at ${absOffset} is cut short: a section header at ${absOffset + p}, ${end} octets of ${length}`);
     const secLen = u32(m, p);
     const secNum = u8(m, p + 4);
     if (secLen < 5) throw new Grib2Error(`section ${secNum} at ${absOffset + p} has length ${secLen}`);
+    if (p + secLen > end)
+      throw new Grib2Error(`section ${secNum} at ${absOffset + p} runs past the message (${secLen} octets, ${end - p} left of ${length})`);
     switch (secNum) {
       case 1:
         sec.s1 = p;

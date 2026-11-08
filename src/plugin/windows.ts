@@ -18,6 +18,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Job, JobManager, JobSeriesOf } from './jobs';
 import { Type, type Static } from 'typebox';
+import { Value } from 'typebox/value';
 import { RouteRequestSchema, validateRouteRequest } from './request_schema';
 import type { RouteRequest } from './protocol';
 import { DepartureMetricsSchema, finiteNum, JobSeries, type SeriesDeps, type SeriesItem } from './jobseries';
@@ -84,13 +85,32 @@ export const DepartureWindowSchema = Type.Object({
 });
 export type DepartureWindow = Static<typeof DepartureWindowSchema>;
 
+/** A saved window's fields but its request, which validateWindowRequest checks (WindowManager.holds). */
+const WINDOW_RECORD_SCHEMA = Type.Omit(DepartureWindowSchema, ['request']);
+
+/** A window's links (jobseries.ts links): itself, and its cancel. */
+export const WindowLinksSchema = Type.Object({ self: Type.String(), cancel: Type.String() });
+
 /** A window as the API answers it (WindowManager.toPublic): the departure computing's last progress line, and links. */
 export const WindowPublicSchema = Type.Object({
   ...DepartureWindowSchema.properties,
   progress: Type.Union([Type.String(), Type.Null()]),
-  links: Type.Object({ self: Type.String(), cancel: Type.String() }),
+  links: WindowLinksSchema,
 });
 export type WindowPublic = Static<typeof WindowPublicSchema>;
+
+/**
+ * The answer to POST /api/windows (202): the window started, by id, with how many departures it has and its links;
+ * the window itself is GET /api/windows/{id} (WindowPublicSchema). The one shape the handler answers and the OpenAPI
+ * document describes.
+ */
+export const WindowCreatedSchema = Type.Object({
+  id: Type.String(),
+  status: WindowStatusSchema,
+  departures: Type.Integer({ description: 'How many departures the window has' }),
+  links: WindowLinksSchema,
+});
+export type WindowCreated = Static<typeof WindowCreatedSchema>;
 
 /** The departure times of a window, ms: from `fromMs` every `stepS` up to `toMs` (both ends included). */
 export function windowDepartures(fromMs: number, toMs: number, stepS: number): number[] {
@@ -197,8 +217,14 @@ export class WindowManager extends JobSeries<DepartureWindow> {
     return w.departures;
   }
 
+  /**
+   * A saved file holds a window when its request passes the check the API makes before the window is created
+   * (validateWindowRequest: one rule for a window request, at creation and at restore) and its other fields fit the
+   * window's schema (DepartureWindowSchema), every field the manager reads later included. One that does not (a hand
+   * edit, an older format) is left as it is and not restored.
+   */
   protected holds(v: unknown): v is DepartureWindow {
-    return !!v && typeof v === 'object' && !!(v as DepartureWindow).id && Array.isArray((v as DepartureWindow).departures);
+    return Value.Check(WINDOW_RECORD_SCHEMA, v) && validateWindowRequest((v as { request?: unknown }).request) === null;
   }
 
   protected of(w: DepartureWindow): JobSeriesOf {

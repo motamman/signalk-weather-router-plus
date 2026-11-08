@@ -410,6 +410,25 @@ export class SmocCurrentSource implements CurrentSourceLike {
     return this.set.ensure(bbox, steps, AREA_MARGIN_CELLS, opts);
   }
 
+  /**
+   * A route leg's currents in memory: the search's whole `world`, and, when the world could be held only at the 1/3°
+   * level (too large for the per-area cap at 1/12°: ensure), the leg's `band` at 1/12° as well. The lookup answers from
+   * the finest area holding a point (ArcoAreaSet.areas), so the water along the route has the model's own cells and
+   * only the far parts of the world the coarse ones (until 2026-11-07 such a leg was routed on 1/3° currents
+   * throughout). Returns the resolution and layout answering the world (answering), for the mesh process.
+   */
+  async ensureLeg(
+    world: BBox,
+    band: BBox | null,
+    steps: number[],
+    opts: { reason: string; shouldCancel?: () => boolean }
+  ): Promise<{ res: ArcoResolution; layout: ArcoLayout } | null> {
+    await this.ensure(world, steps, opts);
+    const as = this.answering(world, steps);
+    if (band && as?.res === 'ds4') await this.ensure(band, steps, { ...opts, reason: `${opts.reason}, along the leg` });
+    return as;
+  }
+
   /** The resolution and layout of the area in memory that answers `bbox` × `steps` (ArcoAreaSet.answering), or null. */
   answering(bbox: BBox, steps: number[]): { res: ArcoResolution; layout: ArcoLayout } | null {
     return this.set.answering(bbox, steps, AREA_MARGIN_CELLS);

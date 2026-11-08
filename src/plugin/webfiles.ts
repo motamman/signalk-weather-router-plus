@@ -63,8 +63,25 @@ export function panelFilesHash(publicDir: string): string {
   return h.digest('hex').slice(0, 8);
 }
 
-/** index.html's script and style references tagPublicFiles tags (the tag, when there is one, in group 3). */
-const PAGE_REF = /(<(?:script|link)[^>]+(?:src|href)=")((?:ol|rp-[a-z]+)\.(?:js|css))(?:\?v=([0-9a-z]+))?"/g;
+/**
+ * index.html's script and style references tagPublicFiles tags (the tag, when there is one, in group 3); the plugin's
+ * /ui route (api.ts servePublic) tags the page it serves with it too.
+ */
+export const PAGE_REF = /(<(?:script|link)[^>]+(?:src|href)=")((?:ol|rp-[a-z]+)\.(?:js|css))(?:\?v=([0-9a-z]+))?"/g;
+
+/**
+ * A web app module's text with `?v=<tag>` on each of its relative import and re-export specifiers of the other modules
+ * (`import … from './rp-core.js'`, an import spread over several lines, `export { … } from './rp-units.js'`), an
+ * older tag replaced: tagPublicFiles writes it into the files, the plugin's /ui route into what it serves (api.ts
+ * servePublic), so the browser sees one URL, and one module instance, per file: an `export … from` left bare would
+ * load a second instance of the module.
+ */
+export function tagModuleSpecifiers(text: string, tag: string): string {
+  return text.replace(
+    /^(\s*(?:import\b[^'";]*?(?:\bfrom\s*)?|export\b[^'";]*\bfrom\s*)['"]\.\/rp-[a-z]+\.js)(?:\?v=[0-9a-z]+)?(['"])/gm,
+    `$1?v=${tag}$2`
+  );
+}
 
 /**
  * Write the version tag into the files on disk: index.html's script and
@@ -78,14 +95,14 @@ const PAGE_REF = /(<(?:script|link)[^>]+(?:src|href)=")((?:ol|rp-[a-z]+)\.(?:js|
  */
 export function tagPublicFiles(publicDir: string, tag: string): number {
   let n = 0;
-  const rewrite = (file: string, from: RegExp, to: string): void => {
+  const rewrite = (file: string, tagged: (text: string) => string): void => {
     let text: string;
     try {
       text = fs.readFileSync(file, 'utf8');
     } catch {
       return;
     }
-    const out = text.replace(from, to);
+    const out = tagged(text);
     if (out === text) return;
     // Written beside the file and renamed over it: a failed write leaves
     // the page or module as it was, and a request served meanwhile never
@@ -100,10 +117,10 @@ export function tagPublicFiles(publicDir: string, tag: string): number {
       throw err;
     }
   };
-  rewrite(path.join(publicDir, 'index.html'), PAGE_REF, `$1$2?v=${tag}"`);
+  rewrite(path.join(publicDir, 'index.html'), text => text.replace(PAGE_REF, `$1$2?v=${tag}"`));
   for (const f of fs.readdirSync(publicDir)) {
     if (!/^rp-[a-z]+\.js$/.test(f)) continue;
-    rewrite(path.join(publicDir, f), /^(\s*import\b[^'"\n]*['"]\.\/rp-[a-z]+\.js)(?:\?v=[0-9a-z]+)?(['"])/gm, `$1?v=${tag}$2`);
+    rewrite(path.join(publicDir, f), text => tagModuleSpecifiers(text, tag));
   }
   return n;
 }

@@ -318,6 +318,31 @@ test('smoc: on-demand areas are cached (memory and disk), deduplicated, evicted 
   const big = new SmocCurrentSource(run, { ...SETTINGS, budgetBytes: 200 * 1024 }, client);
   assert.equal(await big.ensure({ west: -60, east: 60, south: -40, north: 40 }, steps, { reason: 'route' }), true);
   assert.equal(big.onDemandAreas[0].res, 'ds4');
+  // A route leg over that world: the world at 1/3°, and its band at 1/12°, which answers along the route.
+  const leg = new SmocCurrentSource(run, { ...SETTINGS, budgetBytes: 200 * 1024 }, client);
+  const world = { west: -60, east: 60, south: -40, north: 40 };
+  const band = { west: -10, east: 10, south: -5, north: 5 };
+  assert.deepEqual(await leg.ensureLeg(world, band, steps, { reason: 'route' }), big.answering(world, steps));
+  assert.deepEqual(leg.onDemandAreas.map(a => a.res).sort(), ['ds4', 'full']);
+  assert.equal(leg.answering(band, steps)?.res, 'full', 'the band at 1/12°');
+  assert.equal(leg.answering({ west: 40, east: 50, south: 20, north: 30 }, steps)?.res, 'ds4', 'the far world at 1/3°');
+  // Along the band the values are those of a 1/12° source alone; without the band, the coarse ones.
+  const fine = new SmocCurrentSource(run, SETTINGS, client);
+  await fine.ensure(band, steps, { reason: 'reference' });
+  const t = new Date(steps[1]);
+  for (const [lon, lat] of [
+    [-7.3, 2.2],
+    [0.5, -3.75],
+    [8.9, 4.4],
+  ])
+    assert.deepEqual(leg.at(lon, lat, t), fine.at(lon, lat, t), `${lon}, ${lat}`);
+  // A world that fits at 1/12° needs no second area.
+  const small = new SmocCurrentSource(run, SETTINGS, client);
+  await small.ensureLeg({ west: -10, east: 10, south: -10, north: 10 }, band, steps, { reason: 'route' });
+  assert.deepEqual(
+    small.onDemandAreas.map(a => a.res),
+    ['full']
+  );
   // … and a box too large even for that fails clearly.
   const tiny = new SmocCurrentSource(run, { ...SETTINGS, budgetBytes: 16 * 1024 }, client);
   await assert.rejects(() => tiny.ensure({ west: -60, east: 60, south: -40, north: 40 }, steps, { reason: 'route' }), /per-area cap/);

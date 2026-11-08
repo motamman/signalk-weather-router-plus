@@ -11,19 +11,49 @@ import * as path from 'node:path';
 import { cycleFor, type EcmwfClient, ENSEMBLE_OPTIONAL_PARAMS, ENSEMBLE_PARAMS, ENSEMBLES, type IndexRecord, isGribFile } from './ecmwf';
 import { dirBytes } from './decoded';
 import { GLOBAL_CELLS } from './loader';
+import { asEnsembleMember, gribShell } from '../grib/grib2fixture';
 import {
   ENSEMBLE_DECODED_DIR,
   ENSEMBLE_GRIB_DIR,
+  clearEnsemblePins,
   ensembleCurrentFile,
   ensembleGribPath,
+  ensembleInUse,
   ensembleMembers,
   ensembleSteps,
   memberDir,
   memberRecords,
+  pinEnsembleCycle,
+  pinnedMembers,
   pruneEnsembles,
   readEnsembleCurrent,
+  recordEnsembleCycle,
   runEnsembleCycle,
+  unpinEnsembleCycle,
 } from './ensemble';
+
+test('ensembleInUse: the record as it is on disk now: none, its cycle and members, the next cycle once recorded, or its problem', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-inuse-'));
+  try {
+    assert.equal(ensembleInUse(root, 'ifs-ens'), null, 'no record');
+    fs.mkdirSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens'), { recursive: true });
+    const t1 = new Date(Date.UTC(2026, 10, 6, 6));
+    assert.equal(recordEnsembleCycle(root, 'ifs-ens', t1, [1, 2, 3], 72), null);
+    assert.deepEqual(ensembleInUse(root, 'ifs-ens'), { cycle: t1.toISOString(), members: [1, 2, 3] });
+    // A new cycle recorded: the next answer is it, with no status in between.
+    const t2 = new Date(Date.UTC(2026, 10, 6, 12));
+    assert.equal(recordEnsembleCycle(root, 'ifs-ens', t2, [1, 2, 3, 4], 72), null);
+    assert.deepEqual(ensembleInUse(root, 'ifs-ens'), { cycle: t2.toISOString(), members: [1, 2, 3, 4] });
+    // The same cycle again with another member wanted: the members recorded stay with it.
+    assert.equal(recordEnsembleCycle(root, 'ifs-ens', t2, [1, 2, 6], 72), null);
+    assert.deepEqual(ensembleInUse(root, 'ifs-ens'), { cycle: t2.toISOString(), members: [1, 2, 3, 4, 6] });
+    fs.writeFileSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json'), '{"model": "ifs-ens"');
+    const bad = ensembleInUse(root, 'ifs-ens');
+    assert.ok(bad && 'problem' in bad && /^current\.json is not JSON: /.test(bad.problem), JSON.stringify(bad));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('members: the control first where the model publishes one (AIFS ENS), then 1 to n', () => {
   assert.deepEqual(ensembleMembers(ENSEMBLES['ifs-ens'], 5), [1, 2, 3, 4, 5]);
@@ -112,13 +142,15 @@ test('prune: keeps the members wanted in the cycles kept and the pending GRIB ca
 });
 
 /**
- * A fake client for IFS ENS member 1: index records of 10 bytes for the steps in `published` (none for the others),
- * and every field it is asked for written to the cache as a GRIB-headed message; `fetched` counts those.
+ * A fake client for IFS ENS member 1: index records for the steps in `published` (none for the others), each the
+ * length of `message` (a 16-octet GRIB2 indicator section, gribShell, unless one is given), and every field it is
+ * asked for written to the cache as that message; `fetched` counts those.
  */
 function fakeClient(
   published: number[],
   /** The optional wave field in the wave indexes too (IFS ENS publishes mp2; AIFS ENS does not). */
-  withOptional = false
+  withOptional = false,
+  message: Uint8Array = gribShell()
 ): { client: EcmwfClient; indexed: number[]; fetched: () => number } {
   const indexed: number[] = [];
   let fetched = 0;
@@ -135,20 +167,67 @@ function fakeClient(
         step: String(step),
         levtype: 'sfc',
         number: '1',
-        _offset: i * 10,
-        _length: 10,
+        _offset: i * message.length,
+        _length: message.length,
       }));
     },
     fetchEnsembleField: async (_c: unknown, _m: unknown, _s: string, _k: string, _st: number, _r: unknown, p: string) => {
       fetched++;
-      const msg = new Uint8Array(Buffer.from('GRIB------'));
       fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, msg);
-      return msg;
+      fs.writeFileSync(p, message);
+      return message;
     },
   } as unknown as EcmwfClient;
   return { client, indexed, fetched: () => fetched };
 }
+
+test("pins: a running set's cycle and members stay through a prune; unpinned, they go; clearing removes every pin", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-pins-'));
+  try {
+    const mk = (...p: string[]) => fs.mkdirSync(path.join(root, ...p), { recursive: true });
+    const has = (...p: string[]) => fs.existsSync(path.join(root, ...p));
+    // The cycle in use is 2026110512 with members 1 and 2; a set started on 2026110500 routes on its members 1 and 3.
+    mk(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110500');
+    mk(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm03', '2026110500');
+    mk(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110512');
+    mk(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm02', '2026110512');
+    assert.equal(pinEnsembleCycle(root, 'ifs-ens', 'set-1', '2026110500', [1, 3]), null);
+    const logged: string[] = [];
+    assert.deepEqual(
+      pinnedMembers(root, 'ifs-ens', '2026110500', m => logged.push(m)),
+      [1, 3]
+    );
+    assert.equal(
+      pinnedMembers(root, 'ifs-ens', '2026110512', m => logged.push(m)),
+      null,
+      'no set pins the cycle in use'
+    );
+    const keep = { 'ifs-ens': { members: [1, 2], cycles: ['2026110512'], pending: null } };
+    const first = pruneEnsembles(root, keep);
+    assert.deepEqual(first.problems, []);
+    assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110500'), "the set's cycle stays");
+    assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm03', '2026110500'), "the set's member stays, though no longer wanted");
+    assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'pins', 'set-1.json'), 'the pin itself stays');
+    // The set has ended: its pin goes, and the next prune removes what only it held.
+    assert.equal(unpinEnsembleCycle(root, 'ifs-ens', 'set-1'), null);
+    assert.equal(unpinEnsembleCycle(root, 'ifs-ens', 'set-1'), null, 'the same done twice');
+    const second = pruneEnsembles(root, keep);
+    assert.deepEqual(second.problems, []);
+    assert.ok(!has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110500'));
+    assert.ok(!has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm03'));
+    assert.ok(has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01', '2026110512') && has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm02', '2026110512'));
+    // A pin file that holds no pin is reported and left; clearing removes every pin.
+    pinEnsembleCycle(root, 'ifs-ens', 'set-2', '2026110512', [1]);
+    fs.writeFileSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'pins', 'broken.json'), '{"id": "broken"}');
+    const third = pruneEnsembles(root, keep);
+    assert.deepEqual(third.problems, ['ifs-ens pin file broken.json does not hold a pin; left as it is, not restored']);
+    assert.deepEqual(clearEnsemblePins(root), []);
+    assert.ok(!has(ENSEMBLE_DECODED_DIR, 'ifs-ens', 'pins'));
+    assert.deepEqual(logged, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('prune: a folder that cannot be read is reported and left, and the rest is still pruned', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-prune-'));
@@ -171,12 +250,17 @@ test('the GRIB cache and disk-use reads: missing is none; there but unreadable t
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-reads-'));
   try {
     assert.equal(isGribFile(path.join(root, 'none.grib2')), false);
-    fs.writeFileSync(path.join(root, 'a.grib2'), 'GRIB....');
+    // A cached message is a whole GRIB2 message by its own indicator section: GRIB, and exactly the length it states.
+    fs.writeFileSync(path.join(root, 'a.grib2'), gribShell(16));
     assert.equal(isGribFile(path.join(root, 'a.grib2')), true);
+    fs.writeFileSync(path.join(root, 'cut.grib2'), gribShell(32).subarray(0, 20));
+    assert.equal(isGribFile(path.join(root, 'cut.grib2')), false, 'cut short of the length it states');
+    fs.writeFileSync(path.join(root, 'head.grib2'), 'GRIB....');
+    assert.equal(isGribFile(path.join(root, 'head.grib2')), false, 'a header with no indicator section');
     fs.mkdirSync(path.join(root, 'folder.grib2'));
     assert.throws(() => isGribFile(path.join(root, 'folder.grib2')));
     assert.equal(dirBytes(path.join(root, 'none')), 0);
-    assert.equal(dirBytes(root), 8);
+    assert.equal(dirBytes(root), 16 + 20 + 8);
     assert.throws(() => dirBytes(path.join(root, 'a.grib2')), 'a file is not a folder to walk');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -189,7 +273,7 @@ test('a cycle not finished yet stops the model at its last step, before reading 
     // IFS ENS, 6 h: steps 0, 3, 6; the server has +0 h only. One +0 h message is cached from an earlier round.
     const kept = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, 'enfo', 0, '10u');
     fs.mkdirSync(path.dirname(kept), { recursive: true });
-    fs.writeFileSync(kept, 'GRIB------');
+    fs.writeFileSync(kept, gribShell());
     const { client, indexed, fetched } = fakeClient([0]);
     const [r] = await runEnsembleCycle(client, {
       cacheRoot: root,
@@ -216,29 +300,35 @@ test('a cycle not finished yet stops the model at its last step, before reading 
 test('the disk check is asked about exactly what the pass writes, and a no stops it before anything is fetched', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
   try {
-    // One message cached already: of the 5 fields × 3 steps of 10 bytes, 14 are still to fetch.
+    // One message cached already: of the 5 fields × 3 steps of 16 bytes, 14 are still to fetch.
     const kept = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, 'waef', 3, 'swh');
     fs.mkdirSync(path.dirname(kept), { recursive: true });
-    fs.writeFileSync(kept, 'GRIB------');
+    fs.writeFileSync(kept, gribShell());
     const { client, fetched } = fakeClient([0, 3, 6]);
     const asked: number[] = [];
+    const logged: string[] = [];
     const [r] = await runEnsembleCycle(client, {
       cacheRoot: root,
       cycle: cycleFor(new Date('2026-11-05T00:00:00Z')),
       horizonS: 6 * 3600,
       models: ['ifs-ens'],
       members: 1,
-      log: () => undefined,
+      log: m => logged.push(m),
       diskCheck: bytes => {
         asked.push(bytes);
         return 'no room';
       },
     });
     // The messages by the indexes' own lengths, and one member's decoded run: 5 fields × 3 steps of one global float32 field.
-    assert.deepEqual(asked, [14 * 10 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
+    assert.deepEqual(asked, [14 * 16 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
     assert.match(r.error ?? '', /ECMWF IFS ENS 2026110500: not downloaded: no room/);
     assert.equal(fetched(), 0);
     assert.deepEqual(r.members, []);
+    // The model's line says what happened: nothing decoded, not the member it set out to decode.
+    assert.ok(
+      logged.includes('ECMWF IFS ENS 2026110500: 0 of 1 members on disk (0 decoded now, 0 fields downloaded, 0 failed)'),
+      logged.join(' | ')
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -266,10 +356,10 @@ test('the optional wave field is planned, fetched and counted only when the inde
     };
     // Without mp2 in the indexes: the five required fields, nothing else looked for.
     const without = await run(false);
-    assert.deepEqual(without.asked, [5 * 3 * 10 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
+    assert.deepEqual(without.asked, [5 * 3 * 16 + 1 * 5 * 3 * GLOBAL_CELLS * 4]);
     // With it: a sixth field per step is fetched and decoded for the member.
     const withIt = await run(true);
-    assert.deepEqual(withIt.asked, [6 * 3 * 10 + 1 * 6 * 3 * GLOBAL_CELLS * 4]);
+    assert.deepEqual(withIt.asked, [6 * 3 * 16 + 1 * 6 * 3 * GLOBAL_CELLS * 4]);
     assert.equal(withIt.fetched, 0, 'stopped by the disk check before any message');
     // A member whose required fields are all cached still has its index read, so an optional field it lacks is fetched.
     for (const step of [0, 3, 6])
@@ -277,10 +367,10 @@ test('the optional wave field is planned, fetched and counted only when the inde
         for (const p of params) {
           const f = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, stream, step, p);
           fs.mkdirSync(path.dirname(f), { recursive: true });
-          fs.writeFileSync(f, 'GRIB------');
+          fs.writeFileSync(f, gribShell());
         }
     const cachedRequired = await run(true);
-    assert.deepEqual(cachedRequired.asked, [1 * 3 * 10 + 1 * 6 * 3 * GLOBAL_CELLS * 4], 'only mp2 is still to fetch');
+    assert.deepEqual(cachedRequired.asked, [1 * 3 * 16 + 1 * 6 * 3 * GLOBAL_CELLS * 4], 'only mp2 is still to fetch');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -306,6 +396,23 @@ test('every step published: each index is read once; a step missing inside the l
       'each step file of each stream once'
     );
     assert.equal(all.fetched(), 15);
+    // A cached message cut short on disk is not a cached message (ecmwf.ts isGribFile: a whole message by the length it
+    // states): fetched again (until 2026-11-07 the pass skipped it by its header and its member failed to decode every
+    // round).
+    const short = ensembleGribPath(root, 'ifs-ens', '2026110500', 1, 'waef', 3, 'swh');
+    fs.writeFileSync(short, gribShell().subarray(0, 6));
+    const again = fakeClient([0, 3, 6]);
+    await runEnsembleCycle(again.client, {
+      cacheRoot: root,
+      cycle,
+      horizonS: 6 * 3600,
+      models: ['ifs-ens'],
+      members: 1,
+      log: () => undefined,
+      diskCheck: () => null,
+    });
+    assert.equal(again.fetched(), 1, 'the short file alone');
+    assert.equal(fs.statSync(short).size, 16, 'written over');
     fs.rmSync(path.join(root, ENSEMBLE_GRIB_DIR), { recursive: true, force: true });
     // The last step is there but +3 h is not: the full read stops at the gap.
     const gap = fakeClient([0, 6]);
@@ -333,12 +440,53 @@ test('the record of the cycle in use: none when there is no file; a file that ca
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{"model": "ifs-ens", "cy');
     assert.match(ensembleCurrentFile(root, 'ifs-ens').problem ?? '', /^current\.json is not JSON: /);
-    fs.writeFileSync(file, JSON.stringify({ model: 'aifs-ens', cycle: '2026110600', members: [0] }));
-    assert.equal(ensembleCurrentFile(root, 'ifs-ens').problem, "current.json is not a record of ifs-ens's cycle in use");
-    assert.equal(readEnsembleCurrent(root, 'ifs-ens'), null, 'none to use');
     const good = { model: 'ifs-ens', cycle: '2026110600', cycleTimeMs: 0, members: [1], horizonHours: 6, at: '' };
+    // Every field as the record is written: what reads it (the status's `new Date(cycleTimeMs)`, a member route) never
+    // meets a value that is not one.
+    for (const [bad, reason] of [
+      [{ ...good, model: 'aifs-ens' }, 'model aifs-ens'],
+      [{ ...good, cycle: '2026-11-06' }, 'cycle 2026-11-06'],
+      [{ ...good, cycleTimeMs: undefined }, 'cycleTimeMs undefined'],
+      [{ ...good, cycleTimeMs: 'x' }, 'cycleTimeMs x'],
+      [{ ...good, members: [1, 'x'] }, 'members [1,"x"]'],
+      [{ ...good, members: [51] }, 'members [51]'],
+      [{ ...good, horizonHours: null }, 'horizonHours null'],
+      [{ ...good, at: 3 }, 'at 3'],
+      [[1, 2], 'not an object'],
+    ] as const) {
+      fs.writeFileSync(file, JSON.stringify(bad));
+      assert.equal(ensembleCurrentFile(root, 'ifs-ens').problem, `current.json is not a record of ifs-ens's cycle in use (${reason})`);
+    }
+    assert.equal(readEnsembleCurrent(root, 'ifs-ens'), null, 'none to use');
     fs.writeFileSync(file, JSON.stringify(good));
     assert.deepEqual(ensembleCurrentFile(root, 'ifs-ens'), { current: good, problem: null });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a cached message of another member is refused: the member fails with 'expected member', and no run of it is left", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-'));
+  try {
+    // The server's step files answer member 1's records with member 2's message (template 4.1, member 2 of 50).
+    const { client } = fakeClient([0, 3, 6], false, asEnsembleMember(4, 2, 50));
+    const [r] = await runEnsembleCycle(client, {
+      cacheRoot: root,
+      cycle: cycleFor(new Date('2026-11-05T00:00:00Z')),
+      horizonS: 6 * 3600,
+      models: ['ifs-ens'],
+      members: 1,
+      log: () => undefined,
+      diskCheck: () => null,
+    });
+    assert.equal(r.error, undefined, 'the download itself went through');
+    assert.deepEqual(r.members, []);
+    assert.equal(r.failed.length, 1);
+    assert.equal(r.failed[0].member, 1);
+    assert.match(r.failed[0].error, /^10u \+0 h is member 2, expected member 1$/);
+    // The member's folder holds no run and no temporary run (the writer removed its own).
+    const m01 = path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'm01');
+    assert.deepEqual(fs.existsSync(m01) ? fs.readdirSync(m01) : [], [], 'no run of the member is left');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

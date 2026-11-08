@@ -5,7 +5,19 @@
 // and rp-settings.js import what they use from here.
 
 import { prefs } from './rp-prefs.js';
-import { CATEGORY_PATH, DURATION_FORMATS, fetchDisplayUnits, fetchPresetUnits, unitFromDisplayUnits } from './rp-units.js';
+import {
+  CATEGORY_PATH,
+  fetchDisplayUnits,
+  fetchPresetUnits,
+  formatQuantity,
+  LONG_DURATION_S,
+  longDurationText,
+  UNIT_MISSING,
+  unitFromDisplayUnits,
+  unitSuffix,
+} from './rp-units.js';
+// The formatting rules live in rp-units.js (pages without rp-core read them too); the page's modules import them here.
+export { LONG_DURATION_S, longDurationText, typedUnit, UNIT_MISSING, unitSuffix } from './rp-units.js';
 
 // The user's Setup choices come from the server before anything reads
 // them (rp-prefs.js): this await holds back the rest of this module and
@@ -78,7 +90,6 @@ const UNIT_CATEGORY = {
 const METRIC_LENGTH_UNITS = ['m', 'meter', 'mm', 'cm', 'km', 'kilometer'];
 const _ident = v => v;
 const WAVE_PERIOD_UNIT = { unit: 's', fn: _ident, inv: _ident, precision: 0 };
-export const UNIT_MISSING = '—';      // shown in place of a value whose unit is unresolved
 export let UI_UNITS = {};             // page quantity → {unit, fn, inv, precision[, text]}; empty until loaded
 
 // category → displayUnits (null where unresolved) → {units, missing}.
@@ -135,28 +146,9 @@ function applyDisplayUnits() {
   window.dispatchEvent(new Event('rp:units'));
 }
 
-// Format helpers — null-safe, return null if input is null.
-// Durations of a day or more are written as days, hours and minutes
-// (Signal K's own duration-compact format, "9d 7h 0m") whatever the user's
-// time unit: a passage of "223.0 hour" reads badly. A deliberate exception
-// to following the Signal K unit preference, for durations only; shorter
-// ones follow the preference as everything else does.
-export const LONG_DURATION_S = 86400;
-export function longDurationText(s) {
-  return Number.isFinite(s) && Math.abs(s) >= LONG_DURATION_S ? DURATION_FORMATS.formatDurationCompact(s) : null;
-}
 export function _fmt(siValue, key) {
   if (siValue == null) return null;
-  if (key === 'time') { const long = longDurationText(siValue); if (long) return long; }
-  const c = UI_UNITS[key];
-  if (!c) return UNIT_MISSING;
-  if (c.text) return c.text(siValue);
-  const t = c.fn(siValue).toFixed(c.precision);
-  return (t === '-0' ? '0' : t) + unitSuffix(c.unit);
-}
-// The unit after the number: a space before "kn", "m", "hPa"; none before "°" and "%".
-export function unitSuffix(unit) {
-  return unit ? (unit === '°' || unit === '%' ? unit : ' ' + unit) : '';
+  return formatQuantity(UI_UNITS[key], siValue, key);
 }
 export function fmtSpeed(ms)        { return _fmt(ms, 'speed'); }
 export function fmtDist(m)          { return _fmt(m, 'distance'); }
@@ -278,6 +270,46 @@ export function tackSide(cogDeg, windFromDeg) {
 export const TACK_COLOR = { starboard: '#2E7D32', port: '#D32F2F' };
 // A motoring leg and the marks at its start (rp-plan.js _drawRouteLegs, rp-layers.js routeLayer and the route legend).
 export const MOTOR_COLOR = '#fc4';
+/**
+ * How the map draws the route's marks, for their layers and the route legend alike (rp-layers.js _routeLegendRow), so
+ * a legend item is always drawn as its layer is: a line is { color, width, dash, cap }. Until 2026-11-07 the legend
+ * typed its own copies, and three had drifted from the map (the snap line's and the arrival circle's dashes, and a
+ * leg past the forecast).
+ */
+export const ROUTE_STYLE = {
+  /** A leg: its tack's or MOTOR_COLOR, this wide; past the end of the forecast, dashed so (rp-plan.js _drawRouteLegs). */
+  legWidth: 3,
+  beyondDash: [10, 7],
+  /** The ring and heading of the arrival (the last waypoint; the others take their next leg's colour). */
+  arrival: '#88f',
+  /** The wind arrow at each route point, pointing where the wind blows (rp-layers.js routeLayer and the legend). */
+  wind: '#1565C0',
+  /** Where the forecast runs out along the route: a diamond. */
+  forecastEnd: { fill: '#f9a825', stroke: '#fff' },
+  /** From a drawn point on land to the water it was moved to (rp-plan.js _drawSnapConnectors). */
+  snap: { color: '#7F0000', width: 2, dash: [6, 6] },
+  /** The arrival circle of an approximate waypoint (ringLayer), and its fill. */
+  arrivalCircle: { color: 'rgba(255,152,0,0.95)', width: 2, dash: [6, 4], fill: 'rgba(255,152,0,0.10)' },
+  /** The search's best path so far, and the coarse A* guide (the search layers). */
+  best: { color: 'rgba(120,40,160,0.9)', width: 2.5, dash: [6, 6] },
+  skeleton: { color: '#2060cc', width: 2, dash: [8, 4] },
+  /** Live and Simulate: a re-plan proposed, the track sailed, the routes followed before. */
+  proposed: { color: 'rgba(142, 36, 170, 0.75)', width: 4, dash: [10, 6] },
+  track: { color: 'rgba(0, 150, 170, 0.9)', width: 3 },
+  past: { color: 'rgba(120, 120, 120, 0.55)', width: 2, dash: [6, 6] },
+  /** An ensemble set (rp-plan.js): the main forecast's route, a member's, the band under the one opened, the corridor. */
+  ensMain: { color: '#1f6b8d', width: 2 },
+  ensMember: { color: '#00b8d4', width: 3.5, dash: [1, 7], cap: 'round' },
+  ensOpen: [
+    { color: 'rgba(0, 0, 0, 0.45)', width: 13 },
+    { color: 'rgba(255, 255, 255, 0.9)', width: 11 },
+  ],
+  ensCorridor: { fill: '#00b8d4', opacity: 0.15 },
+};
+/** An OpenLayers stroke drawing a ROUTE_STYLE line. */
+export function olStroke(s) {
+  return new ol.style.Stroke({ color: s.color, width: s.width, lineDash: s.dash, lineCap: s.cap });
+}
 
 // ─── Exclusive heatmap layer group ───────────────────────────────────
 // Only one full-map heatmap may be visible at a time. Wind barbs,
@@ -735,8 +767,13 @@ export function drawPolarDiagram() {
   if (info) {
     const sel = /** @type {HTMLSelectElement} */ (document.getElementById('polarSelect'));
     const it = _polarItems.find(p => p.path === (sel ? sel.value : ''));
-    info.textContent = (it ? it.label + ' — ' : '') + T.twa_deg.length + ' angles × ' + nW + ' wind speeds' + (T.performance_factor != null ? ' · performance ' + Math.round(T.performance_factor * 100) + '%' : '');
+    info.textContent = _polarInfoText(T, nW, it ? it.label : null);
   }
+}
+/** The line under the polar diagram: the polar's name, its size and its performance factor (a ratio, the account's unit). */
+function _polarInfoText(T, nW, label) {
+  return (label ? label + ' — ' : '') + T.twa_deg.length + ' angles × ' + nW + ' wind speeds'
+    + (T.performance_factor != null ? ' · performance ' + _fmt(T.performance_factor, 'ratio') : '');
 }
 // Linear interpolation of a polar row at an arbitrary TWA for curve k.
 function _polarSpeedAt(T, twa, k) {

@@ -3,7 +3,10 @@
 // drawn on canvas, or the plugin's PNG tiles), streamlines, pressure, the
 // layer toggles and the legends box. rp-plan.js imports what it uses.
 
-import { _apiError, _apiErrorText, _fmt, API, authFetch, AuthGate, fmtPressure, fmtWhen, forecastWaiting, fromClockInput, KT_MS, MOTOR_COLOR, TACK_COLOR, tackSide, UNIT_MISSING, unitDesc } from './rp-core.js';
+import { _apiError, _apiErrorText, _fmt, API, authFetch, AuthGate, fmtPressure, fmtWhen, forecastWaiting, fromClockInput, KT_MS, MOTOR_COLOR, olStroke, ROUTE_STYLE, TACK_COLOR, tackSide, UNIT_MISSING, unitDesc } from './rp-core.js';
+
+// The colours of a pressure centre: a high and a low, on the isobar layer and in its legend alike.
+const PRESSURE_CENTRE_COLOR = { high: '#1565C0', low: '#C62828' };
 
 // --- Marker features and route sources (drawn by the layers below, placed by rp-plan.js) ---
 // --- Marker features ---
@@ -50,8 +53,8 @@ export const ringLayer = new ol.layer.Vector({
   source: ringSource,
   zIndex: 15,
   style: new ol.style.Style({
-    stroke: new ol.style.Stroke({ color: 'rgba(255,152,0,0.95)', width: 2, lineDash: [6, 4] }),
-    fill: new ol.style.Fill({ color: 'rgba(255,152,0,0.10)' }),
+    stroke: olStroke(ROUTE_STYLE.arrivalCircle),
+    fill: new ol.style.Fill({ color: ROUTE_STYLE.arrivalCircle.fill }),
   }),
 });
 export const markerLayer = new ol.layer.Vector({
@@ -80,8 +83,8 @@ export const routeLayer = new ol.layer.Vector({
           new ol.style.Style({
             image: new ol.style.RegularShape({
               points: 4, radius: 11, angle: 0,
-              fill: new ol.style.Fill({ color: '#f9a825' }),
-              stroke: new ol.style.Stroke({ color: '#fff', width: 2.5 }),
+              fill: new ol.style.Fill({ color: ROUTE_STYLE.forecastEnd.fill }),
+              stroke: new ol.style.Stroke({ color: ROUTE_STYLE.forecastEnd.stroke, width: 2.5 }),
             }),
             text: new ol.style.Text({
               text: 'forecast ends' + (when ? ' ' + when : ''),
@@ -116,7 +119,7 @@ export const routeLayer = new ol.layer.Vector({
         }
       } else {
         // Last waypoint (arrival) — blue.
-        color = '#88f';
+        color = ROUTE_STYLE.arrival;
       }
       const styles = [];
       const isSelected = (feature === _selectedRouteFeature);
@@ -176,8 +179,10 @@ export const routeLayer = new ol.layer.Vector({
         const windToRad = ((windDir + 180) % 360) * Math.PI / 180;
         const offsetRad = windDir * Math.PI / 180;
         const windSvg = '<svg width="16" height="28" viewBox="0 0 16 28" xmlns="http://www.w3.org/2000/svg">' +
-          '<rect x="6" y="10" width="4" height="18" fill="%231565C0"/>' +
-          '<path d="M8,0 L1,12 L8,9 L15,12 Z" fill="%231565C0"/>' +
+          // The colour as written (ROUTE_STYLE.wind), escaped once with the rest below: until 2026-11-07 it was written
+          // escaped (%23) and escaped again, which no browser reads as a colour, and the arrows drew black.
+          '<rect x="6" y="10" width="4" height="18" fill="' + ROUTE_STYLE.wind + '"/>' +
+          '<path d="M8,0 L1,12 L8,9 L15,12 Z" fill="' + ROUTE_STYLE.wind + '"/>' +
           '</svg>';
         styles.push(new ol.style.Style({
           image: new ol.style.Icon({
@@ -209,7 +214,7 @@ function _frontColor(frac, alpha) {
 const frontLayer = new ol.layer.Vector({
   source: frontSource,
   style: f => {
-    if (f.get('kind') === 'best') return new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(120,40,160,0.9)', width: 2.5, lineDash: [6, 6] }) });
+    if (f.get('kind') === 'best') return new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.best) });
     const frac = f.get('frac') || 0, final = f.get('final');
     return new ol.style.Style({ stroke: new ol.style.Stroke({ color: _frontColor(frac, final ? 0.45 : 0.85), width: final ? 1.2 : 2 }) });
   },
@@ -218,9 +223,7 @@ const frontLayer = new ol.layer.Vector({
 // --- Skeleton layer (A* presumptive route, blue) ---
 const skeletonLayer = new ol.layer.Vector({
   source: skeletonSource,
-  style: new ol.style.Style({
-    stroke: new ol.style.Stroke({ color: '#2060cc', width: 2, lineDash: [8, 4] })
-  }),
+  style: new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.skeleton) }),
   zIndex: 16,
 });
 // The router's search: the stage fronts and best path, and the coarse A* guide. One group, so one visibility: off by
@@ -328,13 +331,7 @@ const proposedRouteLayer = new ol.layer.Vector({
   source: proposedRouteSource,
   style: function(feature) {
     if (feature.getGeometry().getType() !== 'LineString') return null;
-    return new ol.style.Style({
-      stroke: new ol.style.Stroke({
-        color: 'rgba(142, 36, 170, 0.75)',   // translucent purple
-        width: 4,
-        lineDash: [10, 6],
-      }),
-    });
+    return new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.proposed) });
   },
   zIndex: 17,
 });
@@ -346,13 +343,13 @@ const proposedRouteLayer = new ol.layer.Vector({
 export const trackSource = new ol.source.Vector();
 const trackLayer = new ol.layer.Vector({
   source: trackSource,
-  style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(0, 150, 170, 0.9)', width: 3 }) }),
+  style: new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.track) }),
   zIndex: 16,
 });
 export const pastRouteSource = new ol.source.Vector();
 const pastRouteLayer = new ol.layer.Vector({
   source: pastRouteSource,
-  style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(120, 120, 120, 0.55)', width: 2, lineDash: [6, 6] }) }),
+  style: new ol.style.Style({ stroke: olStroke(ROUTE_STYLE.past) }),
   zIndex: 15,
 });
 
@@ -1157,13 +1154,15 @@ function _heatmapCanvasSize() {
 // Land mask at canvas resolution from the plugin's coastline, so a drawn
 // layer stops exactly at the shore instead of at the data grid's land
 // flags. Bytes, 1 = land, row 0 north, same pixel mapping as the canvas.
-// Keyed by box and size; the browser also caches the response.
+// Keyed by box and size; the browser also caches the response. No channel: a request for a box is never
+// superseded by another (the cache answers the same box), and a channel per box would keep each box's controller in
+// rp-core.js's channel map for the session.
 const _landMaskCache = new Map();
 function fetchLandMask(bbox, W, H) {
   const key = bbox.join(',') + '|' + W + 'x' + H;
   if (_landMaskCache.has(key)) return _landMaskCache.get(key);
   const url = API + '/land-mask?bbox=' + bbox.join(',') + '&w=' + W + '&h=' + H;
-  const p = authFetch(url, {}, 'land-mask-' + key)
+  const p = authFetch(url, {}, null)
     .then(r => r.ok ? r.arrayBuffer() : _apiErrorText(r).then(t => Promise.reject(new Error(t))))
     .then(buf => {
       const bytes = new Uint8Array(buf);
@@ -1543,7 +1542,7 @@ const pressureLayer = new ol.layer.Vector({
     }
     if (p.kind === 'high' || p.kind === 'low') {
       const isHigh = p.kind === 'high';
-      const color = isHigh ? '#1565C0' : '#C62828';
+      const color = isHigh ? PRESSURE_CENTRE_COLOR.high : PRESSURE_CENTRE_COLOR.low;
       return [
         new ol.style.Style({
           text: new ol.style.Text({
@@ -2188,11 +2187,15 @@ export function watchEnsembleLegend(source, info) {
   source.on('change', _routeLegendSoon);
 }
 const _sym = inner => '<svg width="30" height="14" viewBox="0 0 30 14" style="vertical-align:middle;margin-right:4px;">' + inner + '</svg>';
-/** A legend symbol: a line in `color`, `width` px wide, dashed by `dash` and with the line cap `cap` when given. */
-const _lineSym = (color, width, dash, cap) =>
-  _sym('<line x1="2" y1="7" x2="28" y2="7" stroke="' + color + '" stroke-width="' + width + '"'
-    + (dash ? ' stroke-dasharray="' + dash.join(' ') + '"' : '') + (cap ? ' stroke-linecap="' + cap + '"' : '') + '/>');
+/** A legend line: in `color`, `width` px wide, dashed by `dash` and with the line cap `cap` when given. */
+const _lineEl = (color, width, dash, cap) =>
+  '<line x1="2" y1="7" x2="28" y2="7" stroke="' + color + '" stroke-width="' + width + '"'
+    + (dash ? ' stroke-dasharray="' + dash.join(' ') + '"' : '') + (cap ? ' stroke-linecap="' + cap + '"' : '') + '/>';
+/** A legend symbol: one such line. */
+const _lineSym = (color, width, dash, cap) => _sym(_lineEl(color, width, dash, cap));
 const _ringSym = color => _sym('<circle cx="15" cy="7" r="5.5" fill="none" stroke="' + color + '" stroke-width="2"/>');
+/** The legend symbol of a ROUTE_STYLE line, or of several drawn one over another (the first underneath). */
+const _styleSym = s => _sym((Array.isArray(s) ? s : [s]).map(x => _lineEl(x.color, x.width, x.dash, x.cap)).join(''));
 /** The legend's Route row: one item per kind of route mark on the map now, drawn as the map draws it; '' without any. */
 function _routeLegendRow() {
   const items = [];
@@ -2209,31 +2212,35 @@ function _routeLegendRow() {
       if (f.get('wind_dir_deg') != null) wind = true;
     }
   }
-  if (legs.has('starboard')) item(_lineSym(TACK_COLOR.starboard, 3), 'starboard tack');
-  if (legs.has('port')) item(_lineSym(TACK_COLOR.port, 3), 'port tack');
-  if (legs.has('motoring')) item(_lineSym(MOTOR_COLOR, 3), 'motoring');
-  if (beyond) item(_lineSym('#555', 3, [6, 4]), 'past the forecast');
-  if (forecastEnd) item(_sym('<rect x="11" y="3" width="8" height="8" transform="rotate(45 15 7)" fill="#f9a825" stroke="#fff" stroke-width="1.5"/>'), 'forecast ends');
+  const legW = ROUTE_STYLE.legWidth;
+  if (legs.has('starboard')) item(_lineSym(TACK_COLOR.starboard, legW), 'starboard tack');
+  if (legs.has('port')) item(_lineSym(TACK_COLOR.port, legW), 'port tack');
+  if (legs.has('motoring')) item(_lineSym(MOTOR_COLOR, legW), 'motoring');
+  // A leg past the forecast keeps its own colour: the dash is what says so, shown on a neutral grey.
+  if (beyond) item(_lineSym('#555', legW, ROUTE_STYLE.beyondDash), 'past the forecast');
+  if (forecastEnd) item(_sym('<rect x="11" y="3" width="8" height="8" transform="rotate(45 15 7)" fill="' + ROUTE_STYLE.forecastEnd.fill + '" stroke="' + ROUTE_STYLE.forecastEnd.stroke + '" stroke-width="1.5"/>'), 'forecast ends');
   if (marks) item(_ringSym(TACK_COLOR.starboard), 'waypoint, in its next leg\'s colour; the arrow is the heading');
-  if (arrival) item(_ringSym('#88f'), 'arrival');
-  if (wind) item(_sym('<path d="M4,7 H22 M22,7 L16,3 M22,7 L16,11" stroke="#1565C0" stroke-width="2.5" fill="none"/>'), 'wind, pointing where it blows');
-  if (snap) item(_lineSym('#7F0000', 2, [4, 4]), 'moved to the nearest water');
-  if (ringSource.getFeatures().length) item(_sym('<circle cx="15" cy="7" r="5.5" fill="rgba(255,152,0,0.10)" stroke="rgba(255,152,0,0.95)" stroke-width="2" stroke-dasharray="3 2"/>'), 'arrival circle (approximate waypoint)');
+  if (arrival) item(_ringSym(ROUTE_STYLE.arrival), 'arrival');
+  if (wind) item(_sym('<path d="M4,7 H22 M22,7 L16,3 M22,7 L16,11" stroke="' + ROUTE_STYLE.wind + '" stroke-width="2.5" fill="none"/>'), 'wind, pointing where it blows');
+  if (snap) item(_styleSym(ROUTE_STYLE.snap), 'moved to the nearest water');
+  const ac = ROUTE_STYLE.arrivalCircle;
+  if (ringSource.getFeatures().length) item(_sym('<circle cx="15" cy="7" r="5.5" fill="' + ac.fill + '" stroke="' + ac.color + '" stroke-width="' + ac.width + '" stroke-dasharray="' + ac.dash.join(' ') + '"/>'), 'arrival circle (approximate waypoint)');
   const ens = _ensLegendInfo ? _ensLegendInfo() : null;
-  if (ens && ens.corridor) item(_sym('<rect x="2" y="2" width="26" height="10" fill="rgba(0,184,212,0.15)"/>'), 'ensemble corridor: where all the routes lie');
-  if (ens && ens.main) item(_lineSym('#1f6b8d', 2), 'ensemble: main forecast\'s route');
-  if (ens && ens.members) item(_lineSym('#00b8d4', 3.5, [1, 7], 'round'), 'ensemble: a member\'s route');
-  if (ens && ens.open) item(_sym('<line x1="2" y1="7" x2="28" y2="7" stroke="rgba(0,0,0,0.45)" stroke-width="13"/><line x1="2" y1="7" x2="28" y2="7" stroke="rgba(255,255,255,0.9)" stroke-width="11"/>'), 'ensemble: the route opened');
+  const corridor = ROUTE_STYLE.ensCorridor;
+  if (ens && ens.corridor) item(_sym('<rect x="2" y="2" width="26" height="10" fill="' + corridor.fill + '" fill-opacity="' + corridor.opacity + '"/>'), 'ensemble corridor: where all the routes lie');
+  if (ens && ens.main) item(_styleSym(ROUTE_STYLE.ensMain), 'ensemble: main forecast\'s route');
+  if (ens && ens.members) item(_styleSym(ROUTE_STYLE.ensMember), 'ensemble: a member\'s route');
+  if (ens && ens.open) item(_styleSym(ROUTE_STYLE.ensOpen), 'ensemble: the route opened');
   if (searchLayers.getVisible()) {
     const fs = frontSource.getFeatures();
     if (fs.some(f => f.get('kind') === 'front'))
       item(_sym('<line x1="2" y1="7" x2="15" y2="7" stroke="' + _frontColor(0, 0.85) + '" stroke-width="2"/><line x1="15" y1="7" x2="28" y2="7" stroke="' + _frontColor(1, 0.85) + '" stroke-width="2"/>'), 'search fronts, early to late');
-    if (fs.some(f => f.get('kind') === 'best')) item(_lineSym('rgba(120,40,160,0.9)', 2.5, [6, 6]), 'best path so far');
-    if (skeletonSource.getFeatures().length) item(_lineSym('#2060cc', 2, [8, 4]), 'coarse A* guide');
+    if (fs.some(f => f.get('kind') === 'best')) item(_styleSym(ROUTE_STYLE.best), 'best path so far');
+    if (skeletonSource.getFeatures().length) item(_styleSym(ROUTE_STYLE.skeleton), 'coarse A* guide');
   }
-  if (proposedRouteSource.getFeatures().length) item(_lineSym('rgba(142,36,170,0.75)', 4, [10, 6]), 'proposed re-plan');
-  if (trackSource.getFeatures().length) item(_lineSym('rgba(0,150,170,0.9)', 3), 'track sailed');
-  if (pastRouteSource.getFeatures().length) item(_lineSym('rgba(120,120,120,0.55)', 2, [6, 6]), 'earlier routes');
+  if (proposedRouteSource.getFeatures().length) item(_styleSym(ROUTE_STYLE.proposed), 'proposed re-plan');
+  if (trackSource.getFeatures().length) item(_styleSym(ROUTE_STYLE.track), 'track sailed');
+  if (pastRouteSource.getFeatures().length) item(_styleSym(ROUTE_STYLE.past), 'earlier routes');
   return items.length ? '<div class="lg-row"><div class="lg-title">Route</div><div class="lg-route">' + items.join('') + '</div></div>' : '';
 }
 /** Rebuild the legend box: the Route row first, then a row for each overlay switched on. */
@@ -2278,7 +2285,7 @@ function updateLegends() {
     const scaled = _autoScaleStops.tide ? Object.assign({}, G.tide, { stops: _autoScaleStops.tide }) : G.tide;
     rows.push(_gradientRow(scaled) + '<div class="lg-note">scaled to the largest tide in the tiles loaded · relative to mean sea level, not chart datum · Copernicus Marine</div>' + '<div class="lg-note"><span style="display:inline-block;width:14px;height:9px;vertical-align:middle;margin-right:4px;border:1px solid #bbb;background:repeating-linear-gradient(135deg,rgba(96,96,96,.6) 0 1px,transparent 1px 5px);"></span>no model data: water narrower than the model grid (about ' + _fmt(9000, 'distance') + ')</div>' + _noteRow('tideToggle'));
   }
-  if (_on('pressureToggle')) rows.push('<div class="lg-row"><div class="lg-title">Pressure <span>(' + unitDesc('pressure').u + ')</span></div><div class="lg-note">isobars every ' + fmtPressure(400) + ' · bold every ' + fmtPressure(2000) + ' · <b style="color:#1565C0">H</b> / <b style="color:#C62828">L</b> centres</div>' + _noteRow('pressureToggle') + '</div>');
+  if (_on('pressureToggle')) rows.push('<div class="lg-row"><div class="lg-title">Pressure <span>(' + unitDesc('pressure').u + ')</span></div><div class="lg-note">isobars every ' + fmtPressure(400) + ' · bold every ' + fmtPressure(2000) + ' · <b style="color:' + PRESSURE_CENTRE_COLOR.high + '">H</b> / <b style="color:' + PRESSURE_CENTRE_COLOR.low + '">L</b> centres</div>' + _noteRow('pressureToggle') + '</div>');
   box.innerHTML = rows.join('');
   _foldLegend(box, rows.length);
 }

@@ -28,6 +28,19 @@ test('saveJson: saved whole, with no copy left beside it; a save that fails says
   }
 });
 
+test('saveJson with an indent: the file as people read it, each level indented, ending with a newline', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jsonfiles-'));
+  try {
+    const file = path.join(dir, 'options.json');
+    const value = { forecast: { mirror: 'aws' }, mesh: { downloads: ['01CGD'] } };
+    assert.equal(saveJson(file, value, 2), null);
+    assert.equal(fs.readFileSync(file, 'utf8'), `${JSON.stringify(value, null, 2)}\n`);
+    assert.deepEqual(fs.readdirSync(dir), ['options.json']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('removeJson: removed, or never saved, is null; a file that cannot be removed says why', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jsonfiles-'));
   try {
@@ -75,6 +88,28 @@ test('loadJsonFiles: the records, and each folder or file that cannot be read, o
       }
     );
     assert.match(none[0], /^things: .* cannot be read \(.*\); none restored$/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('saveJson: a value with no JSON form is not saved, the file left as it is, compact or indented', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-jsonfiles-'));
+  try {
+    const file = path.join(dir, 'a.json');
+    fs.writeFileSync(file, '{"id":"a"}');
+    for (const indent of [undefined, 2])
+      for (const value of [undefined, () => 1, Symbol('s')] as unknown[]) {
+        assert.match(saveJson(file, value, indent) ?? '', /^the value \((undefined|function|symbol)\) has no JSON form; nothing written$/);
+        assert.equal(fs.readFileSync(file, 'utf8'), '{"id":"a"}');
+      }
+    // One JSON cannot write (it throws): said, never thrown.
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    for (const value of [cycle, { n: 1n }])
+      assert.match(saveJson(file, value, 2) ?? '', /^the value cannot be written as JSON \([\s\S]+\); nothing written$/);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{"id":"a"}');
+    assert.deepEqual(fs.readdirSync(dir), ['a.json'], 'no partial copy');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

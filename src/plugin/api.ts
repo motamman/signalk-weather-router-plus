@@ -53,17 +53,20 @@ import { ACTIVE_POLAR_TOKEN, managedDiagram, type ManagedPolar } from './managed
 import * as fs from 'node:fs';
 import { MAX_ROUTE_REQUEST_BYTES, validateRouteRequest } from './request_schema';
 import { NotStartedError } from './errors';
+import { ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
 import { FIELD_LAYERS, isFieldLayer } from './layers';
 import { HOUR_MS } from '../geo/units';
 import * as path from 'node:path';
+import { PAGE_REF, tagModuleSpecifiers } from './webfiles';
 import * as zlib from 'node:zlib';
 import type { IRouter, Request, Response } from 'express';
 import { type JobManager, type Job } from './jobs';
-import { validateWindowRequest, WINDOW_LIMITS, type WindowManager, type WindowRequest } from './windows';
+import { validateWindowRequest, WINDOW_LIMITS, type WindowCreated, type WindowManager, type WindowRequest } from './windows';
 import {
   ENSEMBLE_SET_LIMITS,
   validateEnsembleSetRequest,
   type EnsembleSet,
+  type EnsembleSetCreated,
   type EnsembleSetManager,
   type EnsembleSetRequest,
 } from './ensembles';
@@ -142,8 +145,11 @@ export interface ApiDeps {
   sharedPrefs: SharedPrefsStore;
   /** True when Signal K runs with security off (no users, no application data). */
   securityOff: () => boolean;
-  /** The ensembles a route can run on now: each downloaded model and its member numbers on disk (empty when off). */
-  ensembles: () => { model: string; name: string; members: number[] }[];
+  /**
+   * An ensemble a route can run on now, as its record on disk says (index.ts ensembleNow, the same answer an ensemble
+   * set gets): its cycle in use and members, the problem with its record, or null when it is not chosen or not on disk.
+   */
+  ensemble: (model: EnsembleModelId) => { cycle: string; members: number[] } | { problem: string } | null;
   /** Validate, persist and apply a partial settings update. */
   updateSettings: (partial: unknown) => {
     values: AppSettings;
@@ -269,9 +275,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     if (rel === 'index.html') {
       try {
         const v = publicVersion();
-        const html = fs
-          .readFileSync(file, 'utf8')
-          .replace(/(<(?:script|link)[^>]+(?:src|href)=")((?:ol|rp-[a-z]+)\.(?:js|css))"/g, `$1$2?v=${v}"`);
+        const html = fs.readFileSync(file, 'utf8').replace(PAGE_REF, `$1$2?v=${v}"`);
         res.setHeader('Cache-Control', 'no-cache');
         res.type('html').send(html);
       } catch {
@@ -287,7 +291,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       // sees one URL (one module instance) per file and caches it hard.
       try {
         const v = publicVersion();
-        const js = fs.readFileSync(file, 'utf8').replace(/^(\s*import\b[^'"\n]*['"]\.\/rp-[a-z]+\.js)(['"])/gm, `$1?v=${v}$2`);
+        const js = tagModuleSpecifiers(fs.readFileSync(file, 'utf8'), v);
         res.type('application/javascript').send(js);
       } catch {
         res.status(404).send(`not found: ${req.path}`);
@@ -767,13 +771,19 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
    */
   const badMember = (res: Response, fm: RouteRequest['forecast_member'], field: string): boolean => {
     if (!fm) return false;
-    const have = deps.ensembles().find(e => e.model === fm.model);
+    const have = deps.ensemble(fm.model);
+    const name = ENSEMBLES[fm.model].name;
     if (!have) {
       json(res, 400, { error: `${field}: ${fm.model} is not downloaded (plugin config: Ensemble downloads)` });
       return true;
     }
+    // Its record cannot be read: said as it is, as an ensemble set is told (ensembles.ts create), not "not downloaded".
+    if ('problem' in have) {
+      json(res, 400, { error: `${field}: ${name}: ${have.problem}` });
+      return true;
+    }
     if (!have.members.includes(fm.member)) {
-      json(res, 400, { error: `${field}: ${have.name} member ${fm.member} is not on disk` });
+      json(res, 400, { error: `${field}: ${name} member ${fm.member} is not on disk` });
       return true;
     }
     return false;
@@ -1037,7 +1047,8 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     }
     const w = windows.create(req.body as WindowRequest);
     res.setHeader('Location', windows.links(w.id).self);
-    json(res, 202, { id: w.id, status: w.status, departures: w.departures.length, links: windows.links(w.id) });
+    const created: WindowCreated = { id: w.id, status: w.status, departures: w.departures.length, links: windows.links(w.id) };
+    json(res, 202, created);
   });
 
   ro.get('/api/windows', (req: Request, res: Response) => {
@@ -1110,7 +1121,8 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     }
     const s = made.set;
     res.setHeader('Location', sets.links(s.id).self);
-    json(res, 202, { id: s.id, status: s.status, members: s.members.length, links: sets.links(s.id) });
+    const created: EnsembleSetCreated = { id: s.id, status: s.status, members: s.members.length, links: sets.links(s.id) };
+    json(res, 202, created);
   });
 
   ro.get('/api/ensemble-sets', (req: Request, res: Response) => {

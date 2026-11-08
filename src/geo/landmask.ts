@@ -141,6 +141,12 @@ export class LandMask implements LandTest {
   private fillValue = 1;
   /** Keep at least this far from land, metres: the raster is grown by it and the exact tests measure to the shoreline (0 = none). */
   readonly bufferM: number = 0;
+  /**
+   * What a point or a move outside the raster is: 'land' for the coast (nothing was loaded there, so "water" would be a
+   * guess: see isLand), or 'unknown' for land added to the coast's (fromCellMasks: the depth gate of a GEBCO grid that
+   * covers only part of the search's world), which then says nothing there and the coast's mask decides.
+   */
+  readonly outside: 'land' | 'unknown' = 'land';
 
   private constructor(
     shapes: ShapePolygon[],
@@ -277,6 +283,32 @@ export class LandMask implements LandTest {
   }
 
   /**
+   * A mask of land from rasters of cells: `base` over its box, and `patches` finer inside it, the finest answering
+   * first (isLand, legCrossesRaster), as this mask's own patches do. Each patch must start on a base cell's west and
+   * south edges and have a cell size the base's is a whole multiple of, so it covers whole base cells (the walk of a
+   * move descends into a patch by the base cell's centre, pieceHitsRaster); a patch may end short of a base cell only
+   * where the base's last cell runs past the data (its east or north edge). Throws otherwise. No polygons: isLand and
+   * the leg tests answer from the rasters; isLandExact does not (it finds no polygon: water). `outside`: what is beyond the base raster (see `outside`): 'land' for the chart
+   * meshes' area (mesh/area.ts, whose base covers the search's whole world), 'unknown' for land known only where its
+   * data covers. The chart meshes' area is made so.
+   */
+  static fromCellMasks(base: CellMask, patches: CellMask[], outside: 'land' | 'unknown'): LandMask {
+    const m = new LandMask([], base.bbox, base.resolutionDeg, base.cells, { nx: base.nx, ny: base.ny });
+    (m as { outside: 'land' | 'unknown' }).outside = outside;
+    for (const p of patches) {
+      const k = base.resolutionDeg / p.resolutionDeg;
+      const dx = lonOffsetFromWest(base.bbox, p.bbox.west) / base.resolutionDeg;
+      const dy = (p.bbox.south - base.bbox.south) / base.resolutionDeg;
+      const whole = (v: number): boolean => Math.abs(v - Math.round(v)) < 1e-6;
+      if (!whole(k) || !whole(dx) || !whole(dy))
+        throw new Error(`LandMask.fromCellMasks: a patch at ${p.resolutionDeg}° is not aligned to the base's ${base.resolutionDeg}° cells`);
+      m.patches.push({ bbox: p.bbox, resolutionDeg: p.resolutionDeg, nx: p.nx, ny: p.ny, raster: p.cells });
+    }
+    m.patches.sort((a, b) => a.resolutionDeg - b.resolutionDeg);
+    return m;
+  }
+
+  /**
    * This mask keeping `bufferM` metres from land: a new mask over the
    * same polygons whose raster is the base raster grown by the buffer
    * (every cell within it of a land cell is land; a local patch made
@@ -300,7 +332,21 @@ export class LandMask implements LandTest {
       this.pieces
     );
     (m as { bufferM: number }).bufferM = bufferM;
+    (m as { outside: 'land' | 'unknown' }).outside = this.outside;
     return m;
+  }
+
+  /**
+   * This mask for one route: its raster, polygons and tiles shared (nothing is copied), with a list of patches of its
+   * own, empty, so the patches the route draws (refine, refineTiled, refineBand) go with the route and the mask a cache
+   * holds never gains any. Until 2026-11-07 a route refined the worker's cached mask itself, and with no land buffer
+   * (withBuffer then answers the cached mask) its band's patches stayed in the worker's memory after the route, until
+   * the next route on the same box cleared them.
+   */
+  routeView(): LandMask {
+    const view = Object.create(this) as LandMask;
+    (view as { patches: LandPatch[] }).patches = [];
+    return view;
   }
 
   /** Cells a buffer spans east-west and north-south at a resolution, conservative (the box's smallest cos(latitude)). */
@@ -456,11 +502,6 @@ export class LandMask implements LandTest {
     if (!(res < this.resolutionDeg)) return null;
     const patches = this.refineTiled(band, res);
     return patches.length ? { resolutionDeg: patches[0].resolutionDeg, patches: patches.length } : null;
-  }
-
-  /** Drop all local patches (a cached mask reused for another route). */
-  clearPatches(): void {
-    this.patches.length = 0;
   }
 
   /** Resolution that answers isLand at a position (finest patch covering it, else the base). */
@@ -726,7 +767,7 @@ export class LandMask implements LandTest {
   }
 
   /**
-   * Raster land test (finest patch first). Positions outside the raster are land. Nothing was
+   * Raster land test (finest patch first). Positions outside the raster are land (for the coast: `outside`). Nothing was
    * loaded there (fromCoastline loads the coastline of its box only), so "water" was a guess, and routes went over
    * islands outside the corridor box (Caribbean, 2026-10-15: Aruba, Curaçao, Bonaire, Venezuela, Barbados).
    */
@@ -738,7 +779,7 @@ export class LandMask implements LandTest {
       }
     }
     const idx = this.cellIndex(lon, lat);
-    return idx < 0 || this.raster[idx] === 1;
+    return idx < 0 ? this.outside === 'land' : this.raster[idx] === 1;
   }
 
   /** Raster land test for arrays. */
@@ -756,8 +797,8 @@ export class LandMask implements LandTest {
    * centre is classified as water by the hierarchy, so the whole cell is water.
    */
   isLandExact(lon: number, lat: number): boolean {
-    // Outside the box nothing is loaded; unknown is land (see isLand).
-    if (this.cellIndex(lon, lat) < 0 && !this.inAnyPatch(lon, lat)) return true;
+    // Outside the box nothing is loaded; unknown is land for the coast (see isLand, `outside`).
+    if (this.cellIndex(lon, lat) < 0 && !this.inAnyPatch(lon, lat)) return this.outside === 'land';
     if (this.edgeCells && this.hasPolygons) {
       for (const p of this.patches) {
         const pi = patchIndex(p, lon, lat);
@@ -855,7 +896,7 @@ export class LandMask implements LandTest {
     const yP = latP - this.bbox.south;
     const yQ = latQ - this.bbox.south;
     return walkGrid(xP / r, yP / r, xQ / r, yQ / r, (i, j, t0, t1) => {
-      if (i < 0 || i >= this.nx || j < 0 || j >= this.ny) return true; // outside the raster: land, as isLand
+      if (i < 0 || i >= this.nx || j < 0 || j >= this.ny) return this.outside === 'land'; // outside the raster: as isLand
       if (this.patches.length) {
         const lonC = this.bbox.west + (i + 0.5) * r;
         const latC = this.bbox.south + (j + 0.5) * r;
@@ -905,7 +946,7 @@ export class LandMask implements LandTest {
     // An end outside the box is on unknown ground, which is land (see isLand). It was a fall
     // through to the polygons, which hold nothing there: legs over unloaded islands passed, each after a scan of
     // every coastline ring near the leg (up to 1.8 s a check, the polish's 9 minutes on the Caribbean route).
-    if (this.cellIndex(lonA, latA) < 0 || this.cellIndex(lonB, latB) < 0) return true;
+    if (this.outside === 'land' && (this.cellIndex(lonA, latA) < 0 || this.cellIndex(lonB, latB) < 0)) return true;
     if (this.edgeCells && this.hasPolygons && !this.legCrossesRaster(lonA, latA, lonB, latB)) return false;
     if (!this.hasPolygons) return this.legCrossesRaster(lonA, latA, lonB, latB);
     if (this.isLandPolygons(lonA, latA) || this.isLandPolygons(lonB, latB)) return true;
@@ -1004,24 +1045,21 @@ export class LandMask implements LandTest {
   }
 
   /**
-   * This mask with the cells of `extra` set to 1 answering as land too (part 5: the chart mesh's water, which the
-   * coastline search must not enter; a cell is the mesh's when a mesh triangle holds its centre). The four checks
-   * the router makes, and the room along a bearing, say "land" in such a cell or for a move through one (the cells a
-   * move passes are walked exactly). A view over this mask, as withAvoid.
+   * This mask with `extra` answering as land too: a raster of land beside the coast's (a cell mask through
+   * cellMaskLand: the chart meshes' water, part 5, which the coastline search must not enter; or another LandMask,
+   * whose own base and patches answer finest first, as this one's do). The four checks the router makes, and the room
+   * along a bearing, say "land" where `extra` does or for a move through it (the cells a move passes are walked
+   * exactly, by `extra`'s own walk). A view over this mask, as withAvoid.
    */
-  withExtraLand(extra: CellMask): LandMask {
+  withExtraLand(extra: ExtraLand): LandMask {
     const view = Object.create(this) as LandMask;
-    const at = (lon: number, lat: number): boolean => {
-      const c = cellOf(extra, lon, lat);
-      return c >= 0 && extra.cells[c] === 1;
-    };
-    view.isLand = (lon: number, lat: number): boolean => this.isLand(lon, lat) || at(lon, lat);
-    view.isLandExact = (lon: number, lat: number): boolean => this.isLandExact(lon, lat) || at(lon, lat);
+    view.isLand = (lon: number, lat: number): boolean => this.isLand(lon, lat) || extra.isLand(lon, lat);
+    view.isLandExact = (lon: number, lat: number): boolean => this.isLandExact(lon, lat) || extra.isLand(lon, lat);
     view.legCrossesLandExact = (lonA: number, latA: number, lonB: number, latB: number): boolean =>
-      this.legCrossesLandExact(lonA, latA, lonB, latB) || moveMeetsCells(extra, lonA, latA, lonB, latB);
+      this.legCrossesLandExact(lonA, latA, lonB, latB) || extra.legCrossesRaster(lonA, latA, lonB, latB);
     view.legsCrossLandBulk = (lonsA, latsA, lonsB, latsB): Uint8Array => {
       const out = this.legsCrossLandBulk(lonsA, latsA, lonsB, latsB);
-      for (let k = 0; k < out.length; k++) if (!out[k] && moveMeetsCells(extra, lonsA[k], latsA[k], lonsB[k], latsB[k])) out[k] = 1;
+      for (let k = 0; k < out.length; k++) if (!out[k] && extra.legCrossesRaster(lonsA[k], latsA[k], lonsB[k], latsB[k])) out[k] = 1;
       return out;
     };
     return view;
@@ -1212,6 +1250,26 @@ export interface CellMask {
   nx: number;
   ny: number;
   cells: Uint8Array;
+}
+
+/**
+ * Land added to a mask (LandMask.withExtraLand): the raster test of a point and the walk of a move's cells, as a
+ * LandMask answers them (its base raster and patches, finest first) or a cell mask does through cellMaskLand.
+ */
+export interface ExtraLand {
+  isLand(lon: number, lat: number): boolean;
+  legCrossesRaster(lonA: number, latA: number, lonB: number, latB: number): boolean;
+}
+
+/** A cell mask as extra land: a marked cell is land; outside the mask it says nothing (the mask that holds it answers). */
+export function cellMaskLand(m: CellMask): ExtraLand {
+  return {
+    isLand: (lon, lat) => {
+      const c = cellOf(m, lon, lat);
+      return c >= 0 && m.cells[c] === 1;
+    },
+    legCrossesRaster: (lonA, latA, lonB, latB) => moveMeetsCells(m, lonA, latA, lonB, latB),
+  };
 }
 
 /** The cell of a position in a cell mask, or -1 outside it. */
