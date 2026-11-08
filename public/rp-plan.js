@@ -3604,6 +3604,19 @@ function _fmtHpa(pa)   { return fmtPressure(pa) || '—'; }
 function _fmtDegC(k)   { return fmtTemp(k) || '—'; }
 function _fmtMmH(rate) { return fmtPrecip(rate) || '—'; }
 function _fmtDir(deg)  { return deg == null ? '' : ' ' + degToCardinal(deg) + ' (' + fmtAngleDeg(deg) + ')'; }
+// ======================================================================
+// EXCEPTION TO THE UNITS RULE (the owner's decision, 2026-11-08). The
+// energy fields' fluxes (W/m²) and MUCAPE (J/kg) are SI and written in
+// them, their symbols here: Signal K defines no unit for either (its unit
+// definitions on the test box, 2026-11-08), so there is no account unit to
+// show them in. Every flux and MUCAPE on the page is written with these.
+// ======================================================================
+const _FLUX_UNIT = { fn: v => v, u: 'W/m²', p: 0 };
+const _CAPE_UNIT = { fn: v => v, u: 'J/kg', p: 0 };
+/** A flux or MUCAPE value in its unit above; "—" without a value. */
+function _energyText(v, unit) {
+  return v == null ? '—' : unit.fn(v).toFixed(unit.p) + ' ' + unit.u;
+}
 function _rowCells(r) {
   return '<td>' + (fmtSpeed(r.wind_ms) || '—') + (r.gust_ms != null ? ' / ' + fmtSpeed(r.gust_ms) : '') + _fmtDir(r.wind_dir_deg) + '</td>'
        + '<td>' + (r.swh_m == null ? '—' : (fmtSwh(r.swh_m) + (r.mwp_s != null ? ' / ' + fmtWavePeriod(r.mwp_s) : '') + _fmtDir(r.mwd_deg))) + '</td>'
@@ -3612,7 +3625,7 @@ function _rowCells(r) {
        + '<td>' + _fmtDegC(r.t2m_k) + ' / ' + ((_cond && _cond.isLand) ? '—' : _fmtDegC(r.skt_k)) + '</td>'
        + '<td>' + _fmtMmH(r.precip_rate_ms) + (r.precip_m != null ? ' / ' + fmtDepth(r.precip_m) : '') + '</td>'
        + '<td>' + (r.precip_type_label || '—') + '</td>'
-       + '<td>' + (r.ssrd_wm2 == null ? '—' : r.ssrd_wm2.toFixed(0) + ' W/m²') + '</td>'
+       + '<td>' + _energyText(r.ssrd_wm2, _FLUX_UNIT) + '</td>'
        + '<td>' + (r.cloud_cover == null ? '—' : _fmt(r.cloud_cover, 'ratio')) + '</td>'
        + '<td>' + _fmtDegC(r.feels_like_k) + (r.feels_like_basis && r.feels_like_basis !== 'air' ? ' (' + r.feels_like_basis.replace('_', ' ') + ')' : '') + '</td>'
        + '<td>' + (r.rh == null ? '—' : _fmt(r.rh, 'ratio')) + '</td>'
@@ -3711,17 +3724,14 @@ const _COND_TABS = [
               + (r.interval_s != null ? ' · depth over ' + fmtTime(r.interval_s) : '') },
   // Surface fluxes from the energy fields (off by default): average solar
   // and thermal radiation over each step's interval (the tab hides when
-  // they carry no data), with instability in the readout. The fluxes (W/m²)
-  // and MUCAPE (J/kg) are SI and shown as the server sends them, their units
-  // written here: Signal K defines no unit for either (its unit definitions on
-  // the test box, 2026-11-08), so there is no account unit to show them in
-  // (the owner's decision, 2026-11-08: left as they are).
+  // they carry no data), with instability in the readout; in _FLUX_UNIT and
+  // _CAPE_UNIT (the exception to the units rule there).
   { id: 'energy', label: 'Energy',
-    lines: [{ key: 'ssrd_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#f9a825', name: 'solar' },
-            { key: 'strd_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#ef6c00', name: 'IR down', dash: [4, 3] },
-            { key: 'str_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#6d4c41', name: 'IR net', dash: [2, 3] }],
+    lines: [{ key: 'ssrd_wm2', unit: () => _FLUX_UNIT, color: '#f9a825', name: 'solar' },
+            { key: 'strd_wm2', unit: () => _FLUX_UNIT, color: '#ef6c00', name: 'IR down', dash: [4, 3] },
+            { key: 'str_wm2', unit: () => _FLUX_UNIT, color: '#6d4c41', name: 'IR net', dash: [2, 3] }],
     hover: r => (r.interval_s != null ? ' · average over ' + fmtTime(r.interval_s) : '')
-              + (r.mucape_jkg == null ? '' : ' · MUCAPE ' + r.mucape_jkg.toFixed(0) + ' J/kg') },
+              + (r.mucape_jkg == null ? '' : ' · MUCAPE ' + _energyText(r.mucape_jkg, _CAPE_UNIT)) },
   { id: 'raw', label: 'Raw' },
 ];
 let _condTab = 'wind';

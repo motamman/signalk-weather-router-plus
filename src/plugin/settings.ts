@@ -16,7 +16,7 @@
  */
 
 import { DRAWBRIDGE_CHOICES, type DrawbridgeChoice } from '../engine/mesh/route';
-import { DEFAULT_LIMIT_MODE, LIMIT_MODES, type LimitMode } from '../engine/legsim';
+import { DEFAULT_LIMIT_AVOID_STRENGTH, DEFAULT_LIMIT_MODE, LIMIT_MODES, type LimitMode } from '../engine/legsim';
 import * as fs from 'node:fs';
 import { HOUR_S } from '../geo/units';
 import * as path from 'node:path';
@@ -635,7 +635,7 @@ export const SETTINGS_SPEC: readonly SettingSpec[] = [
     min: 0,
     max: 10,
     step: 0.5,
-    default: 1,
+    default: DEFAULT_LIMIT_AVOID_STRENGTH,
     help: 'How hard the route tries to stay under a limit set to avoid. Higher means it will sail further out of its way to avoid it; 0 means it never detours, it only warns. The times shown stay the real times. A route request can override it (limit_avoid_strength).',
     reload: 'next_job',
   },

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { HOUR_S } from '../geo/units';
 import assert from 'node:assert/strict';
+import { DEFAULT_LIMIT_AVOID_STRENGTH } from '../engine/legsim';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -587,4 +588,11 @@ test('tokenless polar previews follow the source preference, while explicit auto
     const local = await call('GET', '/api/polars/table', undefined, { path: 'default' });
     assert.equal((local.body as { source: string }).source, 'internal');
   }
+});
+
+test("the Avoid strength setting's default is the engine's (DEFAULT_LIMIT_AVOID_STRENGTH)", () => {
+  const spec = SETTINGS_SPEC.find(s => s.key === 'routing.limitAvoidStrength');
+  assert.ok(spec);
+  assert.equal(spec.default, DEFAULT_LIMIT_AVOID_STRENGTH);
+  assert.equal(defaultSettings().routing.limitAvoidStrength, DEFAULT_LIMIT_AVOID_STRENGTH);
 });
