@@ -389,13 +389,16 @@ let _currentRouteJobId = null;
 /**
  * The route on screen becomes job `id` (null: none) named `name`. Every change of the screen goes through here, and
  * each one supersedes every request still in flight for the route before (its route, skeleton and fronts:
- * abortRouteRequests): aborted, a body read with it, so no answer from before the change is ever drawn, a Clear with
- * nothing on screen included.
+ * abortRouteRequests): aborted, a body read with it; a route job's event stream stops being followed at its next event
+ * (attachToJob onScreen), and a LIVE re-plan fired for the route before is dropped (rp:route-on-screen). So no answer
+ * from before the change is ever drawn, a Clear with nothing on screen included.
  */
 function _setRouteOnScreen(id, name) {
   abortRouteRequests();
   _currentRouteJobId = id;
   _currentRouteName = name;
+  // LIVE drops a re-plan fired for the route before (rp:route-on-screen).
+  window.dispatchEvent(new CustomEvent('rp:route-on-screen', { detail: id }));
 }
 
 function _jobLabel(j) {
@@ -3043,8 +3046,19 @@ function attachToJob(id, jobRow) {
   // current), timing, the line count, and the last front seen.
   const wps = jobRow && jobRow.request && Array.isArray(jobRow.request.waypoints) ? jobRow.request.waypoints.length : 0;
   const job = { id, es, statusEl, t0: Date.now(), lineCount: 0, lastFrontLeg: -1, lastFrontStage: 0, legs: wps + 1 };
+  // The stream acts only while its job is the route on screen: once another route is opened or the map cleared
+  // (_setRouteOnScreen), its next event ends the following here (the job goes on computing on the server and Saved lists
+  // it), and nothing of it is drawn over the route on screen, its done, error, fronts and progress included.
+  const onScreen = () => {
+    if (_activeJobES !== es) return false;
+    if (_currentRouteJobId === id) return true;
+    _closeJobStream();
+    _computeUiIdle();
+    RouteProgress.hide();
+    return false;
+  };
   const mine = handler => ev => {
-    if (_activeJobES !== es) return;
+    if (!onScreen()) return;
     let d = null; try { d = JSON.parse(ev.data); } catch (_) {}
     if (d) handler(job, d);
   };
@@ -3053,13 +3067,13 @@ function attachToJob(id, jobRow) {
   es.addEventListener('frontier', mine(_jobOnFrontier));
   es.addEventListener('route', () => { /* the result is fetched separately (large payload) */ });
   es.addEventListener('done', ev => {
-    if (_activeJobES !== es) return;
+    if (!onScreen()) return;
     _closeJobStream();
     let d = null; try { d = JSON.parse(ev.data); } catch (_) {}
     _jobOnDone(job, d);
   });
   es.addEventListener('error', ev => {
-    if (_activeJobES !== es) return;
+    if (!onScreen()) return;
     _jobOnError(job, ev);
   });
 }
@@ -4851,6 +4865,7 @@ function _meteoRouteChanged() {
   const triggers = createLiveTriggers();
   let replanBusy = false;     // a re-plan job is running
   let replanGen = 0;          // bumped when Live stops: a late result is dropped
+  let replanRouteId = null; // the route on screen the re-plan computing or proposed was fired for
 
   // SIMULATE: Live mode with a simulated boat sailing the route on the
   // map instead of the Signal K position, for trying the triggers ashore.
@@ -5278,6 +5293,7 @@ function _meteoRouteChanged() {
   // then; its route goes on the map without a second prompt.
   function fireReplan({ kind, distM, start, vias, departureMs, autoAccept = false }) {
     lastReplanVias = vias;
+    replanRouteId = _currentRouteJobId;
     // SIMULATE: hold the boat where the re-plan starts from, now, not at the next update.
     if (simMode && sim) { sim.holdAt(departureMs, Date.now()); simPaused = true; }
     const reason = replanReason(kind, distM);
@@ -5415,6 +5431,15 @@ function _meteoRouteChanged() {
     dismissProposal();
   }
 
+  // A re-plan computing, or its proposal waiting, is for the route on screen it was fired for (replanRouteId): another
+  // route put on screen (opened from Saved, the map cleared from the map menu: neither stops LIVE) drops it as Cancel
+  // does, so it is never drawn or accepted over that route.
+  window.addEventListener('rp:route-on-screen', (/** @type {CustomEvent} */ e) => {
+    if (e.detail === replanRouteId) return;
+    if (replanBusy) cancelReplan();
+    else if (banner.dataset.geojson) dismissProposal();
+  });
+
   function renderProposal(geojson, reason) {
     setBannerButtons('ready');
     proposedRouteSource.clear();
@@ -5461,7 +5486,11 @@ function _meteoRouteChanged() {
 
   // Put an accepted re-plan on the map in place of the route being followed.
   function applyRoute(geojson, jobId) {
-    if (jobId) _setRouteOnScreen(jobId, _currentRouteName);
+    if (jobId) {
+      // The re-plan's own route: the screen moves to it, which drops nothing (rp:route-on-screen).
+      replanRouteId = jobId;
+      _setRouteOnScreen(jobId, _currentRouteName);
+    }
     // The route being followed stays as a faint line (pastRouteSource).
     if (_routePoints.length >= 2) {
       pastRouteSource.addFeature(new ol.Feature(new ol.geom.LineString(unwrapLonLats(_routePoints.map(p => p.lonLat)).map(c => ol.proj.fromLonLat(c)))));

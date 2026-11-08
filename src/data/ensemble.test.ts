@@ -306,13 +306,14 @@ test('the disk check is asked about exactly what the pass writes, and a no stops
     fs.writeFileSync(kept, gribShell());
     const { client, fetched } = fakeClient([0, 3, 6]);
     const asked: number[] = [];
+    const logged: string[] = [];
     const [r] = await runEnsembleCycle(client, {
       cacheRoot: root,
       cycle: cycleFor(new Date('2026-11-05T00:00:00Z')),
       horizonS: 6 * 3600,
       models: ['ifs-ens'],
       members: 1,
-      log: () => undefined,
+      log: m => logged.push(m),
       diskCheck: bytes => {
         asked.push(bytes);
         return 'no room';
@@ -323,6 +324,11 @@ test('the disk check is asked about exactly what the pass writes, and a no stops
     assert.match(r.error ?? '', /ECMWF IFS ENS 2026110500: not downloaded: no room/);
     assert.equal(fetched(), 0);
     assert.deepEqual(r.members, []);
+    // The model's line says what happened: nothing decoded, not the member it set out to decode.
+    assert.ok(
+      logged.includes('ECMWF IFS ENS 2026110500: 0 of 1 members on disk (0 decoded now, 0 fields downloaded, 0 failed)'),
+      logged.join(' | ')
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

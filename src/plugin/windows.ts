@@ -85,6 +85,9 @@ export const DepartureWindowSchema = Type.Object({
 });
 export type DepartureWindow = Static<typeof DepartureWindowSchema>;
 
+/** A saved window's fields but its request, which validateWindowRequest checks (WindowManager.holds). */
+const WINDOW_RECORD_SCHEMA = Type.Omit(DepartureWindowSchema, ['request']);
+
 /** A window's links (jobseries.ts links): itself, and its cancel. */
 export const WindowLinksSchema = Type.Object({ self: Type.String(), cancel: Type.String() });
 
@@ -215,12 +218,13 @@ export class WindowManager extends JobSeries<DepartureWindow> {
   }
 
   /**
-   * A saved file holds a window when it is one by the window's own schema (DepartureWindowSchema), every field the
-   * manager reads later included: one that is not (a hand edit, an older format) is left as it is and not restored
-   * (until 2026-11-07 only `id` and `departures` were checked).
+   * A saved file holds a window when its request passes the check the API makes before the window is created
+   * (validateWindowRequest: one rule for a window request, at creation and at restore) and its other fields fit the
+   * window's schema (DepartureWindowSchema), every field the manager reads later included. One that does not (a hand
+   * edit, an older format) is left as it is and not restored.
    */
   protected holds(v: unknown): v is DepartureWindow {
-    return Value.Check(DepartureWindowSchema, v);
+    return Value.Check(WINDOW_RECORD_SCHEMA, v) && validateWindowRequest((v as { request?: unknown }).request) === null;
   }
 
   protected of(w: DepartureWindow): JobSeriesOf {

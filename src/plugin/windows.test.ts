@@ -299,6 +299,24 @@ test('delete takes the window’s route jobs with it; the job trim leaves window
   fs.rmSync(h.dir, { recursive: true, force: true });
 });
 
+test('a window the API accepts is restored after a restart: its request is checked by the same rule (an empty departure: now)', () => {
+  const h = harness();
+  const req = {
+    route: { ...ROUTE, departure: '' },
+    from: new Date(T0).toISOString(),
+    to: new Date(T0 + 6 * H).toISOString(),
+    step_s: 6 * 3600,
+  };
+  assert.equal(validateWindowRequest(req), null);
+  const w = h.windows.create(req);
+  h.finish();
+  h.finish();
+  h.windows.close();
+  const h2 = harness({ dir: h.dir });
+  assert.equal(h2.windows.get(w.id)?.status, 'done');
+  fs.rmSync(h.dir, { recursive: true, force: true });
+});
+
 test('a restart: a finished window is back as it was; one in progress ends failed; jobs of windows that are gone are deleted', () => {
   const h = harness();
   const a = h.windows.create({ route: ROUTE, from: new Date(T0).toISOString(), to: new Date(T0 + 6 * H).toISOString(), step_s: 6 * 3600 });

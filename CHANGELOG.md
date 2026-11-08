@@ -116,17 +116,44 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A route being computed no longer draws over a route opened or a map
+  cleared meanwhile.** Its progress stream went on after the route on
+  screen changed: its fronts were drawn over the route opened, its result
+  replaced it when done, and a failure put back the route from before it.
+  The stream now stops at its next event once its route is no longer the
+  one on screen; the route goes on computing on the server and Saved lists
+  it.
+- **A LIVE re-plan no longer replaces a route opened meanwhile.** Opening
+  a saved route, or clearing the map from the map menu, does not stop
+  LIVE, and a re-plan computing then, or its proposal waiting, was still
+  for the route before: once done it was drawn over the route opened (an
+  accepted one went straight onto the map), or a cleared map filled again.
+  A re-plan or proposal is now dropped, as Cancel drops it, when another
+  route is put on screen.
+- **A chart-mesh leg reads the forecast run the rest of the leg reads.** A
+  leg's forecast is read from the run in use when the leg starts, but the
+  chart mesh process was given the run in use when the route started, an
+  older one once a new cycle had loaded in between; the leg's memory check
+  sized that older run too. The mesh process now gets the run the leg's
+  forecast was read from, the memory check sizes that run, and the regional
+  wind's grid is matched to it.
+- **An ensemble's download line counts only the members decoded.** It
+  said every member still to do was "decoded now" when the download failed
+  before any was; it now counts the members on disk at the end of the
+  pass.
 - **The route's wind arrows are blue again, as the legend shows them.**
   Their colour was written already escaped and then escaped again, which
   no browser reads as a colour: the arrows drew black (checked in Chrome
   154, 2026-11-07: the arrow's shaft read back as 0, 0, 0). The colour is
   now written once (`ROUTE_STYLE.wind`) and the legend reads the same
   one; so do the pressure layer's H and L centres and their legend.
-- **A saved set or window is checked against its own schema before it is
-  restored.** Only its id and its list of routes were checked, so a file
-  without the rest (a hand edit, an older format) was restored and then
-  failed every read of its owner's sets or windows. It is now left as it
-  is and reported, as an unreadable file is.
+- **A saved set or window is checked before it is restored, by the rules
+  it was accepted by.** Only its id and its list of routes were checked, so
+  a file without the rest (a hand edit, an older format) was restored and
+  then failed every read of its owner's sets or windows. Its request is now
+  checked as the API checks it when the set or window is made, and the rest
+  against the record's schema; one that fails is left as it is and
+  reported, as an unreadable file is.
 - **The warnings list stays open while an ensemble set computes.** Each
   poll of the set (every 3 s) redrew the route summary, and every redraw
   closed the list, in the summary and in its Itinerary copy. Whether the

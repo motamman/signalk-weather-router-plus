@@ -587,26 +587,34 @@ export interface WindowRead {
  * (its bracket indices) are computed from the run actually read: pass
  * them as a function of the run; static options as an object. With
  * `pinned`, that run is read and no other (a query reading several windows
- * must not mix two runs): a pruned one is an ENOENT for the caller.
+ * must not mix two runs): a pruned one is an ENOENT for the caller. With
+ * `admit`, the bytes a run's window will hold are given to it before that
+ * run is read, whichever run it is (the retry's included); it throws to
+ * refuse the read (a route's memory check).
  */
 export async function readWindow(
   st: WorkerState,
   what: string,
   opts: WindowOptions | ((run: DecodedRun) => WindowOptions),
-  pinned?: DecodedRun
+  pinned?: DecodedRun,
+  admit?: (bytes: number) => void
 ): Promise<WindowRead> {
   const r = pinned ?? st.run;
   if (!r) throw new Error('no forecast loaded');
-  const forRun = (run: DecodedRun): WindowOptions => (typeof opts === 'function' ? opts(run) : opts);
+  const readOf = (run: DecodedRun): Promise<ForecastStore> => {
+    const o = typeof opts === 'function' ? opts(run) : opts;
+    admit?.(run.windowBytes(o));
+    return run.window(o);
+  };
   const t = Date.now();
   let store: ForecastStore;
   let read = r;
   try {
-    store = await r.window(forRun(r));
+    store = await readOf(r);
   } catch (err) {
     if (!pinned && (err as NodeJS.ErrnoException).code === 'ENOENT' && st.run && st.run !== r) {
       read = st.run;
-      store = await st.run.window(forRun(st.run));
+      store = await readOf(st.run);
     } else throw err;
   }
   const bytes = store.bytes();

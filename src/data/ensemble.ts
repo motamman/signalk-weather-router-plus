@@ -440,8 +440,10 @@ export async function runEnsembleCycle(client: EcmwfClient, o: EnsembleCycleOpti
     }
     // What is on disk now; the data worker records the cycle in use from it (recordEnsembleCycle).
     r.members = want.filter(m => memberComplete(o.cacheRoot, id, m, name, horizonHours));
+    // Decoded now: those this pass set out to decode that are on disk now (a download that stopped decoded none).
+    const decodedNow = todo.filter(m => r.members.includes(m)).length;
     log(
-      `${model.name} ${name}: ${r.members.length} of ${want.length} members on disk (${todo.length - r.failed.length} decoded now, ${r.downloaded} fields downloaded, ${r.failed.length} failed)`
+      `${model.name} ${name}: ${r.members.length} of ${want.length} members on disk (${decodedNow} decoded now, ${r.downloaded} fields downloaded, ${r.failed.length} failed)`
     );
     out.push(r);
   }

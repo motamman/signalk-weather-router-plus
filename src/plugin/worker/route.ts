@@ -818,16 +818,20 @@ export async function route(
     const departureMs = request.departure ? Date.parse(request.departure) : Date.now();
     const useForecast = routeUsesForecast(request);
     if (request.no_forecast) progress(0, 0, 'no_forecast set: routing with calm wind');
-    // The forecast the route reads: the run in use, or one ensemble member's (ensembles.ts: one route per member).
+    // The forecast the route reads: the run in use when each leg's area is read (loadAreas), or one ensemble member's
+    // (ensembles.ts: one route per member).
     const member = request.forecast_member && useForecast ? memberRun(st, request.forecast_member) : null;
-    const forecastRun = member ? member.run : st.run;
     if (member) progress(0, 0, `forecast: ${member.name} member ${member.member} (run ${member.cycle}), no regional wind`);
+    // The decoded run the leg's forecast area was read from (readWindow: the member's run, or the run in use when the
+    // leg's area is read, newer than the one in use at the route's start once a cycle has loaded meanwhile), or null
+    // before one is read or with none (the crop); cleared with the areas.
+    let legRun: DecodedRun | null = null;
     /**
-     * The run the chart mesh process reads for a leg, after the leg's areas are loaded: the route's run, else the crop
-     * loadAreas decoded from the GRIB cache, written as a run once per crop.
+     * The run the chart mesh process reads for a leg, after the leg's areas are loaded: the run the leg's forecast was
+     * read from (legRun), else the crop loadAreas decoded from the GRIB cache, written as a run once per crop.
      */
     const meshForecast = (): DecodedRun => {
-      if (forecastRun) return forecastRun;
+      if (legRun) return legRun;
       const crop = st.routeWindow;
       if (!crop) throw new Error("the chart mesh leg was started before the route's forecast area was loaded");
       let c = cropRun;
@@ -866,7 +870,7 @@ export async function route(
         path.join(st.cacheRoot, REGIONAL_DIR),
         area,
         departureMs,
-        forecastRun?.index.grid.dLon ?? GLOBAL_DLON_DEG
+        legRun?.index.grid.dLon ?? GLOBAL_DLON_DEG
       )) {
         const { name, run, grid: g, firstMs, lastMs } = r;
         const steps = run.index.steps;
@@ -920,13 +924,15 @@ export async function route(
         // The route area of the forecast: the corridor box plus a margin, the
         // fields the engine reads, every step. Held only while this route runs.
         const area = expandBBox(bbox, ROUTE_FORECAST_MARGIN_DEG);
-        if (forecastRun) {
+        if (member || st.run) {
           const opts: WindowOptions = { bbox: area, params: ROUTE_PARAMS, marginCells: 1 };
-          const need = forecastRun.windowBytes(opts);
-          const mem = checkRouteForecastMemory(need, cfg.forecast.memoryHeadroomBytes);
-          if (!mem.ok) throw new Error(mem.message);
           const t0 = Date.now();
-          const { store } = await readWindow(st, `job ${id} ${what}`, opts, member ? member.run : undefined);
+          // The memory is checked for the run that is read (readWindow admit), the run in use now on the main forecast.
+          const { store, run: read } = await readWindow(st, `job ${id} ${what}`, opts, member ? member.run : undefined, need => {
+            const mem = checkRouteForecastMemory(need, cfg.forecast.memoryHeadroomBytes);
+            if (!mem.ok) throw new Error(mem.message);
+          });
+          legRun = read;
           st.routeWindow = store;
           st.send({ type: 'forecast-memory', memory: { ...st.forecastMemory } });
           progress(
@@ -995,6 +1001,7 @@ export async function route(
       }
       releaseRegional();
       dropCropRun();
+      legRun = null;
       wind = null;
       smocLeg = null;
       if (st.smoc) st.smoc.trimOnDemand(0);

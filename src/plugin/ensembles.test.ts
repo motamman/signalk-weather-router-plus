@@ -295,6 +295,31 @@ test('a set found running at start-up that cannot be saved, nor its partial copy
   }
 });
 
+test('a set the API accepts is restored after a restart: its request is checked by the same rule (an empty departure: now)', () => {
+  const h = harness();
+  try {
+    assert.equal(validateEnsembleSetRequest({ route: { ...ROUTE, departure: '' }, model: 'aifs-ens', members: 5 }), null);
+    const s = made(h.sets.create({ route: { ...ROUTE, departure: '' }, model: 'aifs-ens', members: 5 }));
+    h.sets.cancel(s.id);
+    const stopping = h.jobs.runningId;
+    if (stopping) h.jobs.onError(stopping, 'cancelled', true);
+    const logged: string[] = [];
+    const again = new EnsembleSetManager(
+      new JobManager(h.dir, 50, '/p', m => logged.push(m)),
+      h.dir,
+      { cancelRunning: () => undefined, onDisk: () => ({ cycle: CYCLE, members: [0, 1, 2, 3, 4, 5] }), log: m => logged.push(m) },
+      '/p'
+    );
+    assert.equal(again.get(s.id)?.request.route.departure, '');
+    assert.deepEqual(
+      logged.filter(m => m.includes('not restored')),
+      []
+    );
+  } finally {
+    fs.rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+
 test('a set file that cannot be read at start-up is reported and left as it is; a set whose file cannot be deleted says so', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-ens-sets-'));
   const store = path.join(dir, 'ensemble-sets');

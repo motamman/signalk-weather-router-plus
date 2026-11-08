@@ -90,6 +90,9 @@ export const EnsembleSetSchema = Type.Object({
 });
 export type EnsembleSet = Static<typeof EnsembleSetSchema>;
 
+/** A saved set's fields but its request, which validateEnsembleSetRequest checks (EnsembleSetManager.holds). */
+const SET_RECORD_SCHEMA = Type.Omit(EnsembleSetSchema, ['request']);
+
 /** A set's links (jobseries.ts links): itself, and its cancel. */
 export const EnsembleSetLinksSchema = Type.Object({ self: Type.String(), cancel: Type.String() });
 
@@ -245,12 +248,13 @@ export class EnsembleSetManager extends JobSeries<EnsembleSet> {
   }
 
   /**
-   * A saved file holds a set when it is one by the set's own schema (EnsembleSetSchema), every field the manager reads
-   * later included: one that is not (a hand edit, an older format) is left as it is and not restored, rather than
-   * restored and failing every read of its owner's sets (until 2026-11-07 only `id` and `members` were checked).
+   * A saved file holds a set when its request passes the check the API makes before the set is created
+   * (validateEnsembleSetRequest: one rule for a set request, at creation and at restore) and its other fields fit the
+   * set's schema (EnsembleSetSchema), every field the manager reads later included. One that does not (a hand edit, an
+   * older format) is left as it is and not restored, rather than restored and failing every read of its owner's sets.
    */
   protected holds(v: unknown): v is EnsembleSet {
-    return Value.Check(EnsembleSetSchema, v);
+    return Value.Check(SET_RECORD_SCHEMA, v) && validateEnsembleSetRequest((v as { request?: unknown }).request) === null;
   }
 
   protected of(s: EnsembleSet): JobSeriesOf {
