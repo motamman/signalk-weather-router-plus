@@ -157,7 +157,7 @@ test('conditions rows: gust, cloud cover, interval depth and fluxes appear only 
   assert.equal(r.gust_ms, 9);
   assert.equal(r.cloud_cover, 0.75);
   assert.equal(r.precip_m, 0.004);
-  assert.equal(r.interval_h, 3);
+  assert.equal(r.interval_s, 3 * 3600);
   assert.equal(r.ssrd_wm2, 333);
   assert.equal(r.mucape_jkg, 1200);
   assert.equal(r.snowfall_m, null);
@@ -165,12 +165,12 @@ test('conditions rows: gust, cloud cover, interval depth and fluxes appear only 
   // Mid-interval: the containing interval's values, unblended.
   const mid = sampleConditions(src, -69, 41, new Date(Date.UTC(2026, 8, 27, 1, 30)));
   assert.equal(mid.precip_m, 0.004);
-  assert.equal(mid.interval_h, 3);
+  assert.equal(mid.interval_s, 3 * 3600);
   // Step 0: no gust and no interval values.
   const r0 = sampleConditions(src, -69, 41, new Date(Date.UTC(2026, 8, 27)));
   assert.equal(r0.gust_ms, null);
   assert.equal(r0.precip_m, null);
-  assert.equal(r0.interval_h, null);
+  assert.equal(r0.interval_s, null);
   assert.equal(r0.cloud_cover, 0.75, 'tcc is instant: it is in every step, unlike the interval fields');
   // A run without the fields: the columns stay null, the rest keeps coming.
   const bare = new ForecastStore(

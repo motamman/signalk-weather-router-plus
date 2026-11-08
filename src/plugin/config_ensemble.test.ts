@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveEnsemble } from './config';
+import { ENSEMBLE_DOWNLOAD_NOTE, ENSEMBLE_MEMBER_COST, resolveEnsemble } from './config';
 
 test('ensemble downloads: off unless enabled, and off reads and checks nothing of the setting', () => {
   assert.equal(resolveEnsemble(undefined), null);
@@ -31,4 +31,17 @@ test('ensemble downloads: models that are not a list (an options file edited by 
       /^Error: config forecast\.ensemble\.models: .* is not a list of ensembles/,
       JSON.stringify(models)
     );
+});
+
+test("the ensembles' cost note says which figures were measured and which are arithmetic, as ENSEMBLE_MEMBER_COST's are", () => {
+  assert.match(
+    ENSEMBLE_DOWNLOAD_NOTE,
+    /on disk: measured on the (plugin's )?test box, Pi 5, 2026-11-06; downloaded: arithmetic, per member from the totals? measured there on 2026-11-05\)\.$/
+  );
+  assert.ok(
+    !/\(measured on the test box, Pi 5, 2026-11-05 and 2026-11-06\)/.test(ENSEMBLE_DOWNLOAD_NOTE),
+    'not every figure is said to be measured'
+  );
+  // An AIFS ENS member's download is the total measured for the six members downloaded (the control and five) over six.
+  assert.equal(ENSEMBLE_MEMBER_COST.downloadBytes['aifs-ens'], 206_788_659 / 6);
 });

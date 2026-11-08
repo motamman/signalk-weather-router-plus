@@ -96,6 +96,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The conditions rows give their interval in seconds.** `interval_h`
+  (hours) is now `interval_s`, in `GET /api/conditions` and `GET /api/routes/{id}/meteogram`, as every other field is SI; a
+  client reading `interval_h` reads `interval_s` instead. The meteogram's
+  hovers show the interval in the account's time unit.
 - **Motoring legs are amber**, as their waypoint marks already were; they
   were black.
 - **An ensemble set's opened route sits on a white band** with a dark
@@ -123,6 +127,25 @@ uses [Semantic Versioning](https://semver.org/).
   The stream now stops at its next event once its route is no longer the
   one on screen; the route goes on computing on the server and Saved lists
   it.
+- **Relative humidity, a leg's time and the polar's performance show in
+  the account's units.** The conditions table and the Temp tab wrote
+  relative humidity as a percentage they worked out themselves, the
+  itinerary wrote each leg's time as hours and minutes, and the polar
+  picker the performance factor as a percentage, whatever the account had
+  chosen. They now go through the page's unit helpers, as the rest of the
+  page does.
+- **Best departure's and the ensemble's tables show times in the
+  account's time unit.** They converted seconds themselves and wrote d, h
+  and m beside the numbers, whatever unit the account had chosen; the
+  passage, motoring and upwind times now show as the rest of the page shows
+  times (days, hours and minutes from a day up).
+- **An accepted LIVE re-plan takes the departures compared and the
+  ensemble set off the screen**, with the route it replaces, as opening
+  another route does; they stayed, though the route on screen was no
+  longer one of theirs.
+- **The ensembles' cost note says which figures are arithmetic.** It
+  called every figure measured; the download per member is the measured
+  total divided by the members downloaded.
 - **A LIVE re-plan no longer replaces a route opened meanwhile.** Opening
   a saved route, or clearing the map from the map menu, does not stop
   LIVE, and a re-plan computing then, or its proposal waiting, was still

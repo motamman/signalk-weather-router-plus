@@ -177,3 +177,75 @@ test("the warnings list stays open when the strip is drawn again (a set's poll r
   render(route, []);
   assert.equal(list.hidden, true, 'closed again, and kept closed');
 });
+
+test("the ensemble table's passage and motor times are the account's time unit (fmtTime), and a missing one is —", () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../public/rp-plan.js'), 'utf8');
+  const cells = [source.indexOf('function _unitCell('), source.indexOf("/** A route job's status in words")];
+  const render = [source.indexOf('function _ensRender('), source.indexOf('\n}\n', source.indexOf('function _ensRender(')) + 3];
+  assert.ok(cells[0] > 0 && cells[1] > cells[0] && render[0] > 0 && render[1] > render[0], 'the slices of rp-plan.js are found');
+  const el = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] };
+  const context = {
+    _lastRouteProps: null,
+    _ensSource: { changed: () => undefined },
+    _currentRouteJobId: null,
+    _ens: {
+      name: 'ECMWF IFS ENS',
+      cycle: '2026-11-07T00:00:00Z',
+      main: null,
+      members: [{ member: 1, job_id: 'j1', status: 'done', metrics: { arrival: 'a', total_time_s: 100000, motoring_time_s: null } }],
+    },
+    document: { getElementById: () => el },
+    unitDesc: () => ({ fn: (v: number) => v, u: 'u', p: 0 }),
+    fmtTime: (s: number) => `time(${s})`,
+    escapeHtml: String,
+    fmtWhen: String,
+    _winWhen: String,
+    _shortUtc: String,
+    _ensWho: () => 'member 1',
+    _ensOpen: () => undefined,
+  };
+  const draw = runInNewContext(
+    `${source.slice(cells[0], cells[1])}\n${source.slice(render[0], render[1])}\n_ensRender`,
+    context
+  ) as () => void;
+  draw();
+  assert.ok(el.innerHTML.includes('<td>time(100000)</td><td>—</td>'), el.innerHTML);
+});
+
+test('an accepted re-plan takes the screen as an opened route does: the set and the departures compared leave it', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../public/rp-plan.js'), 'utf8');
+  const helpers = [
+    source.indexOf("/** Whether route job `id` is one of the ensemble set's on screen"),
+    source.indexOf(' * The set of a route:'),
+  ];
+  const from = source.indexOf('  function applyRoute(');
+  const to = source.indexOf('\n  }\n', from) + 5;
+  assert.ok(helpers[0] > 0 && helpers[1] > helpers[0] && from > 0 && to > from, 'the slices of rp-plan.js are found');
+  const gone: string[] = [];
+  const context = {
+    _win: { departures: [{ job_id: 'dep-1' }] },
+    _ens: { main: { job_id: 'main-1' }, members: [{ job_id: 'member-1' }] },
+    _winRouteGone: () => gone.push('window'),
+    _ensGone: (cancel: boolean) => gone.push(`set (cancel ${cancel})`),
+    _setRouteOnScreen: () => undefined,
+    _currentRouteName: 'A',
+    _routePoints: [],
+    displayRoute: () => undefined,
+    _useRouteAngles: () => undefined,
+    updatePlanHint: () => undefined,
+    simMode: false,
+  };
+  // The page's own state (rp-plan.js), declared as it is there; the last /** of the helpers' slice is the next doc's.
+  const code = `let replanRouteId = null;\nlet routeActive = false;\nlet _routeStale = false;
+${source.slice(helpers[0], source.lastIndexOf('/**', helpers[1]))}\n${source.slice(from, to)}
+({ apply: applyRoute, takes: _routeTakesScreen })`;
+  const page = runInNewContext(code, context) as { apply: (g: object, id: string) => void; takes: (id: string) => void };
+  page.apply({}, 'replan-1');
+  assert.deepEqual(gone, ['window', 'set (cancel false)'], "a re-plan's route is neither the window's nor the set's");
+  // A route of theirs keeps them: a member keeps the set, a departure the window.
+  gone.length = 0;
+  page.takes('member-1');
+  page.takes('main-1');
+  page.takes('dep-1');
+  assert.deepEqual(gone, ['window', 'window', 'set (cancel false)']);
+});

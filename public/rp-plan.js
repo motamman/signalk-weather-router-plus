@@ -524,10 +524,7 @@ function _loadRouteJob(id, given, { computed = false } = {}) {
     return;
   }
   _setRouteOnScreen(id, job && job.request ? (job.request.name || '') : '');
-  // Another saved route: the departures compared for the one before leave the screen; one of the window's own keeps them.
-  if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
-  // The same for the ensemble set: one of its members' routes keeps it, another route takes it off the screen.
-  if (!_ens || !(_ens.members.some(m => m.job_id === id) || (_ens.main && _ens.main.job_id === id))) _ensGone(false);
+  _routeTakesScreen(id);
   _ensForRoute(id);
   authFetch(API + '/routes/' + encodeURIComponent(id) + '/result', { cache: 'no-store' }, ROUTE_OPEN_CHANNEL)
     .then(r => r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(Object.assign(new Error(t), { status: r.status }))))
@@ -2108,7 +2105,7 @@ function _legDescription(p, isArrival) {
   const add = (label, v) => { if (v != null && v !== '') parts.push(label + ' ' + v); };
   if (!isArrival) {
     add('Distance', p.leg_distance_m != null ? fmtDist(p.leg_distance_m) : null);
-    if (p.leg_time_s != null) { const m = Math.round(p.leg_time_s / 60); add('Time', Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0')); }
+    add('Time', p.leg_time_s != null ? fmtTime(p.leg_time_s) : null);
     add('SOG', p.next_sog_ms != null ? fmtSpeed(p.next_sog_ms) : null);
     if (cogDeg != null) add('COG', degToCardinal(cogDeg) + ' ' + fmtAngleDeg(cogDeg));
   }
@@ -2335,15 +2332,8 @@ function _legCardHtml(f, i, cw) {
   // has no next leg so both fields are absent (filtered out by _kv).
   const distStr = p.leg_distance_m != null
                 ? fmtDist(p.leg_distance_m) : null;
-  // Leg time in H:MM (zero-padded minutes; hours unbounded).
-  const legTimeStr = (() => {
-    const s = p.leg_time_s;
-    if (s == null) return null;
-    const totalMin = Math.round(s / 60);
-    const h = Math.floor(totalMin / 60);
-    const m = totalMin % 60;
-    return `${h}:${String(m).padStart(2, '0')}`;
-  })();
+  // Leg time in the account's time unit.
+  const legTimeStr = p.leg_time_s != null ? fmtTime(p.leg_time_s) : null;
 
   const fields = [
     _kv('Distance', distStr),
@@ -2858,6 +2848,10 @@ function _ensCorridor() {
 }
 /** A table cell's number in the user's unit (`ud`: unitDesc), or — when there is none or the unit is not known (Best departure's and the ensemble's tables). */
 function _unitCell(v, ud) { return v == null || ud.missing ? '—' : ud.fn(v).toFixed(ud.p); }
+/** A duration in a table cell (Best departure's and the ensemble's tables), in the account's time unit (fmtTime); "—" without one. */
+function _timeCell(s) {
+  return s == null ? '—' : fmtTime(s);
+}
 /** A route job's status in words, for a row without a route (Best departure's and the ensemble's tables). */
 const _JOB_STATUS_TEXT = { pending: 'waiting', queued: 'queued', running: 'computing…', failed: 'no route', cancelled: 'cancelled', skipped: 'skipped' };
 /**
@@ -2906,7 +2900,7 @@ function _ensRender() {
     const x = m.metrics;
     return '<tr data-job="' + escapeHtml(m.job_id) + '" style="cursor:pointer;"' + opened + ' title="Click to open this member\'s route">'
       + '<td>' + (m.who ? '<b>' + who + '</b>' : who) + '</td><td title="' + escapeHtml(fmtWhen(x.arrival)) + '">' + escapeHtml(_winWhen(x.arrival)) + '</td>'
-      + '<td>' + _winDuration(x.total_time_s, true) + '</td><td>' + _winDuration(x.motoring_time_s) + '</td>'
+      + '<td>' + _timeCell(x.total_time_s) + '</td><td>' + _timeCell(x.motoring_time_s) + '</td>'
       + '<td>' + _unitCell(x.max_wind_ms, speedU) + '</td><td>' + _unitCell(x.max_swh_m, waveU) + '</td></tr>';
   });
   el.innerHTML = '<details' + (open ? ' open' : '') + '><summary>' + escapeHtml(set.name) + ' (' + _shortUtc(set.cycle) + '): the route on each of ' + set.members.length + ' members</summary>'
@@ -2937,12 +2931,24 @@ function _ensOpen(jobId) {
     });
 }
 window.addEventListener('rp:units', _ensRender);
+/** Whether route job `id` is one of the ensemble set's on screen: its main forecast's route or a member's. */
+function _ensHolds(id) {
+  return !!_ens && ((_ens.main && _ens.main.job_id === id) || _ens.members.some(m => m.job_id === id));
+}
+/**
+ * Route job `id` takes the screen (opened from Saved, a departure or a member, an accepted LIVE re-plan): the
+ * departures compared and the ensemble set on screen leave it, unless the route is one of theirs.
+ */
+function _routeTakesScreen(id) {
+  if (!_win || !_win.departures.some(d => d.job_id === id)) _winRouteGone();
+  if (!_ensHolds(id)) _ensGone(false);
+}
 /**
  * The set of a route: its main forecast's route names it (request.main_job_id). Looked up whenever that route is
  * opened or followed (a saved route, a reload while it computes), so the set comes and goes with its route.
  */
 function _ensForRoute(id) {
-  if (_ens && ((_ens.main && _ens.main.job_id === id) || _ens.members.some(m => m.job_id === id))) return;
+  if (_ensHolds(id)) return;
   const screen = _ensScreen;
   authFetch(API + '/ensemble-sets?limit=12', { cache: 'no-store' }, null)
     .then(r => (r.ok ? r.json() : _apiErrorText(r).then(t => Promise.reject(new Error(t)))))
@@ -3609,7 +3615,7 @@ function _rowCells(r) {
        + '<td>' + (r.ssrd_wm2 == null ? '—' : r.ssrd_wm2.toFixed(0) + ' W/m²') + '</td>'
        + '<td>' + (r.cloud_cover == null ? '—' : _fmt(r.cloud_cover, 'ratio')) + '</td>'
        + '<td>' + _fmtDegC(r.feels_like_k) + (r.feels_like_basis && r.feels_like_basis !== 'air' ? ' (' + r.feels_like_basis.replace('_', ' ') + ')' : '') + '</td>'
-       + '<td>' + (r.rh == null ? '—' : (r.rh * 100).toFixed(0) + ' %') + '</td>'
+       + '<td>' + (r.rh == null ? '—' : _fmt(r.rh, 'ratio')) + '</td>'
        + '<td>' + (r.beaufort == null ? '—' : 'F' + r.beaufort) + '</td>'
        + '<td>' + (r.douglas == null ? '—' : r.douglas + ' ' + (r.douglas_label || '')) + '</td>'
        + '<td>' + (r.sea_state_index == null ? '—' : r.sea_state_index.toFixed(0) + ' ' + (r.sea_state || '') + (r.sea_state_partial ? '*' : '')) + '</td>'
@@ -3694,7 +3700,7 @@ const _COND_TABS = [
             { key: 'feels_like_k', unit: () => unitDesc('temperature'), color: '#8e24aa', name: 'feels like', width: 2.4 },
             { key: 'wind_chill_k', unit: () => unitDesc('temperature'), color: '#00838f', name: 'wind chill', dash: [4, 3] },
             { key: 'heat_index_k', unit: () => unitDesc('temperature'), color: '#c62828', name: 'heat index', dash: [4, 3] }],
-    hover: r => (r.rh == null ? '' : ' · RH ' + (r.rh * 100).toFixed(0) + ' %')
+    hover: r => (r.rh == null ? '' : ' · RH ' + _fmt(r.rh, 'ratio'))
               + (r.dewpoint_k == null ? '' : ' · dew point ' + _fmtDegC(r.dewpoint_k)) },
   { id: 'precip', label: 'Precip', overlays: [['precipToggle', 'Precip']],
     lines: [{ key: 'precip_rate_ms', unit: () => unitDesc('precip'), color: '#2e7d32', name: 'rate' },
@@ -3702,15 +3708,19 @@ const _COND_TABS = [
             { key: 'snowfall_m', unit: () => unitDesc('depth'), color: '#546e7a', name: 'snow (water eq.)', dash: [4, 3], axis: 'right' }],
     colorBy: { key: 'precip_type_label', colors: _PRECIP_COLORS },
     hover: r => (r.precip_type_label && r.precip_type_label !== 'none' ? ' · ' + r.precip_type_label : '')
-              + (r.interval_h != null ? ' · depth over ' + r.interval_h + ' h' : '') },
+              + (r.interval_s != null ? ' · depth over ' + fmtTime(r.interval_s) : '') },
   // Surface fluxes from the energy fields (off by default): average solar
   // and thermal radiation over each step's interval (the tab hides when
-  // they carry no data), with instability in the readout.
+  // they carry no data), with instability in the readout. The fluxes (W/m²)
+  // and MUCAPE (J/kg) are SI and shown as the server sends them, their units
+  // written here: Signal K defines no unit for either (its unit definitions on
+  // the test box, 2026-11-08), so there is no account unit to show them in
+  // (the owner's decision, 2026-11-08: left as they are).
   { id: 'energy', label: 'Energy',
     lines: [{ key: 'ssrd_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#f9a825', name: 'solar' },
             { key: 'strd_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#ef6c00', name: 'IR down', dash: [4, 3] },
             { key: 'str_wm2', unit: () => ({ fn: v => v, u: 'W/m²', p: 0 }), color: '#6d4c41', name: 'IR net', dash: [2, 3] }],
-    hover: r => (r.interval_h != null ? ' · average over ' + r.interval_h + ' h' : '')
+    hover: r => (r.interval_s != null ? ' · average over ' + fmtTime(r.interval_s) : '')
               + (r.mucape_jkg == null ? '' : ' · MUCAPE ' + r.mucape_jkg.toFixed(0) + ' J/kg') },
   { id: 'raw', label: 'Raw' },
 ];
@@ -4432,15 +4442,6 @@ function _winPoll(id) {
     });
 }
 
-// A duration for the table: to the minute for the passage (departures a few
-// minutes apart must compare), "4d 5h 47m"; to the hour otherwise, "2d 17h",
-// minutes only under an hour.
-function _winDuration(s, toMinute) {
-  if (s == null) return '—';
-  const m = Math.round(s / 60), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mi = m % 60;
-  if (!toMinute && m >= 60) { const hr = Math.round(m / 60); return (hr >= 24 ? Math.floor(hr / 24) + 'd ' : '') + (hr % 24) + 'h'; }
-  return (d ? d + 'd ' : '') + (d || h ? h + 'h ' : '') + mi + 'm';
-}
 // A departure in the table: weekday, day and time in ship's time ("Wed 21, 16:00").
 function _winWhen(iso) {
   return fmtClock(iso, { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -4479,7 +4480,6 @@ function _winRender() {
     + (running ? ', ' + left + ' to go' + (w.progress ? ' · ' + unitText(w.progress) : '') : w.status === 'done' ? '' : ' · ' + w.status + (w.error ? ' (' + w.error + ')' : ''));
   const sortId = _winSortId();
   const best = _winBest(w, sortId);
-  const t = _winDuration;
   // Numbers in the cells, the unit in the header (the panel is narrow).
   const speedU = unitDesc('speed'), waveU = unitDesc('wave_height');
   let html = '<div class="win-sort"><label for="windowSort" style="margin:0;">Best by</label><select id="windowSort" aria-label="Rank the departures by">'
@@ -4495,8 +4495,8 @@ function _winRender() {
       return;
     }
     html += '<tr class="' + cls + '" data-job="' + escapeHtml(d.job_id) + '" title="Arrives ' + escapeHtml(fmtWhen(m.arrival)) + '. Click to open this departure’s route' + (m.beyond_forecast ? ' (arrives after the forecast ends: its last legs ran on conditions held at the last step)' : '') + '">'
-      + '<td>' + lead + '</td><td>' + t(m.total_time_s, true) + (m.beyond_forecast ? ' *' : '') + '</td>'
-      + '<td>' + _unitCell(m.max_wind_ms, speedU) + '</td><td>' + _unitCell(m.max_swh_m, waveU) + '</td><td>' + t(m.motoring_time_s) + '</td><td>' + t(m.upwind_time_s) + '</td></tr>';
+      + '<td>' + lead + '</td><td>' + _timeCell(m.total_time_s) + (m.beyond_forecast ? ' *' : '') + '</td>'
+      + '<td>' + _unitCell(m.max_wind_ms, speedU) + '</td><td>' + _unitCell(m.max_swh_m, waveU) + '</td><td>' + _timeCell(m.motoring_time_s) + '</td><td>' + _timeCell(m.upwind_time_s) + '</td></tr>';
   });
   html += '</tbody></table></div>';
   if (w.departures.some(d => d.metrics && d.metrics.beyond_forecast)) html += '<div class="ctl-hint">* arrives after the forecast ends; not ranked.</div>';
@@ -5490,6 +5490,7 @@ function _meteoRouteChanged() {
       // The re-plan's own route: the screen moves to it, which drops nothing (rp:route-on-screen).
       replanRouteId = jobId;
       _setRouteOnScreen(jobId, _currentRouteName);
+      _routeTakesScreen(jobId);
     }
     // The route being followed stays as a faint line (pastRouteSource).
     if (_routePoints.length >= 2) {

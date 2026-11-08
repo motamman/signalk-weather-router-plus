@@ -265,7 +265,7 @@ export const ENSEMBLE_DOWNLOAD_NOTE =
   `${Math.round(ENSEMBLE_MEMBER_COST.diskBytes['ifs-ens'] / 1e6)} MB on disk (arithmetic from the test box's measures with five fields, ` +
   "2026-11-05 and 2026-11-06, plus its sixth field, the wave period mp2, at the main forecast's measured message size), an AIFS ENS member about " +
   `${Math.round(ENSEMBLE_MEMBER_COST.downloadBytes['aifs-ens'] / 1e6)} MB downloaded and ${Math.round(ENSEMBLE_MEMBER_COST.diskBytes['aifs-ens'] / 1e6)} MB on disk ` +
-  '(measured on the test box, Pi 5, 2026-11-05 and 2026-11-06).';
+  '(on disk: measured on the test box, Pi 5, 2026-11-06; downloaded: arithmetic, per member from the total measured there on 2026-11-05).';
 
 /** The ensemble downloads when the config says nothing: off; on, IFS ENS with 5 members. The schema and resolveEnsemble read these. */
 export const ENSEMBLE_DEFAULTS: { enabled: boolean; models: EnsembleModelId[]; members: number } = {

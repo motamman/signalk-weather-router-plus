@@ -775,8 +775,13 @@ export function drawPolarDiagram() {
   if (info) {
     const sel = /** @type {HTMLSelectElement} */ (document.getElementById('polarSelect'));
     const it = _polarItems.find(p => p.path === (sel ? sel.value : ''));
-    info.textContent = (it ? it.label + ' — ' : '') + T.twa_deg.length + ' angles × ' + nW + ' wind speeds' + (T.performance_factor != null ? ' · performance ' + Math.round(T.performance_factor * 100) + '%' : '');
+    info.textContent = _polarInfoText(T, nW, it ? it.label : null);
   }
+}
+/** The line under the polar diagram: the polar's name, its size and its performance factor (a ratio, the account's unit). */
+function _polarInfoText(T, nW, label) {
+  return (label ? label + ' — ' : '') + T.twa_deg.length + ' angles × ' + nW + ' wind speeds'
+    + (T.performance_factor != null ? ' · performance ' + _fmt(T.performance_factor, 'ratio') : '');
 }
 // Linear interpolation of a polar row at an arbitrary TWA for curve k.
 function _polarSpeedAt(T, twa, k) {
