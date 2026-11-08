@@ -57,6 +57,7 @@ import { ENSEMBLES, type EnsembleModelId } from '../data/ecmwf';
 import { FIELD_LAYERS, isFieldLayer } from './layers';
 import { HOUR_MS } from '../geo/units';
 import * as path from 'node:path';
+import { PAGE_REF, tagModuleSpecifiers } from './webfiles';
 import * as zlib from 'node:zlib';
 import type { IRouter, Request, Response } from 'express';
 import { type JobManager, type Job } from './jobs';
@@ -274,9 +275,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
     if (rel === 'index.html') {
       try {
         const v = publicVersion();
-        const html = fs
-          .readFileSync(file, 'utf8')
-          .replace(/(<(?:script|link)[^>]+(?:src|href)=")((?:ol|rp-[a-z]+)\.(?:js|css))"/g, `$1$2?v=${v}"`);
+        const html = fs.readFileSync(file, 'utf8').replace(PAGE_REF, `$1$2?v=${v}"`);
         res.setHeader('Cache-Control', 'no-cache');
         res.type('html').send(html);
       } catch {
@@ -292,7 +291,7 @@ export function registerApi(router: IRouter, deps: ApiDeps): void {
       // sees one URL (one module instance) per file and caches it hard.
       try {
         const v = publicVersion();
-        const js = fs.readFileSync(file, 'utf8').replace(/^(\s*import\b[^'"\n]*['"]\.\/rp-[a-z]+\.js)(['"])/gm, `$1?v=${v}$2`);
+        const js = tagModuleSpecifiers(fs.readFileSync(file, 'utf8'), v);
         res.type('application/javascript').send(js);
       } catch {
         res.status(404).send(`not found: ${req.path}`);

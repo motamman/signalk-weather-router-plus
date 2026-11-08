@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { filesHash, refreshPublicFileDates, tagPublicFiles } from './webfiles';
+import { filesHash, refreshPublicFileDates, tagModuleSpecifiers, tagPublicFiles } from './webfiles';
 
 function tmpPublic(): string {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-public-'));
@@ -102,4 +102,30 @@ test('refreshPublicFileDates: the same files deployed again untagged and dated 1
   refresh(again);
   assert.equal(logs.length, 2, 'tagged files, same content: nothing done');
   for (const d of [first, again, data]) fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('every import and re-export of a module carries the tag, over several lines too; nothing else is touched', () => {
+  const src = [
+    "import { a } from './rp-core.js';",
+    'import {',
+    '  b,',
+    '  c,',
+    "} from './rp-units.js?v=old12345';",
+    "export { d, e } from './rp-units.js';",
+    "export const url = './rp-plan.js';",
+    "const m = import('/x/rp-units.js');",
+  ].join('\n');
+  assert.equal(
+    tagModuleSpecifiers(src, 'abc12345'),
+    [
+      "import { a } from './rp-core.js?v=abc12345';",
+      'import {',
+      '  b,',
+      '  c,',
+      "} from './rp-units.js?v=abc12345';",
+      "export { d, e } from './rp-units.js?v=abc12345';",
+      "export const url = './rp-plan.js';",
+      "const m = import('/x/rp-units.js');",
+    ].join('\n')
+  );
 });

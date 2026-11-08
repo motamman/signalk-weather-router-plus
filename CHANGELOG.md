@@ -120,6 +120,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Every module import and re-export carries the web app's version tag.**
+  The tag written into the modules missed an import spread over several
+  lines and a re-export (`export … from`), so such a module was loaded
+  under its bare address as well as its tagged one: twice. The files on
+  disk and the plugin's `/ui` route now tag them by one rule.
 - **A route being computed no longer draws over a route opened or a map
   cleared meanwhile.** Its progress stream went on after the route on
   screen changed: its fronts were drawn over the route opened, its result
