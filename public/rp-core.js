@@ -5,7 +5,19 @@
 // and rp-settings.js import what they use from here.
 
 import { prefs } from './rp-prefs.js';
-import { CATEGORY_PATH, DURATION_FORMATS, fetchDisplayUnits, fetchPresetUnits, unitFromDisplayUnits } from './rp-units.js';
+import {
+  CATEGORY_PATH,
+  fetchDisplayUnits,
+  fetchPresetUnits,
+  formatQuantity,
+  LONG_DURATION_S,
+  longDurationText,
+  UNIT_MISSING,
+  unitFromDisplayUnits,
+  unitSuffix,
+} from './rp-units.js';
+// The formatting rules live in rp-units.js (pages without rp-core read them too); the page's modules import them here.
+export { LONG_DURATION_S, longDurationText, typedUnit, UNIT_MISSING, unitSuffix } from './rp-units.js';
 
 // The user's Setup choices come from the server before anything reads
 // them (rp-prefs.js): this await holds back the rest of this module and
@@ -78,7 +90,6 @@ const UNIT_CATEGORY = {
 const METRIC_LENGTH_UNITS = ['m', 'meter', 'mm', 'cm', 'km', 'kilometer'];
 const _ident = v => v;
 const WAVE_PERIOD_UNIT = { unit: 's', fn: _ident, inv: _ident, precision: 0 };
-export const UNIT_MISSING = '—';      // shown in place of a value whose unit is unresolved
 export let UI_UNITS = {};             // page quantity → {unit, fn, inv, precision[, text]}; empty until loaded
 
 // category → displayUnits (null where unresolved) → {units, missing}.
@@ -135,28 +146,9 @@ function applyDisplayUnits() {
   window.dispatchEvent(new Event('rp:units'));
 }
 
-// Format helpers — null-safe, return null if input is null.
-// Durations of a day or more are written as days, hours and minutes
-// (Signal K's own duration-compact format, "9d 7h 0m") whatever the user's
-// time unit: a passage of "223.0 hour" reads badly. A deliberate exception
-// to following the Signal K unit preference, for durations only; shorter
-// ones follow the preference as everything else does.
-export const LONG_DURATION_S = 86400;
-export function longDurationText(s) {
-  return Number.isFinite(s) && Math.abs(s) >= LONG_DURATION_S ? DURATION_FORMATS.formatDurationCompact(s) : null;
-}
 export function _fmt(siValue, key) {
   if (siValue == null) return null;
-  if (key === 'time') { const long = longDurationText(siValue); if (long) return long; }
-  const c = UI_UNITS[key];
-  if (!c) return UNIT_MISSING;
-  if (c.text) return c.text(siValue);
-  const t = c.fn(siValue).toFixed(c.precision);
-  return (t === '-0' ? '0' : t) + unitSuffix(c.unit);
-}
-// The unit after the number: a space before "kn", "m", "hPa"; none before "°" and "%".
-export function unitSuffix(unit) {
-  return unit ? (unit === '°' || unit === '%' ? unit : ' ' + unit) : '';
+  return formatQuantity(UI_UNITS[key], siValue, key);
 }
 export function fmtSpeed(ms)        { return _fmt(ms, 'speed'); }
 export function fmtDist(m)          { return _fmt(m, 'distance'); }

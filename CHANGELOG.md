@@ -127,6 +127,15 @@ uses [Semantic Versioning](https://semver.org/).
   The stream now stops at its next event once its route is no longer the
   one on screen; the route goes on computing on the server and Saved lists
   it.
+- **The Signal K Admin panel reads its units as the web app does.** The
+  disk cap, the tiles' disk use, the chart and coastline downloads and the
+  ensembles on disk were worked out in GB by the panel itself; they now
+  take the user's data-size unit from their preset, and show "—" without
+  one. The distance and the hours of forecast kept ready are read with the
+  web app's own code (`rp-units.js`) too, in place of the panel's copy; a
+  time preference in a duration format ("1d 2h"), which has no single unit
+  to type a number in, shows "—" there as in the planner's settings, where
+  the panel typed it in hours it worked out itself.
 - **Relative humidity, a leg's time and the polar's performance show in
   the account's units.** The conditions table and the Temp tab wrote
   relative humidity as a percentage they worked out themselves, the

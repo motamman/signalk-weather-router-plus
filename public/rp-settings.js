@@ -13,7 +13,18 @@
 // Inputs show values in the Signal K user's unit preferences;
 // conversion happens here, the server only ever sees SI.
 
-import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, checkEveryRead, checkEverySave, UI_UNITS, UNIT_MISSING, unitTextHtml } from './rp-core.js';
+import {
+  oneOpenAtATime,
+  API,
+  escapeHtml,
+  loadPluginStatus,
+  checkEveryRead,
+  checkEverySave,
+  typedUnit,
+  UI_UNITS,
+  UNIT_MISSING,
+  unitTextHtml,
+} from './rp-core.js';
 (function () {
   const form = document.getElementById('srvSettingsForm');
   const saveBtn = /** @type {HTMLButtonElement} */ (document.getElementById('srvSettingsSave'));
@@ -55,8 +66,8 @@ import { oneOpenAtATime, API, escapeHtml, loadPluginStatus, checkEveryRead, chec
     if (q === 'hours' || q === 'minutes') {
       // Durations in the user's time unit. A duration-format preference
       // (e.g. "1d 2h") has no single unit to type a number in: no unit.
-      const c = UI_UNITS.time;
-      if (c && c.inv && !c.text) return { unit: c.unit, fn: c.fn, inv: c.inv, prec: Math.max(1, c.precision) + 1 };
+      const c = typedUnit(UI_UNITS.time);
+      if (c) return { unit: c.unit, fn: c.fn, inv: c.inv, prec: Math.max(1, c.precision) + 1 };
       return { unit: UNIT_MISSING, fn: () => NaN, inv: () => NaN, prec: 0, missing: true };
     }
     if (q === 'data_size') {

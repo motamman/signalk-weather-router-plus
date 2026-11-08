@@ -10,9 +10,11 @@
  * package carries no React and needs no bundler.
  *
  * Values are stored in SI (m, s, bytes) and shown in the Signal K user's
- * unit preferences (displayUnits from path metadata, as the webapp). No
- * fallback: a quantity whose unit cannot be read shows "—" and cannot be
- * edited here.
+ * unit preferences, read as the webapp reads them, by its own rp-units.js
+ * (displayUnits from path metadata; data sizes, which no path carries, from
+ * the user's preset). No fallback: a quantity whose unit cannot be read, or a
+ * duration whose unit is a format with no single unit to type a number in,
+ * shows "—" and cannot be edited here.
  */
 /* eslint-disable */
 var signalk_weather_router_plus = (function () {
@@ -20,72 +22,27 @@ var signalk_weather_router_plus = (function () {
   var React = null;
   var API = '/plugins/signalk-weather-router-plus/api';
   var DEFAULTS = { enabled: true, radius: 250000, window: 0, maxZoom: 15, diskCap: 20e9, workers: 2, followView: true };
-  var UNIT_PATH = { distance: 'navigation/log', time: 'navigation/racing/timeToStart' };
   var MISSING = '—';
 
-  // Signal K conversion formulas (mathjs syntax): the arithmetic subset, no eval.
-  function compileFormula(src) {
-    var toks = String(src).match(/\d+\.?\d*(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?|[A-Za-z_]\w*|[-+*/^(),]/gi);
-    if (!toks || toks.join('') !== String(src).replace(/\s+/g, '')) return null;
-    var FUNCS = { sqrt: Math.sqrt, abs: Math.abs, exp: Math.exp, log: Math.log, log10: Math.log10, round: Math.round, floor: Math.floor, ceil: Math.ceil, pow: Math.pow, cbrt: Math.cbrt };
-    var i = 0;
-    function peek() { return toks[i]; }
-    function take() { return toks[i++]; }
-    function expr() {
-      var a = term();
-      while (peek() === '+' || peek() === '-') { (function () { var op = take(), b = term(), x = a; a = op === '+' ? function (v) { return x(v) + b(v); } : function (v) { return x(v) - b(v); }; })(); }
-      return a;
-    }
-    function term() {
-      var a = unary();
-      while (peek() === '*' || peek() === '/') { (function () { var op = take(), b = unary(), x = a; a = op === '*' ? function (v) { return x(v) * b(v); } : function (v) { return x(v) / b(v); }; })(); }
-      return a;
-    }
-    function unary() {
-      if (peek() === '-') { take(); var a = unary(); return function (v) { return -a(v); }; }
-      if (peek() === '+') { take(); return unary(); }
-      return power();
-    }
-    function power() {
-      var a = atom();
-      if (peek() === '^') { take(); var b = unary(); return function (v) { return Math.pow(a(v), b(v)); }; }
-      return a;
-    }
-    function atom() {
-      var t = take();
-      if (t === undefined) throw new Error('end');
-      if (t === '(') { var a = expr(); if (take() !== ')') throw new Error(')'); return a; }
-      if (/^[\d.]/.test(t)) { var n = Number(t); return function () { return n; }; }
-      if (t === 'value') return function (v) { return v; };
-      if (FUNCS[t] && peek() === '(') {
-        take(); var args = [expr()];
-        while (peek() === ',') { take(); args.push(expr()); }
-        if (take() !== ')') throw new Error(')');
-        var f = FUNCS[t];
-        return function (v) { return f.apply(null, args.map(function (g) { return g(v); })); };
-      }
-      throw new Error('token ' + t);
-    }
-    try { var f = expr(); return i === toks.length ? f : null; } catch (e) { return null; }
-  }
-  function precisionOf(fmt) {
-    var m = /^0(?:\.(0+))?$/.exec(fmt || '');
-    return m ? (m[1] ? m[1].length : 0) : 1;
-  }
-  // displayUnits → {unit, fn, inv, precision}, or null. A duration format edits in hours.
-  function unitFrom(du) {
-    if (!du || typeof du.formula !== 'string') return null;
-    if (/^\s*formatDuration\w+\(\s*value\s*\)\s*$/.test(du.formula))
-      return { unit: 'h', fn: function (v) { return v / 3600; }, inv: function (v) { return v * 3600; }, precision: 1 };
-    var fn = compileFormula(du.formula), inv = compileFormula(du.inverseFormula);
-    if (!fn || !inv) return null;
-    return { unit: du.symbol || du.targetUnit || '', fn: fn, inv: inv, precision: precisionOf(du.displayFormat) };
-  }
-  function fetchUnit(cat) {
-    return fetch('/signalk/v1/api/vessels/self/' + UNIT_PATH[cat] + '/meta', { credentials: 'include' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (m) { return m && m.displayUnits && m.displayUnits.category === cat ? unitFrom(m.displayUnits) : null; })
-      .catch(function () { return null; });
+  // The user's units for the panel's quantities, read, turned into units and written as the web app does it
+  // (rp-units.js: the one copy of each): a distance, a duration a number can be typed in (typedUnit: a duration format
+  // has none), and a data size (no path carries it: the user's preset). null, and "—" shown, for one that cannot be
+  // read.
+  function loadUnitsModule() { return import('/signalk-weather-router-plus/rp-units.js'); }
+  var formatQuantity = null;
+  function loadUnits() {
+    return loadUnitsModule()
+      .then(function (m) {
+        formatQuantity = m.formatQuantity;
+        return Promise.all([
+          m.fetchDisplayUnits('distance'),
+          m.fetchDisplayUnits('time'),
+          m.fetchPresetUnits(['dataSize']).then(function (got) { return got.dataSize; })
+        ]).then(function (du) {
+          return { distance: m.unitFromDisplayUnits(du[0]), time: m.typedUnit(m.unitFromDisplayUnits(du[1])), dataSize: m.unitFromDisplayUnits(du[2]) };
+        });
+      })
+      .catch(function (err) { console.warn('[units] ' + err.message); return { distance: null, time: null, dataSize: null }; });
   }
 
   // A number typed in display units: kept as typed while focused, converted
@@ -121,7 +78,7 @@ var signalk_weather_router_plus = (function () {
     var initial = props.configuration || {};
     var st = React.useState(function () { return JSON.parse(JSON.stringify(initial)); });
     var cfg = st[0], setCfg = st[1];
-    var us = React.useState({ loaded: false, distance: null, time: null });
+    var us = React.useState({ loaded: false, distance: null, time: null, dataSize: null });
     var units = us[0], setUnits = us[1];
     var cs = React.useState(null);
     var coast = cs[0], setCoast = cs[1];
@@ -141,7 +98,7 @@ var signalk_weather_router_plus = (function () {
     var meshMsg = mm[0], setMeshMsg = mm[1];   // the mesh card's own error line
 
     React.useEffect(function () {
-      Promise.all([fetchUnit('distance'), fetchUnit('time')]).then(function (u) { setUnits({ loaded: true, distance: u[0], time: u[1] }); });
+      loadUnits().then(function (u) { setUnits({ loaded: true, distance: u.distance, time: u.time, dataSize: u.dataSize }); });
     }, []);
 
     // Coastline state; polled while a download runs.
@@ -279,7 +236,7 @@ var signalk_weather_router_plus = (function () {
     function unitNumber(path, def, u, minSI, maxSI) {
       if (!units.loaded) return h('input', { className: 'form-control', disabled: true, value: 'loading units…' });
       if (!u) return h('div', null, h('input', { className: 'form-control', disabled: true, value: MISSING }),
-        h('small', { className: 'text-danger' }, 'Your Signal K unit preference for this quantity could not be read, so it cannot be edited here.'));
+        h('small', { className: 'text-danger' }, 'Your Signal K unit preference for this quantity could not be read, or is a duration format with no single unit to type a number in, so it cannot be edited here.'));
       return h('div', { className: 'input-group' },
         h(DraftNumber, { si: get(path, def), toDisplay: u.fn, fromDisplay: u.inv, precision: u.precision, step: Math.pow(10, -u.precision),
           minSI: minSI, maxSI: maxSI, onChange: function (v) { set(path, v); } }),
@@ -312,7 +269,8 @@ var signalk_weather_router_plus = (function () {
       var kids = Array.prototype.slice.call(arguments, 1);
       return h('details', { className: 'mt-2' }, h('summary', { className: 'text-primary small', style: { cursor: 'pointer' } }, summary), h('div', { className: 'mt-2' }, kids));
     }
-    function gb(n) { return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + ' GB'; }
+    // A data size in the user's unit (units.dataSize); "—" without one.
+    function size(n) { return units.dataSize && formatQuantity ? formatQuantity(units.dataSize, n, 'data_size') : MISSING; }
 
     // Coastline ------------------------------------------------------------------
     var configuredCoast = String(get(['landShapefiles'], '')).trim();
@@ -381,7 +339,7 @@ var signalk_weather_router_plus = (function () {
         var pct = p && p.total ? Math.round(100 * p.bytes / p.total) : 0;
         var words = !p ? 'starting…'
           : p.phase === 'unpack' ? 'unpacking, ' + p.files + ' files'
-          : 'downloading, ' + gb(p.bytes) + ' of ' + gb(p.total);
+          : 'downloading, ' + size(p.bytes) + ' of ' + size(p.total);
         return h('span', null,
           h('span', { style: { display: 'inline-block', width: 90, height: 6, background: '#d6dde1', borderRadius: 3, verticalAlign: 'middle', marginRight: 6, position: 'relative' } },
             h('span', { style: { position: 'absolute', left: 0, top: 0, bottom: 0, width: pct + '%', background: '#1f5fa8', borderRadius: 3 } })),
@@ -440,7 +398,7 @@ var signalk_weather_router_plus = (function () {
             return h('tr', { key: r.source + ':' + r.name },
               h('td', null, h('strong', null, r.name), h('br'), h('small', { className: 'text-muted' }, local ? 'your folder' : String(r.title || '').replace(/^\S+ — /, ''))),
               h('td', null, h('small', null, area)),
-              h('td', null, h('small', null, r.catalog_build_date ? day(r.catalog_build_date) + (r.bytes ? ', ' + gb(r.bytes) : '') : '—')),
+              h('td', null, h('small', null, r.catalog_build_date ? day(r.catalog_build_date) + (r.bytes ? ', ' + size(r.bytes) : '') : '—')),
               h('td', null, onServer(r), usingNote(r), copyChoice(r)),
               h('td', { className: 'text-center' }, chk('wrp-mesh-use-' + r.name, usable && use, usable, function (v) { toggleEnabled(r.name, v); })),
               h('td', null, actions(r)));
@@ -506,12 +464,8 @@ var signalk_weather_router_plus = (function () {
       fold('Advanced',
         row('Deepest zoom', number(['overlayCache', 'maxZoom'], d.maxZoom, { min: 6, max: 18 }), '6–18. Deeper = more detail near the boat, many more tiles.'),
         row('Builders', number(['overlayCache', 'workers'], d.workers, { min: 1, max: 8 }), 'Processes building tiles, 1–8. They start when there is work and exit when done. More = faster, more memory while they run.'),
-        row('Disk cap',
-          h('div', { className: 'input-group', style: { maxWidth: 220 } },
-            h(DraftNumber, { si: get(['overlayCache', 'diskCap'], d.diskCap), toDisplay: function (b) { return b / 1e9; }, fromDisplay: function (g) { return g * 1e9; },
-              precision: 1, step: 0.1, minSI: 100e6, maxSI: Number.MAX_SAFE_INTEGER, onChange: function (v) { set(['overlayCache', 'diskCap'], v); } }),
-            h('span', { className: 'input-group-text' }, 'GB')),
-          'Oldest tiles are removed above this.' + (tiles ? ' Current use: ' + gb(tiles.bytes) + ' in ' + tiles.files + ' files.' : ''))));
+        row('Disk cap', unitNumber(['overlayCache', 'diskCap'], d.diskCap, units.dataSize, 100e6, Number.MAX_SAFE_INTEGER),
+          'Oldest tiles are removed above this.' + (tiles ? ' Current use: ' + size(tiles.bytes) + ' in ' + tiles.files + ' files.' : ''))));
 
     // Polars, currents, forecast source, Weather API -------------------------------
     var polarSection = card('Polars',
@@ -547,7 +501,7 @@ var signalk_weather_router_plus = (function () {
           choices.mirrors.map(function (m) { return h('option', { key: m.id, value: m.id }, m.label); })),
         'Changes which server is contacted every six hours. Nothing else.') : null,
       ensembleStatus.length ? h('div', { className: 'mb-2 small' }, ensembleStatus.map(function (e) {
-        var text = e.name + ': ' + (e.cycle ? e.members.length + ' members of the ' + String(e.cycle).slice(0, 16).replace('T', ' ') + 'Z run, ' + (e.bytes === null ? MISSING : gb(e.bytes)) + ' on disk' : 'none on disk yet')
+        var text = e.name + ': ' + (e.cycle ? e.members.length + ' members of the ' + String(e.cycle).slice(0, 16).replace('T', ' ') + 'Z run, ' + (e.bytes === null ? MISSING : size(e.bytes)) + ' on disk' : 'none on disk yet')
           + (e.loading ? '; downloading the ' + String(e.loading.cycle).slice(0, 16).replace('T', ' ') + 'Z run' + (e.loading.total ? ' (' + e.loading.done + ' of ' + e.loading.total + ')' : '') : '')
           + (e.error ? '; ' + e.error : '');
         return h('div', { key: e.model }, statusDot(e.error ? 'warn' : e.cycle ? 'ok' : 'off', text));
