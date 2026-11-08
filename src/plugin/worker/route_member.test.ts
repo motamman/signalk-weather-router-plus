@@ -64,6 +64,28 @@ test('memberRun: no record, another cycle pinned, a member not on disk, a run th
   }
 });
 
+test('memberRun: a pinned cycle that is also the one in use has every member on disk, not only those the set pinned', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-member-'));
+  try {
+    const st = { cacheRoot: root, log: () => undefined } as unknown as WorkerState;
+    fs.mkdirSync(path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ENSEMBLE_DECODED_DIR, 'ifs-ens', 'current.json'),
+      JSON.stringify({ model: 'ifs-ens', cycle: '2026110600', cycleTimeMs: CYCLE.getTime(), members: [1, 2], horizonHours: 6, at: '' })
+    );
+    decodedMember(root, 1, CYCLE);
+    decodedMember(root, 2, CYCLE);
+    // A set running on the cycle in use pins its own members: member 2 only.
+    assert.equal(pinEnsembleCycle(root, 'ifs-ens', 'set-1', '2026110600', [2]), null);
+    // Member 1 of that cycle is recorded and on disk: found, though the set did not pin it.
+    const got = memberRun(st, { model: 'ifs-ens', member: 1, cycle: '2026110600' });
+    assert.deepEqual([got.member, got.run.dir], [1, decodedMember(root, 1, CYCLE)]);
+    assert.equal(memberRun(st, { model: 'ifs-ens', member: 2, cycle: '2026110600' }).member, 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('regional wind is layered only for a route on the main forecast that does not ask for ECMWF alone', () => {
   assert.equal(regionalWindApplies({}), true);
   assert.equal(regionalWindApplies({ wind_model: 'ecmwf' }), false);

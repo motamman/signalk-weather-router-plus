@@ -338,7 +338,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
         await refreshForecast(st, false);
         // The ensembles follow the forecast's horizon and fields: a pass for the new settings now, one more after a
         // pass under way (until 2026-11-07 nothing started one here, and a pass under way went on with the old
-        // horizon; PR #7 review). A background pass: the internet hold applies to it.
+        // horizon). A background pass: the internet hold applies to it.
         const held = (): string | null => st.internetHold;
         ensembles.start(roundOffline(st, t0, held), held, false);
       }

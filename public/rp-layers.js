@@ -1156,7 +1156,7 @@ function _heatmapCanvasSize() {
 // flags. Bytes, 1 = land, row 0 north, same pixel mapping as the canvas.
 // Keyed by box and size; the browser also caches the response. No channel: a request for a box is never
 // superseded by another (the cache answers the same box), and a channel per box would keep each box's controller in
-// rp-core.js's channel map for the session (PR #7 review).
+// rp-core.js's channel map for the session.
 const _landMaskCache = new Map();
 function fetchLandMask(bbox, W, H) {
   const key = bbox.join(',') + '|' + W + 'x' + H;

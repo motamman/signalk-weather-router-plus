@@ -182,7 +182,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
    * An ensemble chosen in the config as its record on disk says now (data/ensemble.ts ensembleInUse): null when it is
    * not chosen or has no record. The one answer to "which members are on disk now" for a route's forecast_member
    * (api.ts) and a set's members (ensembles.ts onDisk). Until 2026-11-07 both read the data worker's last status, which
-   * is behind the record between a new cycle's recording and the next status (PR #7 review).
+   * is behind the record between a new cycle's recording and the next status.
    */
   function ensembleNow(model: EnsembleModelId): ReturnType<typeof ensembleInUse> {
     if (!config || !config.forecast.ensemble || !config.forecast.ensemble.models.includes(model)) return null;

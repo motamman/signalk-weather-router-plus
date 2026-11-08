@@ -37,3 +37,26 @@ test("outside 'unknown': beyond the raster says nothing; inside, the marked cell
   assert.equal(coast.isLand(0.55, 0.55), true);
   assert.equal(coast.isLand(0.25, 0.25), false);
 });
+
+test('a patch must cover whole base cells: one offset by part of a cell, or with a cell size the base does not divide into, is refused', () => {
+  /** A 0.05° patch over 0.2..0.3 × 0.2..0.3 (base cell (2, 2)), its south-west quarter marked, `west` moved by `shift`. */
+  const patch = (shift: number, res = 0.05): CellMask => {
+    const n = Math.round(0.1 / res);
+    const cells = new Uint8Array(n * n);
+    cells[0] = 1;
+    return {
+      bbox: { west: 0.2 + shift, south: 0.2, east: 0.2 + shift + n * res, north: 0.2 + n * res },
+      resolutionDeg: res,
+      nx: n,
+      ny: n,
+      cells,
+    };
+  };
+  assert.throws(() => LandMask.fromCellMasks(grid(), [patch(0.025)], 'land'), /not aligned to the base/, 'half a patch cell off');
+  assert.throws(() => LandMask.fromCellMasks(grid(), [patch(0, 0.03)], 'land'), /not aligned to the base/, '0.03° into 0.1°');
+  // Aligned: the patch answers inside its area, the base elsewhere.
+  const m = LandMask.fromCellMasks(grid(), [patch(0)], 'land');
+  assert.equal(m.isLand(0.225, 0.225), true, "the patch's marked quarter");
+  assert.equal(m.isLand(0.275, 0.275), false, "the patch's clear quarter");
+  assert.equal(m.isLand(0.55, 0.55), true, "the base's marked cell");
+});

@@ -452,7 +452,7 @@ export async function refreshEnsembles(
    * Model `m` complete on disk for this cycle: recorded as the ensemble in use, or why it could not be (its status, the
    * log). A cycle that could not be recorded stays pending: the prune keeps its runs and its GRIB cache, and the next
    * round records it without downloading it again (until 2026-11-07 the prune kept only the cycle the record named, so
-   * a record that could not be written had the complete cycle removed and downloaded again every round; PR #7 review).
+   * a record that could not be written had the complete cycle removed and downloaded again every round).
    */
   const record = (m: EnsembleModelId): void => {
     const why = recordEnsembleCycle(st.cacheRoot, m, cycleTime, wanted(m), horizonHours);

@@ -120,6 +120,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A route on an ensemble member finds every member of the cycle in use.**
+  While an ensemble set ran, a route asking for a member of that same cycle
+  that the set had not taken was refused as "not on disk", though it was on
+  disk and recorded. The cycle in use now has all its recorded members, and
+  a set's older pinned cycle only the set's own.
 - **Every module import and re-export carries the web app's version tag.**
   The tag written into the modules missed an import spread over several
   lines and a re-export (`export … from`), so such a module was loaded

@@ -82,7 +82,7 @@ test('a re-plan computing is cancelled when another route is opened; the route i
   assert.deepEqual([p.posted, p.state(), p.counts.dismissed], [[], { gen: 0, busy: true }, 0]);
   // A saved route opened from Saved while the re-plan computes.
   p.onScreen('job-b', 'B');
-  // The plugin's path, or this host's (/api/v1/).
+  // The plugin's path, or a host's that serves the API under /api/v1/.
   assert.equal(p.posted.length, 1);
   assert.match(p.posted[0], /^\/api(\/v1)?\/routes\/replan-1\/cancel$/);
   assert.deepEqual(p.state(), { gen: 1, busy: false }, 'its result is dropped (replanGen)');

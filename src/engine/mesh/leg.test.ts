@@ -234,7 +234,7 @@ type RouteRow = [number, number] | [number, number, string];
  * rounding, not a margin), each role as given. The routes below are the search's own for their fixtures, recorded on
  * brain on 2026-11-07 (the same on two runs: the search is deterministic for a fixed input), so a change to the search
  * or to how a stretch is planned shows here. (From 2026-10-30, when the stretches were first searched under motor
- * too, until 2026-11-07 these tests checked only the ends and one point; PR #7 review.)
+ * too, until 2026-11-07 these tests checked only the ends and one point.)
  */
 function assertRoute(r: Route, want: RouteRow[]): void {
   const got = r.waypoints.map(w => [w.lon, w.lat, w.role ?? null]);

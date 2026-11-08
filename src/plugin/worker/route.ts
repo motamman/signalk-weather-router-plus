@@ -1254,7 +1254,8 @@ export async function route(
 /**
  * An ensemble member's decoded run for a route (request.forecast_member): of the cycle a running set pins
  * (data/ensemble.ts pinEnsembleCycle: the set's own, also after a newer cycle is recorded), else of the ensemble's
- * cycle in use (its current.json); refused when that ensemble, cycle or member is not on disk.
+ * cycle in use (its current.json); refused when that ensemble, cycle or member is not on disk. A pinned cycle that is
+ * also the one in use has the members of both: a set pins only its own, and the record lists every member on disk.
  */
 export function memberRun(
   st: WorkerState,
@@ -1263,13 +1264,13 @@ export function memberRun(
   const model = ENSEMBLES[want.model];
   const log = (m: string): void => st.log('error', `ensembles: ${m}`);
   const pinned = want.cycle ? pinnedMembers(st.cacheRoot, want.model, want.cycle, log) : null;
+  const cur = readEnsembleCurrent(st.cacheRoot, want.model);
   let cycle: string;
   let members: number[];
   if (want.cycle && pinned) {
     cycle = want.cycle;
-    members = pinned;
+    members = cur && cur.cycle === want.cycle ? [...new Set([...pinned, ...cur.members])] : pinned;
   } else {
-    const cur = readEnsembleCurrent(st.cacheRoot, want.model);
     if (!cur) throw new RouteError(`${model.name}: no ensemble on disk yet (it downloads after each forecast cycle)`);
     if (want.cycle && want.cycle !== cur.cycle)
       throw new RouteError(`${model.name}: the run of ${want.cycle} is no longer on disk (now ${cur.cycle}); start the ensemble again`);

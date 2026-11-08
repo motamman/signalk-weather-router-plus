@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
 
 type Unit = { unit: string; fn: (v: number) => number; precision: number } | null;
@@ -18,7 +19,7 @@ const du = (formula: string, inverseFormula: string, symbol: string) => ({ formu
 
 /** The panel's unit loading and data-size text, with rp-units.js answering `answers` (null: it does not load). */
 async function panel(answers: { path: Record<string, unknown>; preset: Record<string, unknown> } | null) {
-  const real = (await import(path.join(__dirname, '../../public/rp-units.js'))) as Record<string, unknown>;
+  const real = (await import(pathToFileURL(path.join(__dirname, '../../public/rp-units.js')).href)) as Record<string, unknown>;
   const from = source.indexOf("  // The user's units for the panel's quantities");
   const to = source.indexOf('  // A number typed in display units');
   const s0 = source.indexOf('    function size(');

@@ -187,7 +187,7 @@ export function unitSuffix(unit) {
 /**
  * A value in its base unit, written in unit `u` (unitFromDisplayUnits; null when not known: UNIT_MISSING) of quantity
  * `key`: from a day up a 'time' is written as longDurationText writes it. The page's _fmt (rp-core.js), and pages
- * without rp-core (zeddisplay-router: the admin options page), write through it.
+ * without rp-core, write through it.
  */
 export function formatQuantity(u, siValue, key) {
   if (key === 'time') {

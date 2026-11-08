@@ -57,7 +57,7 @@ function snapToPassable(grid: NavigabilityGrid, p: [number, number], maxRadius: 
  * put back after the coarse A*, and an exact endpoint in water by the polygons can sit in a land cell of the
  * conservative raster (a start 150 m off the shore, the clearance the snap gives it, in a 220 m cell the coastline
  * crosses). So here a 0 is unknown (Infinity), not narrow: as narrow, the guide capped the steps there at its least
- * and binned a narrow zone round the endpoint (PR #7 review, 2026-11-07).
+ * and binned a narrow zone round the endpoint (until 2026-11-07).
  */
 export function skeletonWidths(land: LandMask, skeleton: { lon: number; lat: number }[]): Float64Array {
   const widths = widthProfile(land, skeleton);

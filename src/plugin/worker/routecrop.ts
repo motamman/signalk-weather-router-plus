@@ -6,8 +6,8 @@
  * reads the forecast from a decoded run's files only (meshlegtask.ts), so a mesh leg had no forecast to read and was
  * refused. The crop is written as a run of its own: the same files and index as every decoded run
  * (decoded.ts DecodedRunWriter), its grid the crop's, so the mesh process reads exactly the values the worker holds.
- * It is removed with the route's areas. Each route worker has its own folder (WorkerState.cropRoot, below
- * ROUTE_CROP_DIR), and what a stop left in it is removed when that worker starts.
+ * It is removed with the route's areas. The crops are in the route worker's folder (WorkerState.cropRoot:
+ * ROUTE_CROP_DIR in the plugin's data directory), and what a stop left in it is removed when the worker starts.
  */
 
 import * as fs from 'node:fs';

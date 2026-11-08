@@ -341,7 +341,7 @@ export class LandMask implements LandTest {
    * own, empty, so the patches the route draws (refine, refineTiled, refineBand) go with the route and the mask a cache
    * holds never gains any. Until 2026-11-07 a route refined the worker's cached mask itself, and with no land buffer
    * (withBuffer then answers the cached mask) its band's patches stayed in the worker's memory after the route, until
-   * the next route on the same box cleared them (PR #7 review).
+   * the next route on the same box cleared them.
    */
   routeView(): LandMask {
     const view = Object.create(this) as LandMask;

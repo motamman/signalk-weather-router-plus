@@ -157,7 +157,7 @@ export interface EnsembleSetDeps extends SeriesDeps {
    * ensembleCurrentFile, the one record of what is in use, which the members' routes read too: worker/route.ts
    * memberRun); null when it has none; or what is wrong with the record. Until 2026-11-07 it was the data worker's
    * last status, which is behind the record from the moment a new cycle is recorded until the next status: a set made
-   * then was pinned to the old cycle, and every member of it failed as "no longer on disk" (PR #7 review).
+   * then was pinned to the old cycle, and every member of it failed as "no longer on disk".
    */
   onDisk: (model: EnsembleModelId) => { cycle: string; members: number[] } | { problem: string } | null;
 }

@@ -6,7 +6,7 @@
  * is land anyway), and whose one patch is `exact`, the meshes' triangles over the leg's box as the waters plan marked
  * them (waters.ts markMeshWater), the finer answering first (landmask.ts fromCellMasks). Until 2026-11-07 the search
  * had the exact mask alone, over the leg's box (the chain plus a degree), while its world is wider by the heading
- * sweep's reach: the charts of a mesh further off were open water to it, judged by the coastline alone (PR #7 review).
+ * sweep's reach: the charts of a mesh further off were open water to it, judged by the coastline alone.
  *
  * Why the extents and not the triangles over the world: measured on brain (2026-11-07, a script over the installed
  * meshes, not in the repo), marking every mesh's triangles over a 120° × 65° world took 54.6 s and over a 22° × 22°

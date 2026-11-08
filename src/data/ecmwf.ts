@@ -286,7 +286,7 @@ function parseIndex(text: string, url: string): IndexRecord[] {
  * again on both paths (until 2026-11-07 the loader's gate and the ensemble pass read the header alone and only the
  * fetch checked the index record's length, which the loader never reached, as it reads a step's index only for a
  * field its gate finds not cached: a file cut short was never fetched again, and its step or member failed to decode
- * every round; PR #7 review). False when there is no such file; a file that is there but cannot be read throws (a
+ * every round). False when there is no such file; a file that is there but cannot be read throws (a
  * failing disk is reported, never taken for a message to fetch again).
  */
 export function isGribFile(p: string): boolean {

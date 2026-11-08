@@ -195,8 +195,8 @@ function pinFile(cacheRoot: string, model: EnsembleModelId, setId: string): stri
 /**
  * Keep `cycle`'s runs of `members` on disk while ensemble set `setId` routes on them (plugin/ensembles.ts: written when
  * the set is made, removed once it has ended and none of its routes runs). Until 2026-11-07 a new cycle recorded while
- * a set ran had the set's cycle pruned under it, and its members not yet routed failed as "no longer on disk" (PR #7
- * review). Null when kept, else why not.
+ * a set ran had the set's cycle pruned under it, and its members not yet routed failed as "no longer on disk".
+ * Null when kept, else why not.
  */
 export function pinEnsembleCycle(
   cacheRoot: string,
@@ -274,7 +274,7 @@ export function clearEnsemblePins(cacheRoot: string): string[] {
 /**
  * Why `c` is not a record of `model`'s cycle in use, or null: every field as recordEnsembleCycle writes it, so what
  * reads the record (the status, a member route: `new Date(cycleTimeMs)`, the members) never meets a value that is not
- * one. (Until 2026-11-07 only the model, the cycle and the members' list were checked; PR #7 review.)
+ * one. (Until 2026-11-07 only the model, the cycle and the members' list were checked.)
  */
 function currentRecordProblem(c: unknown, model: EnsembleModelId): string | null {
   if (!c || typeof c !== 'object' || Array.isArray(c)) return 'not an object';
@@ -326,7 +326,7 @@ export function readEnsembleCurrent(cacheRoot: string, model: EnsembleModelId): 
  * its members; null when there is no record; or what is wrong with the record. The one answer for the main thread
  * (index.ts: a route's forecast_member, a set's members), as the member routes read the same record
  * (worker/route.ts memberRun). Never the data worker's last status, which is behind the record between a new
- * cycle's recording and the next status (PR #7 review).
+ * cycle's recording and the next status.
  */
 export function ensembleInUse(
   cacheRoot: string,
