@@ -24,13 +24,14 @@
  * nearest the trips' end (Canadian water) in 86.0 nm on the mesh.
  */
 
-import { haversineDistanceM } from '../../geo/geodesy';
+import { unwrapLonNear } from '../../geo/angles';
+import { bboxWidth, boxesMeet, haversineDistanceM } from '../../geo/geodesy';
 import { cellOf, type CellMask, type LandMask } from '../../geo/landmask';
 import { meshAstar } from './astar';
 import { type CoarseMap, PieceGraph } from './coarse';
 import { type BoundarySeeds, PagedMesh } from './paged';
 import type { MeshRules } from './route';
-import { M_PER_DEG_MESH, type MeshStore } from './store';
+import { M_PER_DEG_MESH, type MeshStore, tileBBox } from './store';
 
 export type MeshExitResult =
   | {
@@ -116,20 +117,24 @@ export function emptyMask(land: LandMask): CellMask {
   return { bbox: land.bbox, resolutionDeg: land.resolutionDeg, nx: land.nx, ny: land.ny, cells: new Uint8Array(land.nx * land.ny) };
 }
 
-/** A mesh's water on the raster: every cell whose centre a triangle of the mesh holds is set in the mask. */
+/**
+ * A mesh's water on the raster: every cell whose centre a triangle of the mesh holds is set in the mask. The raster's
+ * box may cross the date line (its west greater than its east) and so may the mesh: the triangles' longitudes are taken
+ * next to the raster's middle, so they and the cells' centres (counted east from the raster's west edge) are one run
+ * of numbers; in a raster and a mesh that do not cross, the longitudes as they are.
+ */
 export function markMeshWater(store: MeshStore, mask: CellMask): void {
   const box = mask.bbox;
   const r = mask.resolutionDeg;
   const { nx, ny } = mask;
   const K = store.index.xScale;
-  const tiles = store.index.tiles.filter(
-    t => !(t.bbox[2] < box.west || t.bbox[0] > box.east || t.bbox[3] < box.south || t.bbox[1] > box.north)
-  );
+  const mid = box.west + bboxWidth(box) / 2;
+  const tiles = store.index.tiles.filter(t => boxesMeet(tileBBox(t.bbox), box));
   for (const info of tiles) {
     const t = store.readTileArrays(info);
     for (let a = 0; a < t.n; a++) {
       const c = a * 6;
-      const xs = [t.corners[c] / K, t.corners[c + 2] / K, t.corners[c + 4] / K];
+      const xs = [unwrapLonNear(t.corners[c] / K, mid), unwrapLonNear(t.corners[c + 2] / K, mid), unwrapLonNear(t.corners[c + 4] / K, mid)];
       const ys = [t.corners[c + 1], t.corners[c + 3], t.corners[c + 5]];
       const i0 = Math.max(0, Math.floor((Math.min(...xs) - box.west) / r));
       const i1 = Math.min(nx - 1, Math.floor((Math.max(...xs) - box.west) / r));
@@ -195,7 +200,7 @@ export function forEachEdgeSide(
   for (let idx = 0; idx < pm.tileCount; idx++) {
     if (only && !only.has(idx)) continue;
     const info = pm.infoAt(idx)!;
-    if (info.bbox[2] < box.west || info.bbox[0] > box.east || info.bbox[3] < box.south || info.bbox[1] > box.north) continue;
+    if (!boxesMeet(tileBBox(info.bbox), box)) continue;
     const held = pm.isHeld(idx);
     const T = pm.tile(idx);
     for (let l = 0; l < T.n; l++) {

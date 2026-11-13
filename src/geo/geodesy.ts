@@ -6,7 +6,7 @@
  */
 
 import { DEG, R_EARTH_M, RAD } from './units';
-import { norm360, wrapLon, lonOffset } from './angles';
+import { norm360, wrapLon, lonOffset, unwrapLonNear } from './angles';
 
 export { DEG, KTS_TO_MS, R_EARTH_M, RAD } from './units';
 export { wrapLon } from './angles';
@@ -223,9 +223,40 @@ export function bboxFromLonLat(lons: number[], lats: number[], padLon = 0, padLa
   return { west: wrapLon(wmin), south, east: wrapLon(wmax), north };
 }
 
-/** Two boxes in plain degrees share at least a point (no antimeridian handling: the mesh indexes and tile extents). */
+/**
+ * Two boxes share at least a point. Longitude goes round: a box whose west is greater than its east crosses the date
+ * line (BBox), and -180 and 180 are one meridian. Two boxes that do not cross are compared as plain numbers first, so
+ * they answer as they always did; the comparison round the earth then adds only the boxes that meet across the date
+ * line. (The chart meshes' indexes and a leg's area: a mesh may cross the date line, and so may a leg.)
+ */
 export function boxesMeet(a: BBox, b: BBox): boolean {
-  return a.west <= b.east && b.west <= a.east && a.south <= b.north && b.south <= a.north;
+  if (!(a.south <= b.north && b.south <= a.north)) return false;
+  if (a.west <= a.east && b.west <= b.east && a.west <= b.east && b.west <= a.east) return true;
+  return lonOffset(b.west, a.west) <= bboxWidth(a) || lonOffset(a.west, b.west) <= bboxWidth(b);
+}
+
+/** A longitude that lies a turn outside -180 to 180 brought back inside; 180 and -180 themselves, and anything between, are left as they are. */
+export function wrapEdge(lon: number): number {
+  return unwrapLonNear(lon, 0);
+}
+
+/**
+ * The box holding two boxes, the short way round: `b` is taken next to `a` (its west within half a turn of `a`'s
+ * middle), so two boxes either side of the date line give a box across it (west greater than east), and two boxes
+ * that do not cross give their plain union, the same numbers as the least west and the greatest east. All the way
+ * round: -180 to 180.
+ */
+export function bboxUnion(a: BBox, b: BBox): BBox {
+  const south = Math.min(a.south, b.south);
+  const north = Math.max(a.north, b.north);
+  const aw = a.west;
+  const ae = a.east >= a.west ? a.east : a.east + 360;
+  const bw = unwrapLonNear(b.west, (aw + ae) / 2);
+  const be = (b.east >= b.west ? b.east : b.east + 360) + (bw - b.west);
+  const west = Math.min(aw, bw);
+  const east = Math.max(ae, be);
+  if (east - west >= 360) return { west: -180, south, east: 180, north };
+  return { west: wrapEdge(west), south, east: wrapEdge(east), north };
 }
 
 /** A position as the logs and messages write it: "41.4900, -71.3300" (latitude first, four decimals, about 10 m). */

@@ -21,7 +21,8 @@
  *  - an area to avoid (Signal K notes): the triangle's centroid inside it.
  */
 
-import { haversineDistanceM, type BBox } from '../../geo/geodesy';
+import { unwrapLonNear } from '../../geo/angles';
+import { bboxUnion, haversineDistanceM, wrapEdge, type BBox } from '../../geo/geodesy';
 import { DEFAULT_OVERHEAD_M, DEFAULT_UKC_M } from '../../vessel/vessel';
 import type { LegPlan } from '../multileg';
 import { MinHeap } from '../heap';
@@ -340,9 +341,11 @@ export function searchMesh(
 ): MeshSearch {
   const cl = Math.cos(((start[1] + end[1]) / 2) * (Math.PI / 180));
   const pm = new PagedMesh(store, rules, cl, boundary);
+  // The box of the two ends, the short way round (a leg across the date line: its west greater than its east).
+  const endLon = unwrapLonNear(end[0], start[0]);
   const ends: BBox = {
-    west: Math.min(start[0], end[0]),
-    east: Math.max(start[0], end[0]),
+    west: wrapEdge(Math.min(start[0], endLon)),
+    east: wrapEdge(Math.max(start[0], endLon)),
     south: Math.min(start[1], end[1]),
     north: Math.max(start[1], end[1]),
   };
@@ -536,14 +539,7 @@ export function searchMeshRun(
     );
     const r = s.result;
     stats = stats ? addStats(stats, r.stats) : r.stats;
-    box = box
-      ? {
-          west: Math.min(box.west, s.box.west),
-          south: Math.min(box.south, s.box.south),
-          east: Math.max(box.east, s.box.east),
-          north: Math.max(box.north, s.box.north),
-        }
-      : s.box;
+    box = box ? bboxUnion(box, s.box) : s.box;
     last = s;
     if (!r.ok)
       return { result: { ok: false, reason: targets.length > 1 ? `to ${tg.name}: ${r.reason}` : r.reason, stats }, box, paged: s.paged };

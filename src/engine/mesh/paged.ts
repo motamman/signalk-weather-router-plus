@@ -16,9 +16,19 @@
  * A tile's blocked set (rules, then the buffer) is computed in the tile's own frame, not the leg's, so it is the
  * same for every leg and for the rough cut built from the same reads (coarse.ts): the rough cut's "connected" is
  * the search's.
+ *
+ * The date line (store.ts, the file's comment): the frame is flat, laid out about one longitude (`frameLon`: the middle
+ * of the mesh, or the one given with centred() where several meshes share a frame). A point's longitude is taken next
+ * to it, within half a turn (toXY), and a tile is placed whole, a whole number of turns from where it is stored, so
+ * that its middle is next to it too (read): a mesh across the date line is one piece, and a tile is never torn. A
+ * longitude within half a turn of the frame's middle is used as it is, so a mesh that does not cross the date line has
+ * the numbers it always had. The frame is cut on the meridian opposite its middle: two tiles either side of that
+ * meridian are a turn apart in it, half the earth away from the leg. Points come back as longitudes between -180 and
+ * 180 (fromXY).
  */
 
-import type { BBox } from '../../geo/geodesy';
+import { unwrapLonNear } from '../../geo/angles';
+import { type BBox, wrapEdge } from '../../geo/geodesy';
 import { blockedTriangles, growBlocked, type MeshRules } from './route';
 import { type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo } from './store';
 import { U_TOL } from './width';
@@ -107,8 +117,10 @@ export class PagedMesh {
     prepMs: 0,
     bufferMs: 0,
   };
-  /** Union of the extents of the tiles read, degrees (null before the first). */
+  /** Union of the extents of the tiles read, degrees, its longitudes next to the frame's middle (null before the first). */
   private touched: BBox | null = null;
+  /** The longitude the frame is laid out about (the file's comment); undefined for an in-memory mesh: longitudes as they are. */
+  private ref: number | undefined;
   /** A tile that cannot be read again (an in-memory mesh) is never dropped. */
   private readonly droppable: boolean;
 
@@ -140,7 +152,42 @@ export class PagedMesh {
       this.firsts = infos.map(t => t.first);
       this.infos = infos;
       this.droppable = true;
+      this.ref = store!.midLon;
     }
+  }
+
+  /** The longitude the frame is laid out about: the mesh's middle unless centred() set another; undefined in memory. */
+  get frameLon(): number | undefined {
+    return this.ref;
+  }
+
+  /**
+   * Lay the frame out about `lon` instead of the mesh's middle, before anything is asked of the mesh: where several
+   * meshes are used in one frame (a leg across the limits of the charts, the joins of two meshes), all are centred on
+   * the same longitude, so a point has the same place in each. The tiles held, read in the old frame, are let go. An
+   * in-memory mesh has no frame of its own and is left as it is.
+   */
+  centred(lon: number | undefined): this {
+    if (!this.store || lon === undefined || lon === this.ref) return this;
+    this.retain(() => false);
+    this.touched = null;
+    this.ref = lon;
+    return this;
+  }
+
+  /** A longitude next to the frame's middle: the same meridian, within half a turn of it. */
+  lonNear(lon: number): number {
+    return this.ref === undefined ? lon : unwrapLonNear(lon, this.ref);
+  }
+
+  /**
+   * How far a tile is turned in the frame from where it is stored (its extent `bbox`), degrees: the whole turns that
+   * put its middle next to the frame's middle; 0 for a tile within half a turn of it. The tile's corners and its
+   * extent are placed with it, whole, so a tile is never torn.
+   */
+  tileTurn(bbox: [number, number, number, number]): number {
+    const mid = (bbox[0] + bbox[2]) / 2;
+    return this.lonNear(mid) - mid;
   }
 
   /** An in-memory mesh (the tests' synthetic meshes) as one tile that is never dropped, with its blocked set as given. */
@@ -179,11 +226,12 @@ export class PagedMesh {
   }
 
   toXY(lon: number, lat: number): [number, number] {
-    return [lon * this.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];
+    return [this.lonNear(lon) * this.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];
   }
 
+  /** Back to degrees: a longitude between -180 and 180. */
   fromXY(x: number, y: number): [number, number] {
-    return [x / (this.cl * M_PER_DEG_MESH), y / M_PER_DEG_MESH];
+    return [wrapEdge(x / (this.cl * M_PER_DEG_MESH)), y / M_PER_DEG_MESH];
   }
 
   /** Position in the tile list of the tile holding a global id. */
@@ -250,9 +298,13 @@ export class PagedMesh {
     for (const [idx, T] of [...this.held]) if (!keep(T)) this.drop(idx);
   }
 
-  /** The union of the extents of every tile read so far (the leg's area, for the currents read beside it). */
+  /**
+   * The union of the extents of every tile read so far (the leg's area, for the currents read beside it); its west
+   * greater than its east when the tiles read lie either side of the date line.
+   */
   touchedBox(): BBox | null {
-    return this.touched;
+    const t = this.touched;
+    return t && { west: wrapEdge(t.west), south: t.south, east: wrapEdge(t.east), north: t.north };
   }
 
   private read(idx: number): PagedTile {
@@ -264,8 +316,12 @@ export class PagedMesh {
     const K = this.store.index.xScale;
     const x = new Float64Array(n * 3);
     const y = new Float64Array(n * 3);
+    // The tile whole, turned from where it is stored (tileTurn; not at all for a tile within half a turn of the frame's
+    // middle: its longitudes as stored).
+    const turn = this.tileTurn(info.bbox);
+    const lonOf = turn === 0 ? (q: number): number => a.corners[2 * q] / K : (q: number): number => a.corners[2 * q] / K + turn;
     for (let q = 0; q < n * 3; q++) {
-      x[q] = (a.corners[2 * q] / K) * this.cl * M_PER_DEG_MESH;
+      x[q] = lonOf(q) * this.cl * M_PER_DEG_MESH;
       y[q] = a.corners[2 * q + 1] * M_PER_DEG_MESH;
     }
     const t1 = Date.now();
@@ -282,13 +338,14 @@ export class PagedMesh {
     let xt = x;
     if (clT !== this.cl) {
       xt = new Float64Array(n * 3);
-      for (let q = 0; q < n * 3; q++) xt[q] = (a.corners[2 * q] / K) * clT * M_PER_DEG_MESH;
+      for (let q = 0; q < n * 3; q++) xt[q] = lonOf(q) * clT * M_PER_DEG_MESH;
     }
     const m: LoadedMesh = {
       n,
       x: xt,
       y,
       cl: clT,
+      ref: this.ref,
       neighbours: local,
       rev: a.rev,
       mult: a.mult,
@@ -331,14 +388,15 @@ export class PagedMesh {
       this.stats.blocked += b;
       this.stats.buffered += buffered;
       const tb = this.touched;
+      const [tw, te] = [info.bbox[0] + turn, info.bbox[2] + turn];
       this.touched = tb
         ? {
-            west: Math.min(tb.west, info.bbox[0]),
+            west: Math.min(tb.west, tw),
             south: Math.min(tb.south, info.bbox[1]),
-            east: Math.max(tb.east, info.bbox[2]),
+            east: Math.max(tb.east, te),
             north: Math.max(tb.north, info.bbox[3]),
           }
-        : { west: info.bbox[0], south: info.bbox[1], east: info.bbox[2], north: info.bbox[3] };
+        : { west: tw, south: info.bbox[1], east: te, north: info.bbox[3] };
     }
     return {
       idx,
@@ -513,7 +571,9 @@ export class PagedMesh {
       const k = near.findIndex(([di, dj]) => info.i === i + di && info.j === j + dj);
       return k >= 0 ? k : near.length + idx;
     };
-    return (this.cellTiles.get(`${i},${j}`) ?? []).filter(idx => nearExtent(this.infos[idx]!, lon, lat)).sort((a, b) => rank(a) - rank(b));
+    return (this.cellTiles.get(`${i},${j}`) ?? [])
+      .filter(idx => nearExtent(this.infos[idx]!, this.lonNear(lon), lat, this.tileTurn(this.infos[idx]!.bbox)))
+      .sort((a, b) => rank(a) - rank(b));
   }
 
   /**
@@ -559,9 +619,14 @@ export class PagedMesh {
     if (!this.store) order.push({ idx: 0, d: 0 });
     else
       for (let idx = 0; idx < this.infos.length; idx++) {
+        // The point of the tile's extent nearest the point, both next to the frame's middle (a tile east of the date
+        // line is stored from -180).
         const b = this.infos[idx]!.bbox;
-        const [lon, lat] = this.fromXY(px, py);
-        const [cx, cy] = this.toXY(Math.min(Math.max(lon, b[0]), b[2]), Math.min(Math.max(lat, b[1]), b[3]));
+        const lon = px / (this.cl * M_PER_DEG_MESH);
+        const lat = py / M_PER_DEG_MESH;
+        const turn = this.tileTurn(b);
+        const cx = Math.min(Math.max(lon, b[0] + turn), b[2] + turn) * this.cl * M_PER_DEG_MESH;
+        const cy = Math.min(Math.max(lat, b[1]), b[3]) * M_PER_DEG_MESH;
         order.push({ idx, d: Math.hypot(cx - px, cy - py) });
       }
     order.sort((u, v) => u.d - v.d);
@@ -657,11 +722,13 @@ function closestOnTriangle(px: number, py: number, x: Float64Array, y: Float64Ar
 
 /**
  * Is the point inside a tile's vertex extent, within the walk's tolerance (width.ts U_TOL) of its size? A point on
- * the tile's outer edge comes back from the metres frame a hair outside it (3.0000000000000004 against 3).
+ * the tile's outer edge comes back from the metres frame a hair outside it (3.0000000000000004 against 3). `lon` is
+ * next to the frame's middle (PagedMesh.lonNear), and the tile's extent is taken `turn` on (PagedMesh.tileTurn): a tile
+ * east of the date line is stored from -180, and a point on the date line is 180 or -180.
  */
-function nearExtent(info: MeshTileInfo, lon: number, lat: number): boolean {
+function nearExtent(info: MeshTileInfo, lon: number, lat: number, turn: number): boolean {
   const b = info.bbox;
   const tx = U_TOL * (b[2] - b[0]);
   const ty = U_TOL * (b[3] - b[1]);
-  return lon >= b[0] - tx && lat >= b[1] - ty && lon <= b[2] + tx && lat <= b[3] + ty;
+  return lon >= b[0] + turn - tx && lat >= b[1] - ty && lon <= b[2] + turn + tx && lat <= b[3] + ty;
 }

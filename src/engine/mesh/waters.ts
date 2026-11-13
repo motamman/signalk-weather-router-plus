@@ -101,8 +101,11 @@ export function planWaters(
 ): WatersPlan {
   const cl = Math.cos((((start[1] + end[1]) / 2) * Math.PI) / 180);
   const speed = rules?.motorSpeedMs ?? 1;
-  // Each mesh in the leg's frame, with its connected groups for this boat.
-  const pms = meshes.map(m => new PagedMesh(m.store, rules ?? { draughtM: 0, airDraftM: 0, motorSpeedMs: 1 }, cl, m.boundary));
+  // Each mesh in the leg's frame (one frame for all: laid out about the leg's start, paged.ts centred), with its
+  // connected groups for this boat.
+  const pms = meshes.map(m =>
+    new PagedMesh(m.store, rules ?? { draughtM: 0, airDraftM: 0, motorSpeedMs: 1 }, cl, m.boundary).centred(start[0])
+  );
   const graphs = rules ? meshes.map((m, i) => new PieceGraph(m.map!, pms[i])) : [];
   const groupOfPiece = (i: number, p: number | null): number | null => (p === null ? null : graphs[i].component(p));
   const groupOf = (i: number, t: number): number | null => groupOfPiece(i, graphs[i].pieceOf(t));

@@ -1,0 +1,260 @@
+/**
+ * A chart mesh across the date line (store.ts, the file's comment; paged.ts): a mesh of 1° tiles from 178°E to 178°W
+ * written to disk as the format stores it (the tiles east of the date line with longitudes from -180, the index's box
+ * with its west greater than its east), read by the tile reader, the paged mesh, the search, the mesh's water on a
+ * coastline raster, the final depth check and the change from one mesh to another.
+ */
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { bboxUnion, boxesMeet, haversineDistanceM, wrapEdge } from '../../geo/geodesy';
+import { cellOf, type CellMask } from '../../geo/landmask';
+import { checkRouteOnMeshes } from './check';
+import { boundarySeeds, buildCoarseMap, type CoarseRules, meshRulesOf, PieceGraph } from './coarse';
+import { markMeshWater } from './exit';
+import { writeGridMesh } from './fixture';
+import { PagedMesh } from './paged';
+import { searchMesh } from './route';
+import { M_PER_DEG_MESH, MeshStore } from './store';
+import { findMeshTransfer } from './transfer';
+
+const RULES = { draughtM: 2, airDraftM: 18, motorSpeedMs: 3 };
+const COARSE: CoarseRules = {
+  draughtM: 2,
+  airDraftM: 18,
+  underKeelClearanceM: 0.5,
+  overheadClearanceM: 1,
+  bufferM: 0,
+  openingBridges: 'open',
+};
+
+/** Columns 0 to `n` - 1 from `west`, rows 0 and 1; 10 m deep unless `depth` says otherwise. */
+function cells(n: number, depth: (i: number, j: number) => number = () => 10): { i: number; j: number; depth: number }[] {
+  const out: { i: number; j: number; depth: number }[] = [];
+  for (let i = 0; i < n; i++) for (let j = 0; j < 2; j++) out.push({ i, j, depth: depth(i, j) });
+  return out;
+}
+
+/** The mesh from 178°E to 178°W (columns 0, 1 west of the date line, 2, 3 east of it), lat 0 to 2. */
+function withMesh(fn: (store: MeshStore) => void, depth?: (i: number, j: number) => number): void {
+  const dir = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-dateline-')), cells(4, depth), 178);
+  try {
+    fn(MeshStore.open(dir));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('boxes round the earth: boxesMeet, bboxUnion and wrapEdge across the date line; boxes that do not cross answer as plain numbers', () => {
+  const across = { west: 178, south: 0, east: -178, north: 2 };
+  assert.equal(boxesMeet(across, { west: -179.5, south: 0.2, east: -179, north: 0.4 }), true, 'a box east of the date line');
+  assert.equal(boxesMeet(across, { west: 179, south: 0.2, east: 179.5, north: 0.4 }), true, 'a box west of it');
+  assert.equal(boxesMeet(across, { west: 170, south: 0, east: 177, north: 2 }), false);
+  assert.equal(boxesMeet(across, { west: -177, south: 0, east: -170, north: 2 }), false);
+  assert.equal(boxesMeet(across, { west: -179.5, south: 3, east: -179, north: 4 }), false, 'north of it');
+  assert.equal(boxesMeet(across, { west: 179, south: 1, east: -179, north: 3 }), true, 'two boxes across the date line');
+  assert.equal(
+    boxesMeet({ west: 170, south: 0, east: 180, north: 1 }, { west: -180, south: 0, east: -170, north: 1 }),
+    true,
+    'one meridian'
+  );
+  // Plain boxes: as plain numbers.
+  assert.equal(boxesMeet({ west: 0, south: 0, east: 2, north: 1 }, { west: 2, south: 1, east: 3, north: 2 }), true);
+  assert.equal(boxesMeet({ west: 0, south: 0, east: 2, north: 1 }, { west: 2.5, south: 0, east: 3, north: 1 }), false);
+  assert.deepEqual(bboxUnion({ west: 178, south: 0, east: 179, north: 1 }, { west: -180, south: 0.5, east: -179, north: 2 }), {
+    west: 178,
+    south: 0,
+    east: -179,
+    north: 2,
+  });
+  assert.deepEqual(bboxUnion({ west: -3, south: 0, east: 1, north: 1 }, { west: -5, south: -1, east: 0.5, north: 0.5 }), {
+    west: -5,
+    south: -1,
+    east: 1,
+    north: 1,
+  });
+  assert.deepEqual([wrapEdge(181), wrapEdge(-181), wrapEdge(180), wrapEdge(-180), wrapEdge(12.5)], [-179, 179, 180, -180, 12.5]);
+});
+
+test('the tile reader: a point either side of the date line is in its tile, by the usual longitude; outside the mesh is not covered', () => {
+  withMesh(store => {
+    assert.deepEqual([store.index.west, store.index.east], [178, -178]);
+    assert.deepEqual(store.tileIJ(178.5, 0.5), [0, 0]);
+    assert.deepEqual(store.tileIJ(179.5, 1.5), [1, 1]);
+    assert.deepEqual(store.tileIJ(-179.5, 0.5), [2, 0]);
+    assert.deepEqual(store.tileIJ(-178.5, 0.5), [3, 0]);
+    for (const lon of [178.5, 179.999, 180, -180, -179.999, -178.5]) assert.equal(store.covers(lon, 0.5), true, `${lon}`);
+    for (const lon of [177.5, -177.5, 0, -90]) assert.equal(store.covers(lon, 0.5), false, `${lon}`);
+    // The tiles east of the date line are stored from -180.
+    assert.deepEqual(store.tile(2, 0)!.bbox, [-180, 0, -179, 1]);
+    assert.deepEqual(store.tile(1, 0)!.bbox, [179, 0, 180, 1]);
+  });
+});
+
+test('the paged mesh: one frame across the date line; points either side are found and come back as usual longitudes', () => {
+  withMesh(store => {
+    const pm = new PagedMesh(store, RULES, 1);
+    const [xw] = pm.toXY(179.5, 0.5);
+    const [xe, ye] = pm.toXY(-179.5, 0.5);
+    assert.ok(Math.abs(xe - xw - M_PER_DEG_MESH) < 1e-6, `one degree apart in the frame: ${xe - xw}`);
+    // Each cell's lower triangle holds (lon + 0.5, 0.25): ids 0 (178), 4 (179), 8 (-180), 12 (-179).
+    const at = (lon: number): number => pm.locate(...pm.toXY(lon, 0.25));
+    assert.deepEqual([at(178.5), at(179.5), at(-179.5), at(-178.5)], [0, 4, 8, 12]);
+    assert.equal(at(177.5), -1);
+    assert.equal(at(-177.5), -1);
+    // On the date line itself, by either name: a triangle of the mesh.
+    assert.ok(pm.locate(...pm.toXY(180, 0.25)) >= 0 && pm.locate(...pm.toXY(-180, 0.25)) >= 0);
+    assert.deepEqual(pm.toXY(180, 0.25), pm.toXY(-180, 0.25));
+    assert.deepEqual(pm.fromXY(xe, ye), [-179.5, 0.5]);
+    // The tiles read: either side of the date line, so their box crosses it.
+    assert.deepEqual(pm.touchedBox(), { west: 178, south: 0, east: -178, north: 1 });
+    // The nearest usable water to a point west of the mesh is on its west edge, not a turn away.
+    const nu = pm.nearestUsable(...pm.toXY(177.5, 0.5))!;
+    assert.ok(Math.abs(nu.distM - 0.5 * M_PER_DEG_MESH) < 1e-6, `${nu.distM}`);
+    assert.deepEqual(pm.fromXY(nu.x, nu.y), [178, 0.5]);
+  });
+});
+
+test('the search: a leg across the date line is one short route on the mesh', () => {
+  withMesh(store => {
+    const s = searchMesh(store, [178.5, 0.5], [-178.5, 0.5], RULES);
+    assert.ok(s.result.ok, s.result.ok ? '' : s.result.reason);
+    if (!s.result.ok) return;
+    const straight = haversineDistanceM(178.5, 0.5, -178.5, 0.5);
+    assert.ok(Math.abs(s.result.lengthM - straight) < 1, `${s.result.lengthM} m against ${straight} m straight`);
+    assert.deepEqual(s.result.path[0], [178.5, 0.5]);
+    assert.deepEqual(s.result.path[s.result.path.length - 1], [-178.5, 0.5]);
+    for (const [lon] of s.result.path) assert.ok(lon >= -180 && lon <= 180, `${lon}`);
+    // The area the search read (for the currents): across the date line.
+    assert.deepEqual([s.box.west, s.box.east], [178, -178]);
+    // The other way, and a leg that ends on the date line.
+    const back = searchMesh(store, [-178.5, 1.5], [178.5, 1.5], RULES);
+    assert.ok(back.result.ok && Math.abs(back.result.lengthM - haversineDistanceM(178.5, 1.5, -178.5, 1.5)) < 1);
+    const to = searchMesh(store, [178.5, 0.5], [180, 0.5], RULES);
+    assert.ok(to.result.ok && Math.abs(to.result.lengthM - haversineDistanceM(178.5, 0.5, 180, 0.5)) < 1);
+  });
+});
+
+test('the search goes round water the boat cannot use on the date line', () => {
+  // Row 0 is 1 m deep in the two columns beside the date line: the route from row 0 to row 0 goes through row 1.
+  withMesh(
+    store => {
+      const s = searchMesh(store, [178.5, 0.5], [-178.5, 0.5], RULES);
+      assert.ok(s.result.ok, s.result.ok ? '' : s.result.reason);
+      if (!s.result.ok) return;
+      assert.ok(Math.max(...s.result.path.map(p => p[1])) >= 1, 'through the northern row');
+      assert.ok(s.result.lengthM > haversineDistanceM(178.5, 0.5, -178.5, 0.5) + 1000);
+    },
+    (i, j) => (j === 0 && (i === 1 || i === 2) ? 1 : 10)
+  );
+});
+
+test("the mesh's water on a coastline raster across the date line: the cells either side of it are marked, those beyond the mesh are not", () => {
+  withMesh(store => {
+    // A raster from 177°E to 177°W, lat -1 to 3, cells of 0.25°.
+    const res = 0.25;
+    const mask: CellMask = {
+      bbox: { west: 177, south: -1, east: -177, north: 3 },
+      resolutionDeg: res,
+      nx: 24,
+      ny: 16,
+      cells: new Uint8Array(24 * 16),
+    };
+    markMeshWater(store, mask);
+    const marked = (lon: number, lat: number): number => mask.cells[cellOf(mask, lon, lat)];
+    for (const lon of [178.1, 179.9, -179.9, -178.1]) assert.equal(marked(lon, 0.6), 1, `${lon}`);
+    for (const lon of [177.4, -177.4]) assert.equal(marked(lon, 0.6), 0, `${lon}`);
+    assert.equal(marked(179.9, 2.6), 0, 'north of the mesh');
+    // 16 columns (4°) by 8 rows (2°) of the mesh.
+    assert.equal(
+      mask.cells.reduce((a, b) => a + b, 0),
+      16 * 8
+    );
+  });
+});
+
+test('the final depth check walks a route across the date line the short way, and finds water the boat cannot use east of it', () => {
+  withMesh(store => {
+    const path: [number, number][] = [
+      [178.5, 0.5],
+      [-178.5, 0.5],
+    ];
+    const r = checkRouteOnMeshes([store], path, [0], 1, RULES);
+    const len = haversineDistanceM(178.5, 0.5, -178.5, 0.5);
+    assert.equal(r.violations.length, 0);
+    assert.ok(Math.abs(r.legs[0].onMeshM - len) < 5, `${r.legs[0].onMeshM} m on the mesh of ${len} m`);
+    assert.ok(r.legs[0].outsideMeshM < 5, `${r.legs[0].outsideMeshM} m outside it`);
+  });
+  withMesh(
+    store => {
+      const r = checkRouteOnMeshes(
+        [store],
+        [
+          [178.5, 0.5],
+          [-178.5, 0.5],
+        ],
+        [0],
+        1,
+        RULES
+      );
+      assert.equal(r.violations.length, 1);
+      const v = r.violations[0];
+      assert.equal(v.kind, 'depth');
+      // The shallow column is the first east of the date line: the route enters it on the date line.
+      assert.ok((Math.abs(v.lon) > 179.99 && Math.abs(v.lat - 0.5) < 1e-6) || (v.lon > -180 && v.lon < -179), `${v.lon}, ${v.lat}`);
+    },
+    i => (i === 2 ? 1 : 10)
+  );
+});
+
+test('two meshes in one frame: a leg from a mesh west of the date line changes to a mesh across it in their overlap', () => {
+  // A: 176°E to 180°; B: 179°E to 177°W; they overlap from 179°E to 180°. The leg runs from A's west to B's east.
+  const da = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-dateline-a-')), cells(4), 176);
+  const db = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-dateline-b-')), cells(4), 179);
+  try {
+    const sa = MeshStore.open(da);
+    const sb = MeshStore.open(db);
+    assert.deepEqual([sa.index.west, sa.index.east, sb.index.west, sb.index.east], [176, 180, 179, -177]);
+    assert.equal(boxesMeet(sa.index, sb.index), true);
+    const ba = boundarySeeds(sa, COARSE);
+    const bb = boundarySeeds(sb, COARSE);
+    const ma = buildCoarseMap(sa, COARSE, new PagedMesh(sa, meshRulesOf(COARSE), 1, ba));
+    const mb = buildCoarseMap(sb, COARSE, new PagedMesh(sb, meshRulesOf(COARSE), 1, bb));
+    // The rough cut's piece centres are usual longitudes.
+    for (const p of mb.pieces) assert.ok(p[0] >= -180 && p[0] <= 180, `${p[0]}`);
+    // B's reach from its west to its east: a box across the date line.
+    const pb = new PagedMesh(sb, meshRulesOf(COARSE), 1, bb);
+    const graph = new PieceGraph(mb, pb);
+    const reach = graph.reach([[graph.pieceOf(pb.locate(...pb.toXY(179.5, 0.25)))!, graph.pieceOf(pb.locate(...pb.toXY(-177.5, 0.25)))!]]);
+    assert.deepEqual([reach.box.west, reach.box.east], [179, -177]);
+    const r = findMeshTransfer(
+      { store: sa, boundary: ba, map: ma, name: 'A' },
+      { store: sb, boundary: bb, map: mb, name: 'B' },
+      RULES,
+      [176.5, 0.5],
+      [-177.5, 0.5],
+      { start: 'the start', end: 'the end' }
+    );
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    if (!r.ok) return;
+    assert.ok(r.point[0] > 179 && r.point[0] < 180 && r.point[1] > 0 && r.point[1] < 2, `in the overlap: ${r.point}`);
+    assert.ok(r.transfers > 0);
+    // The other way: from B, east of the date line, to A.
+    const back = findMeshTransfer(
+      { store: sb, boundary: bb, map: mb, name: 'B' },
+      { store: sa, boundary: ba, map: ma, name: 'A' },
+      RULES,
+      [-177.5, 0.5],
+      [176.5, 0.5],
+      { start: 'the start', end: 'the end' }
+    );
+    assert.ok(back.ok, back.ok ? '' : back.reason);
+    if (back.ok) assert.ok(back.point[0] > 179 && back.point[0] < 180, `in the overlap: ${back.point}`);
+  } finally {
+    fs.rmSync(da, { recursive: true, force: true });
+    fs.rmSync(db, { recursive: true, force: true });
+  }
+});

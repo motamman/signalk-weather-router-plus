@@ -25,6 +25,7 @@
  *   corners    float64[n*6]  (x0, y0, x1, y1, x2, y2): x = lon × xScale (the
  *                            build's cos(mid-latitude)), y = lat; the build's own
  *                            values, so a seam vertex is identical in both tiles
+ *                            (but on the date line, below)
  *   neighbours int32[n*3]    global triangle ids (contiguous per tile), -1 = none
  *   mult       float32[n]    shore penalty × depth penalty
  *   depth      float32[n]    charted depth, -999 = unknown
@@ -37,11 +38,20 @@
  *                            with none charted, 1e9 = no hazard
  *   rev        int8[n*3]     index of the shared edge on the neighbour's side
  *   flags      uint8[n]      see FLAG_*
+ *
+ * The date line. A mesh's longitudes are the router's (geo/geodesy.ts): between -180 and 180, and a box whose west is
+ * greater than its east crosses the date line. The date line is a tile edge, so no tile lies across it: a tile's
+ * corners and its extent are plain numbers, and only the index's own box (west, east) may cross (171.5 to -67 is
+ * 171.5°E eastwards to 67°W). A vertex on the date line is 180 in the tile west of it and -180 in the tile east of
+ * it. Whatever needs the mesh in one piece takes a longitude next to the mesh's middle (lonNear): the tile a point is
+ * in (tileIJ), and the corners in a frame of metres (loadTiles here, the leg's frame in paged.ts). For a mesh that
+ * does not cross the date line and a point within half a turn of its middle that is the longitude itself, unchanged.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { bboxContains, type BBox } from '../../geo/geodesy';
+import { unwrapLonNear } from '../../geo/angles';
+import { bboxContains, bboxWidth, wrapEdge, type BBox } from '../../geo/geodesy';
 
 export const FLAG_NAVIGABLE = 1;
 export const FLAG_HAZARD = 2;
@@ -133,8 +143,14 @@ export interface MeshTileInfo {
   bbox: [number, number, number, number];
 }
 
+/** A tile's vertex extent (MeshTileInfo.bbox) as a box. */
+export function tileBBox(b: [number, number, number, number]): BBox {
+  return { west: b[0], south: b[1], east: b[2], north: b[3] };
+}
+
 export interface MeshIndex {
   version: number;
+  /** The mesh's box; `west` greater than `east` when the mesh crosses the date line (see the file's comment). */
   west: number;
   south: number;
   east: number;
@@ -154,6 +170,11 @@ export interface LoadedMesh {
   y: Float64Array;
   /** cos(latitude) the x axis was scaled with. */
   cl: number;
+  /**
+   * The longitude the frame is laid out about: a longitude is taken next to it (within half a turn) before it is
+   * scaled, so a mesh across the date line is in one piece. Absent (the tests' own meshes): a longitude as it is.
+   */
+  ref?: number;
   /** Local index of the neighbour across edge k of t (edge k runs from corner k to corner k+1), -1 = none or not loaded. */
   neighbours: Int32Array;
   rev: Int8Array;
@@ -184,6 +205,9 @@ export class MeshStore {
   /** The global id ranges [first, end) of the tiles left out (no chart data), ascending by first. */
   private readonly gaps: [number, number][];
 
+  /** The longitude of the middle of the mesh's box, counted east from its west edge (past 180 when the box crosses the date line). */
+  readonly midLon: number;
+
   private constructor(
     readonly dir: string,
     /** The index with the tiles without chart data left out (the triangle count as built). */
@@ -192,6 +216,16 @@ export class MeshStore {
   ) {
     for (const t of index.tiles) this.byIJ.set(`${t.i},${t.j}`, t);
     this.gaps = gaps.sort((a, b) => a[0] - b[0]);
+    this.midLon = index.west + bboxWidth(index) / 2;
+  }
+
+  /**
+   * A longitude next to the mesh: the same meridian, within half a turn of the mesh's middle, so every point of the
+   * mesh and round it lies in one run of numbers from its west edge eastwards (190 for 170°W in a mesh that starts at
+   * 171.5°E). A longitude already within half a turn of the middle is returned as it is.
+   */
+  lonNear(lon: number): number {
+    return unwrapLonNear(lon, this.midLon);
   }
 
   /** Open a mesh folder; throws when index.json is missing or not a version this code reads. Tiles without chart data are left out. */
@@ -227,8 +261,12 @@ export class MeshStore {
     return false;
   }
 
+  /** The tile column and row of a point: columns count east from the mesh's west edge, across the date line when the mesh crosses it. */
   tileIJ(lon: number, lat: number): [number, number] {
-    return [Math.floor((lon - this.index.west) / this.index.tileDeg), Math.floor((lat - this.index.south) / this.index.tileDeg)];
+    return [
+      Math.floor((this.lonNear(lon) - this.index.west) / this.index.tileDeg),
+      Math.floor((lat - this.index.south) / this.index.tileDeg),
+    ];
   }
 
   tile(i: number, j: number): MeshTileInfo | undefined {
@@ -290,6 +328,7 @@ export class MeshStore {
       x: new Float64Array(n * 3),
       y: new Float64Array(n * 3),
       cl,
+      ref: this.midLon,
       neighbours: new Int32Array(n * 3),
       rev: new Int8Array(n * 3),
       mult: new Float32Array(n),
@@ -361,7 +400,7 @@ export class MeshStore {
     // The same expression, in the same order, as toMeshXY.
     const K = this.index.xScale;
     for (let k = 0; k < n * 3; k++) {
-      m.x[offset * 3 + k] = (corners[2 * k] / K) * m.cl * M_PER_DEG_MESH;
+      m.x[offset * 3 + k] = this.lonNear(corners[2 * k] / K) * m.cl * M_PER_DEG_MESH;
       m.y[offset * 3 + k] = corners[2 * k + 1] * M_PER_DEG_MESH;
       const g = nb[k];
       m.neighbours[offset * 3 + k] = g < 0 ? -1 : toLocal(g);
@@ -377,12 +416,12 @@ export class MeshStore {
 
 /** Project a point into a loaded mesh's metres frame (the same expression order as readTile). */
 export function toMeshXY(m: LoadedMesh, lon: number, lat: number): [number, number] {
-  return [lon * m.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];
+  return [(m.ref === undefined ? lon : unwrapLonNear(lon, m.ref)) * m.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];
 }
 
-/** Back from the metres frame to degrees. */
+/** Back from the metres frame to degrees (a longitude between -180 and 180). */
 export function fromMeshXY(m: LoadedMesh, x: number, y: number): [number, number] {
-  return [x / (m.cl * M_PER_DEG_MESH), y / M_PER_DEG_MESH];
+  return [wrapEdge(x / (m.cl * M_PER_DEG_MESH)), y / M_PER_DEG_MESH];
 }
 
 /**

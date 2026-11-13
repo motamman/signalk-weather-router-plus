@@ -23,7 +23,7 @@
  * piece of a triangle is found again from its own tile alone.
  */
 
-import { haversineDistanceM, type BBox } from '../../geo/geodesy';
+import { haversineDistanceM, wrapEdge, type BBox } from '../../geo/geodesy';
 import { MinHeap } from '../heap';
 import type { BoundarySeeds, PagedMesh, PagedTile } from './paged';
 import { blockedTriangles, type MeshRules } from './route';
@@ -328,8 +328,11 @@ export class PieceGraph {
     const recomputed: number[] = [];
     for (let idx = 0; idx < pm.tileCount && avoid.length; idx++) {
       const b = pm.infoAt(idx)!.bbox;
+      // The point of the tile's extent nearest the area's centre, both next to the frame's middle (paged.ts lonNear,
+      // tileTurn: a tile east of the date line is stored from -180, an area west of it at 179).
+      const turn = pm.tileTurn(b);
       const touched = avoid.some(a => {
-        const lon = Math.min(Math.max(a.lon, b[0]), b[2]);
+        const lon = Math.min(Math.max(pm.lonNear(a.lon), b[0] + turn), b[2] + turn);
         const lat = Math.min(Math.max(a.lat, b[1]), b[3]);
         return haversineDistanceM(a.lon, a.lat, lon, lat) <= a.radiusM;
       });
@@ -432,7 +435,10 @@ export class PieceGraph {
     return out;
   }
 
-  /** The reach of chains of pieces: their tiles, the box of those tiles' extents, their length. */
+  /**
+   * The reach of chains of pieces: their tiles, the box of those tiles' extents (its west greater than its east when
+   * they lie either side of the date line), their length.
+   */
   reach(chains: number[][]): Reach {
     const tiles = new Set<number>();
     const box: BBox = { west: Infinity, south: Infinity, east: -Infinity, north: -Infinity };
@@ -442,10 +448,12 @@ export class PieceGraph {
         const idx = this.tileOfPiece[p];
         if (tiles.has(idx)) continue;
         tiles.add(idx);
+        // Each tile's extent next to the frame's middle, as one run of longitudes (paged.ts tileTurn).
         const b = this.pm.infoAt(idx)!.bbox;
-        box.west = Math.min(box.west, b[0]);
+        const turn = this.pm.tileTurn(b);
+        box.west = Math.min(box.west, b[0] + turn);
         box.south = Math.min(box.south, b[1]);
-        box.east = Math.max(box.east, b[2]);
+        box.east = Math.max(box.east, b[2] + turn);
         box.north = Math.max(box.north, b[3]);
       }
       for (let k = 1; k < chain.length; k++) {
@@ -454,6 +462,6 @@ export class PieceGraph {
         lengthM += haversineDistanceM(a[0], a[1], b[0], b[1]);
       }
     }
-    return { chainTiles: tiles.size, box, lengthM };
+    return { chainTiles: tiles.size, box: { ...box, west: wrapEdge(box.west), east: wrapEdge(box.east) }, lengthM };
   }
 }

@@ -315,7 +315,8 @@ function boundaryOf(store: MeshStore, mapFile: string, rules: CoarseRules): Boun
  */
 function joinsTo(pa: PagedMesh, storeA: MeshStore, other: { dir: string; mapFile: string }, rules: CoarseRules) {
   const storeB = MeshStore.open(other.dir);
-  const pb = new PagedMesh(storeB, meshRulesOf(rules), pa.cl, boundaryOf(storeB, other.mapFile, rules));
+  // B in A's frame: the same scale, laid out about the same longitude (paged.ts centred).
+  const pb = new PagedMesh(storeB, meshRulesOf(rules), pa.cl, boundaryOf(storeB, other.mapFile, rules)).centred(pa.frameLon);
   const finder = new JoinFinder({ store: storeA, pm: pa }, { store: storeB, pm: pb });
   const bPieces = new Map<number, Int32Array>();
   const seen = new Set<string>();

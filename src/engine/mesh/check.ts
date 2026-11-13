@@ -19,7 +19,8 @@
  * process (plugin/meshchecktask.ts).
  */
 
-import { bboxFromLonLat, boxesMeet, haversineDistanceM, type BBox } from '../../geo/geodesy';
+import { unwrapLonNear } from '../../geo/angles';
+import { bboxFromLonLat, boxesMeet, haversineDistanceM, wrapEdge, type BBox } from '../../geo/geodesy';
 import { DEFAULT_OVERHEAD_M, DEFAULT_UKC_M } from '../../vessel/vessel';
 import type { LegDepth } from '../route';
 import { MeshLand } from './land';
@@ -36,6 +37,7 @@ import {
   FLAG_STRUCTURE,
   type MeshStore,
   NO_VALUE,
+  tileBBox,
 } from './store';
 
 /** The rules the route was planned with, as far as they decide what is blocked. */
@@ -107,9 +109,12 @@ function cutPieces(path: [number, number][], legOf: number[]): Piece[] {
     const len = haversineDistanceM(a[0], a[1], b[0], b[1]);
     if (!(len > 0)) continue;
     const n = Math.max(1, Math.ceil(len / PIECE_M));
+    // The segment the short way round: its end's longitude next to its start's (a segment across the date line runs
+    // from 179 to 181, not back through 0).
+    const bLon = unwrapLonNear(b[0], a[0]);
     for (let i = 0; i < n; i++) {
-      const p0: [number, number] = [a[0] + ((b[0] - a[0]) * i) / n, a[1] + ((b[1] - a[1]) * i) / n];
-      const p1: [number, number] = [a[0] + ((b[0] - a[0]) * (i + 1)) / n, a[1] + ((b[1] - a[1]) * (i + 1)) / n];
+      const p0: [number, number] = [wrapEdge(a[0] + ((bLon - a[0]) * i) / n), a[1] + ((b[1] - a[1]) * i) / n];
+      const p1: [number, number] = [wrapEdge(a[0] + ((bLon - a[0]) * (i + 1)) / n), a[1] + ((b[1] - a[1]) * (i + 1)) / n];
       out.push({ a: p0, b: p1, leg: legOf[k - 1], seg: k - 1, lengthM: len / n, covered: [] });
     }
   }
@@ -208,7 +213,7 @@ export function checkRouteOnMeshes(
       const pb = boxOf(p);
       if (!boxesMeet(pb, extent)) continue;
       // The tiles the walk has passed go: only those meeting this piece stay.
-      land.pm.retain(T => T.bbox[0] <= pb.east && pb.west <= T.bbox[2] && T.bbox[1] <= pb.north && pb.south <= T.bbox[3]);
+      land.pm.retain(T => boxesMeet(tileBBox(T.bbox), pb));
       walkPiece(land, p, rules);
     }
     land.release();
@@ -254,5 +259,5 @@ export function checkRouteOnMeshes(
 }
 
 function at(p: Piece, f: number): [number, number] {
-  return [p.a[0] + (p.b[0] - p.a[0]) * f, p.a[1] + (p.b[1] - p.a[1]) * f];
+  return [wrapEdge(p.a[0] + (unwrapLonNear(p.b[0], p.a[0]) - p.a[0]) * f), p.a[1] + (p.b[1] - p.a[1]) * f];
 }

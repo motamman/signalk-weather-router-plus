@@ -77,10 +77,10 @@ export function findMeshTransfer(
   end: [number, number],
   names: { start: string; end: string }
 ): MeshTransferResult {
-  // One frame for both meshes (the leg's), so a point of A is the same point of B.
+  // One frame for both meshes (the leg's, laid out about its start: paged.ts centred), so a point of A is the same point of B.
   const cl = Math.cos((((start[1] + end[1]) / 2) * Math.PI) / 180);
-  const pa = new PagedMesh(from.store, rules, cl, from.boundary);
-  const pb = new PagedMesh(to.store, rules, cl, to.boundary);
+  const pa = new PagedMesh(from.store, rules, cl, from.boundary).centred(start[0]);
+  const pb = new PagedMesh(to.store, rules, cl, to.boundary).centred(start[0]);
   const wa = waterOf(pa, from.map);
   const wb = waterOf(pb, to.map);
   const ga = wa.groupOf;
@@ -216,8 +216,8 @@ export function findMeshGap(
   names: { start: string; end: string }
 ): MeshGapResult {
   const cl = Math.cos((((start[1] + end[1]) / 2) * Math.PI) / 180);
-  const pa = new PagedMesh(from.store, rules, cl, from.boundary);
-  const pb = new PagedMesh(to.store, rules, cl, to.boundary);
+  const pa = new PagedMesh(from.store, rules, cl, from.boundary).centred(start[0]);
+  const pb = new PagedMesh(to.store, rules, cl, to.boundary).centred(start[0]);
   const wa = waterOf(pa, from.map);
   const wb = waterOf(pb, to.map);
   const ga = wa.groupOf;
