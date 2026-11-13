@@ -242,6 +242,28 @@ test("a tile the frame's cut runs through is not read into the frame, and the re
     assert.equal(land.legCrossesLandExact(178.2, 0.3, 179.8, 0.3), false);
     assert.equal(land.legCrossesLandExact(-178.9, 0.3, -178.1, 0.3), false);
   });
+  // The nearest usable water in that frame. The column from 180 to 179°W (ids 8 to 11, both rows) is cut. A filter that
+  // accepts nothing ends in null, the cut tiles unread; one that accepts none of their triangles passes over them to
+  // the water it accepts; one that accepts a triangle of theirs is refused, since they may hold the nearest.
+  withMesh(store => {
+    const pm = new PagedMesh(store, RULES, 1).centred(0.2);
+    const cut = /lies across the meridian opposite the frame's middle \(0\.2°\), where a flat frame is cut/;
+    const inCut = (g: number): boolean => g >= 8 && g < 12;
+    const none = (): boolean => false;
+    assert.equal(pm.nearestUsable(...pm.toXY(177.5, 0.5), none), null);
+    assert.equal(pm.nearestUsable(...pm.toXY(-177.5, 0.5), none), null);
+    assert.deepEqual(pm.heldTiles(), [], 'no tile of the scan stays held');
+    // From east of the mesh, only the water west of the date line accepted: the cut column, nearer, is passed over. That
+    // water is a turn on in the frame, west of the point, so its nearest is the column from 178°E.
+    const west = pm.nearestUsable(...pm.toXY(-177.5, 0.5), g => g < 8)!;
+    assert.ok(west.tri >= 0 && west.tri < 4, `${west.tri}`);
+    assert.deepEqual(pm.fromXY(west.x, west.y), [178, 0.5]);
+    assert.throws(() => pm.nearestUsable(...pm.toXY(177.5, 0.5), inCut), cut);
+    assert.throws(() => pm.nearestUsable(...pm.toXY(-177.5, 0.5), g => g < 12), cut);
+    // No filter: the water beside the point, nearer than the cut column, as before.
+    const beside = pm.nearestUsable(...pm.toXY(177.5, 0.5))!;
+    assert.deepEqual(pm.fromXY(beside.x, beside.y), [178, 0.5]);
+  });
   // The frame of one mesh is laid out about the mesh's middle: its cut is outside the mesh, and every tile is read.
   withMesh(store => {
     const pm = new PagedMesh(store, RULES, 1);

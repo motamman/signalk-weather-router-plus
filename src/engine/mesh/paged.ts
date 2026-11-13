@@ -195,6 +195,16 @@ export class PagedMesh {
     return this.lonNear(mid) - mid;
   }
 
+  /**
+   * Does the frame's cut (the meridian opposite its middle) run through a tile's extent? Such a tile has no place in a
+   * flat frame (the file's comment) and is not read into one. Touching the cut with an edge is on one side of it.
+   */
+  private cutRunsThrough(bbox: [number, number, number, number]): boolean {
+    if (this.ref === undefined) return false;
+    const turn = this.tileTurn(bbox);
+    return bbox[0] + turn < this.ref - 180 || bbox[2] + turn > this.ref + 180;
+  }
+
   /** An in-memory mesh (the tests' synthetic meshes) as one tile that is never dropped, with its blocked set as given. */
   static fromLoaded(m: LoadedMesh, blocked: Uint8Array, cellM = TILE_INDEX_CELL_M): PagedMesh {
     let w = Infinity;
@@ -325,7 +335,7 @@ export class PagedMesh {
     const turn = this.tileTurn(info.bbox);
     // A tile the frame's cut runs through cannot be placed in it (the file's comment): west of the cut it would be a
     // turn from its own east. Touching the cut with an edge is on one side of it.
-    if (this.ref !== undefined && (info.bbox[0] + turn < this.ref - 180 || info.bbox[2] + turn > this.ref + 180))
+    if (this.cutRunsThrough(info.bbox))
       throw new Error(
         `mesh tile ${info.file} (${info.bbox[0]}° to ${info.bbox[2]}°) lies across the meridian opposite the frame's middle (${this.ref}°), where a flat frame is cut: half the earth from the leg, which a leg does not reach`
       );
@@ -609,6 +619,12 @@ export class PagedMesh {
    * The point's own triangle first; otherwise the tiles are read in order of the distance to their extent and the
    * scan stops at the first tile farther than the best found, so the answer is exact with no distance limit (the
    * mesh's edge is the limit).
+   *
+   * A tile the frame's cut runs through cannot be read into the frame (read). It is ordered by the nearer of its two
+   * places in the frame, either side of the cut, so the scan never stops short of it. When the scan reaches it, `accept`
+   * is asked of each of its ids, from the index alone: when it accepts none, the tile cannot hold the answer whatever
+   * its water and is passed over unread (so a filter that accepts nothing ends in null); when it accepts one, the tile
+   * may hold the nearest usable water, and the read ends saying why it cannot be read.
    */
   nearestUsable(
     px: number,
@@ -617,19 +633,25 @@ export class PagedMesh {
   ): { tri: number; x: number; y: number; distM: number } | null {
     const own = this.locate(px, py, true);
     if (own >= 0 && !this.isBlocked(own) && accept(own)) return { tri: own, x: px, y: py, distM: 0 };
-    const order: { idx: number; d: number }[] = [];
-    if (!this.store) order.push({ idx: 0, d: 0 });
+    const order: { idx: number; d: number; cut: boolean }[] = [];
+    if (!this.store) order.push({ idx: 0, d: 0, cut: false });
     else
       for (let idx = 0; idx < this.infos.length; idx++) {
         // The point of the tile's extent nearest the point, the extent where the tile is in the frame (tileTurn; a
-        // tile east of the date line is stored from -180).
+        // tile east of the date line is stored from -180). A tile the cut runs through lies at both ends of the frame:
+        // the nearer of its places, the one tileTurn gives and those a turn either side of it.
         const b = this.infos[idx]!.bbox;
         const lon = px / (this.cl * M_PER_DEG_MESH);
         const lat = py / M_PER_DEG_MESH;
         const turn = this.tileTurn(b);
-        const cx = Math.min(Math.max(lon, b[0] + turn), b[2] + turn) * this.cl * M_PER_DEG_MESH;
+        const cut = this.cutRunsThrough(b);
         const cy = Math.min(Math.max(lat, b[1]), b[3]) * M_PER_DEG_MESH;
-        order.push({ idx, d: Math.hypot(cx - px, cy - py) });
+        let d = Infinity;
+        for (const tn of cut ? [turn - 360, turn, turn + 360] : [turn]) {
+          const cx = Math.min(Math.max(lon, b[0] + tn), b[2] + tn) * this.cl * M_PER_DEG_MESH;
+          d = Math.min(d, Math.hypot(cx - px, cy - py));
+        }
+        order.push({ idx, d, cut });
       }
     order.sort((u, v) => u.d - v.d);
     let best: { tri: number; x: number; y: number; distM: number } | null = null;
@@ -639,6 +661,13 @@ export class PagedMesh {
     let bestTile = -1;
     for (const o of order) {
       if (best && o.d >= best.distM) break;
+      if (o.cut) {
+        // Not readable into the frame: passed over when `accept` takes none of its triangles, else read, which throws.
+        const info = this.infos[o.idx]!;
+        let any = false;
+        for (let g = info.first; g < info.first + info.n && !any; g++) any = accept(g);
+        if (!any) continue;
+      }
       const wasHeld = this.isHeld(o.idx);
       const T = this.tile(o.idx);
       let improved = false;

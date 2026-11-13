@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { boundarySeeds, buildCoarseMap, type CoarseRules, meshRulesOf, PieceGraph } from './coarse';
 import { writeGridMesh, writeTile } from './fixture';
 import { PagedMesh } from './paged';
 import { MeshStore } from './store';
@@ -98,6 +99,50 @@ test('nearestUsable lets go of the tiles it scans, but the one holding its answe
     // The point's own tile (read by the lookup of its triangle) and the answer's: nothing in between.
     assert.ok(held.includes(pm.tileIndexOf(nu!.tri)), "the answer's tile is kept");
     assert.ok(held.length <= 2, `held after the scan: ${held}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('nearestUsable lets go of the tiles it scans under the filter the router passes, which reads a tile to answer', () => {
+  // A row of twelve 1° tiles; the second is too shallow for the boat, so the first is one water and the rest another.
+  // The router's filter is "of this water" (waters.ts, meshcoarse.ts): it asks the rough cut for a triangle's piece,
+  // which reads the triangle's tile. A scan that asked it of a tile before reading the tile itself would find every
+  // tile it passes "held before the scan" and let none go.
+  const COARSE: CoarseRules = {
+    draughtM: 2,
+    airDraftM: 18,
+    underKeelClearanceM: 0.5,
+    overheadClearanceM: 1,
+    bufferM: 0,
+    openingBridges: 'open',
+  };
+  const dir = writeGridMesh(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-paged-')),
+    Array.from({ length: 12 }, (_, i) => ({ i, j: 0, depth: i === 1 ? 1 : 10 }))
+  );
+  try {
+    const store = MeshStore.open(dir);
+    const boundary = boundarySeeds(store, COARSE);
+    const map = buildCoarseMap(store, COARSE, new PagedMesh(store, meshRulesOf(COARSE), 1, boundary));
+    const pm = new PagedMesh(store, meshRulesOf(COARSE), 1, boundary);
+    const graph = new PieceGraph(map, pm);
+    const groupOf = (g: number): number | null => {
+      const p = graph.pieceOf(g);
+      return p === null ? null : graph.component(p);
+    };
+    const far = groupOf(pm.locate(...pm.toXY(11.5, 0.25)))!;
+    pm.retain(() => false);
+    // From the first tile, the nearest water of the far group is the third tile's west edge; the shallow tile between
+    // is read on the way and let go.
+    const nu = pm.nearestUsable(...pm.toXY(0.5, 0.5), g => groupOf(g) === far)!;
+    assert.equal(pm.tileIndexOf(nu.tri), 2);
+    assert.deepEqual(pm.fromXY(nu.x, nu.y), [2, 0.5]);
+    assert.deepEqual(
+      pm.heldTiles().sort((a, b) => a - b),
+      [0, 2],
+      "the point's own tile and the answer's"
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
