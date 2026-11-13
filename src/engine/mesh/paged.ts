@@ -23,8 +23,10 @@
  * that its middle is next to it too (read): a mesh across the date line is one piece, and a tile is never torn. A
  * longitude within half a turn of the frame's middle is used as it is, so a mesh that does not cross the date line has
  * the numbers it always had. The frame is cut on the meridian opposite its middle: two tiles either side of that
- * meridian are a turn apart in it, half the earth away from the leg. Points come back as longitudes between -180 and
- * 180 (fromXY).
+ * meridian are a turn apart in it, half the earth away from the leg, and a tile the cut runs through is whole on one
+ * side of it. So a point is looked for in a tile at its place next to that tile (xAt): a point of such a tile beyond
+ * the cut, which toXY puts a turn away from the tile, is found in it all the same. Points come back as longitudes
+ * between -180 and 180 (fromXY).
  */
 
 import { unwrapLonNear } from '../../geo/angles';
@@ -178,6 +180,18 @@ export class PagedMesh {
   /** A longitude next to the frame's middle: the same meridian, within half a turn of it. */
   lonNear(lon: number): number {
     return this.ref === undefined ? lon : unwrapLonNear(lon, this.ref);
+  }
+
+  /**
+   * A point's x in the frame as a tile has it (the tile's extent `bbox`): the same meridian next to the tile's own
+   * place in the frame, within half a turn of its middle there. It is the point's x itself unless the frame's cut lies
+   * between the point and the tile (the file's comment), and always for an in-memory mesh, which has no frame of its own.
+   */
+  private xAt(bbox: [number, number, number, number], px: number): number {
+    if (this.ref === undefined) return px;
+    const lon = px / (this.cl * M_PER_DEG_MESH);
+    const near = unwrapLonNear(lon, (bbox[0] + bbox[2]) / 2 + this.tileTurn(bbox));
+    return near === lon ? px : near * this.cl * M_PER_DEG_MESH;
   }
 
   /**
@@ -467,7 +481,9 @@ export class PagedMesh {
   }
 
   /** The triangle of a tile holding (px, py), local id or -1; with preferUsable a usable one wins over a blocked one. */
-  private locateIn(T: PagedTile, px: number, py: number, preferUsable: boolean, all?: number[]): number {
+  private locateIn(T: PagedTile, x0: number, py: number, preferUsable: boolean, all?: number[]): number {
+    // The point where this tile is in the frame (xAt).
+    const px = this.xAt(T.bbox, x0);
     const G = this.gridOf(T);
     // Clamped to the grid: a point handed on as lon/lat can come back a hair outside the tile's vertex extent, west or
     // south of the grid's origin (an exit on a straight chart limit, through a frame with another cosine); the
@@ -564,9 +580,7 @@ export class PagedMesh {
       const k = near.findIndex(([di, dj]) => info.i === i + di && info.j === j + dj);
       return k >= 0 ? k : near.length + idx;
     };
-    return (this.cellTiles.get(`${i},${j}`) ?? [])
-      .filter(idx => nearExtent(this.infos[idx]!, this.lonNear(lon), lat, this.tileTurn(this.infos[idx]!.bbox)))
-      .sort((a, b) => rank(a) - rank(b));
+    return (this.cellTiles.get(`${i},${j}`) ?? []).filter(idx => nearExtent(this.infos[idx]!, lon, lat)).sort((a, b) => rank(a) - rank(b));
   }
 
   /**
@@ -612,15 +626,16 @@ export class PagedMesh {
     if (!this.store) order.push({ idx: 0, d: 0 });
     else
       for (let idx = 0; idx < this.infos.length; idx++) {
-        // The point of the tile's extent nearest the point, both next to the frame's middle (a tile east of the date
-        // line is stored from -180).
+        // The point of the tile's extent nearest the point, the point taken where this tile is in the frame (xAt; a
+        // tile east of the date line is stored from -180).
         const b = this.infos[idx]!.bbox;
-        const lon = px / (this.cl * M_PER_DEG_MESH);
+        const pxT = this.xAt(b, px);
+        const lon = pxT / (this.cl * M_PER_DEG_MESH);
         const lat = py / M_PER_DEG_MESH;
         const turn = this.tileTurn(b);
         const cx = Math.min(Math.max(lon, b[0] + turn), b[2] + turn) * this.cl * M_PER_DEG_MESH;
         const cy = Math.min(Math.max(lat, b[1]), b[3]) * M_PER_DEG_MESH;
-        order.push({ idx, d: Math.hypot(cx - px, cy - py) });
+        order.push({ idx, d: Math.hypot(cx - pxT, cy - py) });
       }
     order.sort((u, v) => u.d - v.d);
     let best: { tri: number; x: number; y: number; distM: number } | null = null;
@@ -633,10 +648,11 @@ export class PagedMesh {
       const wasHeld = this.isHeld(o.idx);
       const T = this.tile(o.idx);
       let improved = false;
+      const pxT = this.xAt(T.bbox, px);
       for (let l = 0; l < T.n; l++) {
         if (T.blocked[l]) continue;
-        const [qx, qy] = closestOnTriangle(px, py, T.x, T.y, l * 3);
-        const d = Math.hypot(qx - px, qy - py);
+        const [qx, qy] = closestOnTriangle(pxT, py, T.x, T.y, l * 3);
+        const d = Math.hypot(qx - pxT, qy - py);
         if ((!best || d < best.distM) && accept(T.first + l)) {
           best = { tri: T.first + l, x: qx, y: qy, distM: d };
           improved = true;
@@ -715,13 +731,14 @@ function closestOnTriangle(px: number, py: number, x: Float64Array, y: Float64Ar
 
 /**
  * Is the point inside a tile's vertex extent, within the walk's tolerance (width.ts U_TOL) of its size? A point on
- * the tile's outer edge comes back from the metres frame a hair outside it (3.0000000000000004 against 3). `lon` is
- * next to the frame's middle (PagedMesh.lonNear), and the tile's extent is taken `turn` on (PagedMesh.tileTurn): a tile
- * east of the date line is stored from -180, and a point on the date line is 180 or -180.
+ * the tile's outer edge comes back from the metres frame a hair outside it (3.0000000000000004 against 3). The point's
+ * longitude is taken next to the tile's own middle, as the tile is stored: a tile east of the date line is stored from
+ * -180, and a point on the date line is 180 or -180. (No frame comes into it: the question is the earth's.)
  */
-function nearExtent(info: MeshTileInfo, lon: number, lat: number, turn: number): boolean {
+function nearExtent(info: MeshTileInfo, lon: number, lat: number): boolean {
   const b = info.bbox;
   const tx = U_TOL * (b[2] - b[0]);
   const ty = U_TOL * (b[3] - b[1]);
-  return lon >= b[0] + turn - tx && lat >= b[1] - ty && lon <= b[2] + turn + tx && lat <= b[3] + ty;
+  const l = unwrapLonNear(lon, (b[0] + b[2]) / 2);
+  return l >= b[0] - tx && lat >= b[1] - ty && l <= b[2] + tx && lat <= b[3] + ty;
 }

@@ -219,6 +219,28 @@ test('the box of the tiles read is the narrowest that holds them, also in a fram
   });
 });
 
+test("a point in a tile the frame's cut runs through is found in it, either side of the cut", () => {
+  withMesh(store => {
+    // A frame about 0.2°E is cut on 179.8°W, inside the tile from 180 to 179°W. The tile is whole on the near side
+    // of the cut (where it is stored); a point of it beyond the cut is a turn away in the frame.
+    const pm = new PagedMesh(store, RULES, 1).centred(0.2);
+    const [xw, yw] = pm.toXY(-179.9, 0.05);
+    const [xe, ye] = pm.toXY(-179.3, 0.25);
+    assert.ok(xw - xe > 300 * M_PER_DEG_MESH, 'the two points of one tile are a turn apart in the frame');
+    // Both lie in the tile's lower triangle (id 8).
+    assert.equal(pm.locate(xw, yw), 8);
+    assert.equal(pm.locate(xe, ye), 8);
+    assert.deepEqual(pm.locateAll(xw, yw), [8]);
+    assert.deepEqual(pm.locateAll(xe, ye), [8]);
+    const nu = pm.nearestUsable(xw, yw)!;
+    assert.deepEqual([nu.tri, nu.distM], [8, 0]);
+    // A point west of the mesh's last tile but one, beyond the cut too: the nearest usable water is that tile's edge.
+    const far = pm.nearestUsable(...pm.toXY(-179.95, 2.5))!;
+    assert.ok(Math.abs(far.distM - 0.5 * M_PER_DEG_MESH) < 1e-6, `${far.distM}`);
+    assert.deepEqual(pm.fromXY(far.x, far.y), [-179.95, 2]);
+  });
+});
+
 test('a mesh all the way round the earth: the tiles either side of the date line are found, and a point on it', () => {
   // 360 tiles of 1° from 180°W round to 180°E, one row: the index's box is -180 to 180, its middle 0, and the tiles at
   // its two ends lie on the meridian opposite its middle.
