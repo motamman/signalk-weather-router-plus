@@ -51,7 +51,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { unwrapLonNear } from '../../geo/angles';
-import { bboxContains, bboxWidth, wrapEdge, type BBox } from '../../geo/geodesy';
+import { bboxContains, bboxWidth, boxesMeet, wrapEdge, type BBox } from '../../geo/geodesy';
 
 export const FLAG_NAVIGABLE = 1;
 export const FLAG_HAZARD = 2;
@@ -146,6 +146,15 @@ export interface MeshTileInfo {
 /** A tile's vertex extent (MeshTileInfo.bbox) as a box. */
 export function tileBBox(b: [number, number, number, number]): BBox {
   return { west: b[0], south: b[1], east: b[2], north: b[3] };
+}
+
+/**
+ * Do two tiles' vertex extents share at least a point (of one mesh or of two)? The one test of it (geodesy.ts
+ * boxesMeet): longitude goes round, so a tile that ends on the date line at 180 and one that starts on it at -180 meet
+ * there, as two tiles that share an edge anywhere else do.
+ */
+export function tileExtentsMeet(a: [number, number, number, number], b: [number, number, number, number]): boolean {
+  return boxesMeet(tileBBox(a), tileBBox(b));
 }
 
 export interface MeshIndex {
@@ -281,19 +290,37 @@ export class MeshStore {
     return bboxContains({ west: t.bbox[0], south: t.bbox[1], east: t.bbox[2], north: t.bbox[3] }, lon, lat);
   }
 
-  /** The tiles whose cells meet the box, sorted by first id. */
+  /**
+   * The tiles whose cells meet the box, sorted by first id. The box is its whole run of longitude, from its west
+   * eastwards to its east (across the date line when its west is the greater, all the way round for -180 to 180): the
+   * run starts at the box's west taken next to the mesh (lonNear) and may go on past the far side of the earth from
+   * the mesh's middle, where it is a turn on from the mesh's own columns, so the columns are those of the run and of
+   * the run a turn back. A run nearly all the way round comes back over the mesh, and the two runs then name a column
+   * twice: a tile is in the answer once.
+   */
   private tilesIn(box: BBox): MeshTileInfo[] {
-    const [i0, j0] = this.tileIJ(box.west, box.south);
-    const [i1, j1] = this.tileIJ(box.east, box.north);
-    const infos: MeshTileInfo[] = [];
-    for (let i = i0; i <= i1; i++)
-      for (let j = j0; j <= j1; j++) {
-        const t = this.tile(i, j);
-        if (t) infos.push(t);
+    const { west: meshWest, south: meshSouth, tileDeg } = this.index;
+    const j0 = Math.floor((box.south - meshSouth) / tileDeg);
+    const j1 = Math.floor((box.north - meshSouth) / tileDeg);
+    const found = new Set<MeshTileInfo>();
+    if (bboxWidth(box) >= 360) {
+      for (const t of this.index.tiles) if (t.j >= j0 && t.j <= j1) found.add(t);
+    } else {
+      const west = this.lonNear(box.west);
+      // The box's east counted on from that west: the same turns on as the west, and one more across the date line.
+      const east = box.east + (west - box.west) + (box.west <= box.east ? 0 : 360);
+      for (const turn of [0, -360]) {
+        const i0 = Math.floor((west + turn - meshWest) / tileDeg);
+        const i1 = Math.floor((east + turn - meshWest) / tileDeg);
+        for (let i = i0; i <= i1; i++)
+          for (let j = j0; j <= j1; j++) {
+            const t = this.tile(i, j);
+            if (t) found.add(t);
+          }
       }
+    }
     // Sorted by first id so neighbours can be remapped by binary search.
-    infos.sort((a, b) => a.first - b.first);
-    return infos;
+    return [...found].sort((a, b) => a.first - b.first);
   }
 
   /** How many triangles load(box) would read, from the index alone. */

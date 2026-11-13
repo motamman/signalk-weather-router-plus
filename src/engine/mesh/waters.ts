@@ -50,7 +50,7 @@ import { emptyMask, forEachEdgeSide, isFree, markMeshWater } from './exit';
 import { JoinFinder } from './joins';
 import { type BoundarySeeds, PagedMesh } from './paged';
 import type { MeshRules } from './route';
-import type { MeshStore } from './store';
+import { type MeshStore, tileExtentsMeet as meets } from './store';
 
 export interface WaterMesh {
   store: MeshStore;
@@ -84,9 +84,6 @@ export type WatersPlan =
       water?: { fields: number; cells: number; ms: number };
     }
   | { ok: false; reason: string };
-
-type Box = [number, number, number, number];
-const meets = (a: Box, b: Box): boolean => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
 
 export function planWaters(
   meshes: WaterMesh[],

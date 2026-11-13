@@ -16,13 +16,12 @@
  */
 
 import type { PagedMesh, PagedTile } from './paged';
-import type { MeshStore } from './store';
+import { type MeshStore, tileExtentsMeet as meets } from './store';
 import { U_TOL } from './width';
 
 export const JOINS_VERSION = 1;
 
 type Box = [number, number, number, number];
-const meets = (a: Box, b: Box): boolean => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
 
 export class JoinFinder {
   private prev = -1;

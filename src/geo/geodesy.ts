@@ -241,20 +241,25 @@ export function wrapEdge(lon: number): number {
 }
 
 /**
- * The box holding two boxes, the short way round: `b` is taken next to `a` (its west within half a turn of `a`'s
- * middle), so two boxes either side of the date line give a box across it (west greater than east), and two boxes
- * that do not cross give their plain union, the same numbers as the least west and the greatest east. All the way
- * round: -180 to 180.
+ * The box holding two boxes, the short way round: each box is its run of longitude from its west eastwards, `b` is
+ * tried where it is and a turn either way from there, and the narrowest box that holds both runs is the answer (`b`
+ * where it is when another place is no narrower). So two boxes either side of the date line give a box across it
+ * (west greater than east), a box that holds the other is the answer in either order, and where the plain union (the
+ * least west, the greatest east) is the narrowest it is those numbers. All the way round: -180 to 180.
  */
 export function bboxUnion(a: BBox, b: BBox): BBox {
   const south = Math.min(a.south, b.south);
   const north = Math.max(a.north, b.north);
   const aw = a.west;
   const ae = a.east >= a.west ? a.east : a.east + 360;
-  const bw = unwrapLonNear(b.west, (aw + ae) / 2);
-  const be = (b.east >= b.west ? b.east : b.east + 360) + (bw - b.west);
-  const west = Math.min(aw, bw);
-  const east = Math.max(ae, be);
+  const be0 = b.east >= b.west ? b.east : b.east + 360;
+  let west = Math.min(aw, b.west);
+  let east = Math.max(ae, be0);
+  for (const turn of [-360, 360]) {
+    const w = Math.min(aw, b.west + turn);
+    const e = Math.max(ae, be0 + turn);
+    if (e - w < east - west) [west, east] = [w, e];
+  }
   if (east - west >= 360) return { west: -180, south, east: 180, north };
   return { west: wrapEdge(west), south, east: wrapEdge(east), north };
 }

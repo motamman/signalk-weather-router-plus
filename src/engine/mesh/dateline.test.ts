@@ -18,7 +18,7 @@ import { markMeshWater } from './exit';
 import { writeGridMesh } from './fixture';
 import { PagedMesh } from './paged';
 import { searchMesh } from './route';
-import { M_PER_DEG_MESH, MeshStore } from './store';
+import { M_PER_DEG_MESH, MeshStore, tileExtentsMeet } from './store';
 import { findMeshTransfer } from './transfer';
 
 const RULES = { draughtM: 2, airDraftM: 18, motorSpeedMs: 3 };
@@ -76,6 +76,16 @@ test('boxes round the earth: boxesMeet, bboxUnion and wrapEdge across the date l
     east: 1,
     north: 1,
   });
+  // A box that holds the other is their union, whichever is given first (the wide one's west is more than half a turn
+  // from the narrow one's middle).
+  const narrow = { west: 170, south: 0, east: 175, north: 1 };
+  const wide = { west: -20, south: 0, east: 175, north: 1 };
+  assert.deepEqual(bboxUnion(narrow, wide), wide);
+  assert.deepEqual(bboxUnion(wide, narrow), wide);
+  // Two plain boxes nearer each other across the date line than round the front: the box across it, in either order.
+  const eastOfIt = { west: -175, south: 0, east: -170, north: 1 };
+  assert.deepEqual(bboxUnion(narrow, eastOfIt), { west: 170, south: 0, east: -170, north: 1 });
+  assert.deepEqual(bboxUnion(eastOfIt, narrow), { west: 170, south: 0, east: -170, north: 1 });
   assert.deepEqual([wrapEdge(181), wrapEdge(-181), wrapEdge(180), wrapEdge(-180), wrapEdge(12.5)], [-179, 179, 180, -180, 12.5]);
 });
 
@@ -92,6 +102,74 @@ test('the tile reader: a point either side of the date line is in its tile, by t
     assert.deepEqual(store.tile(2, 0)!.bbox, [-180, 0, -179, 1]);
     assert.deepEqual(store.tile(1, 0)!.bbox, [179, 0, 180, 1]);
   });
+});
+
+test('a box of tiles: every tile the box meets, for a box across the date line, a box round the far side and the whole earth', () => {
+  withMesh(store => {
+    const tiles = (west: number, east: number, south = 0, north = 2): number[] =>
+      store
+        .load({ west, south, east, north })
+        .tiles.map(t => t.info.i * 10 + t.info.j)
+        .sort((p, q) => p - q);
+    const all = [0, 1, 10, 11, 20, 21, 30, 31];
+    // The whole earth, by its usual box and as any other full turn.
+    assert.deepEqual(tiles(-180, 180), all);
+    assert.equal(store.countTriangles({ west: -180, south: 0, east: 180, north: 2 }), 16);
+    assert.equal(store.load({ west: -180, south: 0, east: 180, north: 2 }).n, 16);
+    assert.deepEqual(tiles(-180, 180, 0.2, 0.8), [0, 10, 20, 30]);
+    // All of it but the half degree either side of the date line: the mesh's two ends, met at the two ends of the box.
+    assert.deepEqual(tiles(-179.5, 179.5), all);
+    assert.equal(store.countTriangles({ west: -179.5, south: 0, east: 179.5, north: 2 }), 16);
+    // From the far side of the earth eastwards to the mesh's west columns, and from its east columns on round.
+    assert.deepEqual(tiles(0, 178.5), [0, 1]);
+    assert.deepEqual(tiles(-178.5, 0), [30, 31]);
+    assert.deepEqual(tiles(-90, 90), []);
+    // Across the date line, and either side of it.
+    assert.deepEqual(tiles(179.5, -179.5), [10, 11, 20, 21]);
+    assert.deepEqual(tiles(179.5, -179.5, 0.2, 0.8), [10, 20]);
+    assert.deepEqual(tiles(178.2, 178.8), [0, 1]);
+    assert.deepEqual(tiles(-179.8, -179.2), [20, 21]);
+    assert.equal(store.countTriangles({ west: 179.5, south: 0.2, east: -179.5, north: 0.8 }), 4);
+    // A box nearly all the way round, from 179.75 eastwards to 179.5: its run comes back over the mesh, and each of
+    // the four tiles of the row is there once (8 triangles), not the column at 179 twice.
+    assert.deepEqual(tiles(179.75, 179.5, 0.25, 0.75), [0, 10, 20, 30]);
+    assert.equal(store.countTriangles({ west: 179.75, south: 0.25, east: 179.5, north: 0.75 }), 8);
+    assert.equal(store.load({ west: 179.75, south: 0.25, east: 179.5, north: 0.75 }).n, 8);
+  });
+});
+
+test('two tiles that share the date line meet, as two tiles that share an edge anywhere else do', () => {
+  assert.equal(tileExtentsMeet([179, 0, 180, 1], [-180, 0, -179, 1]), true, 'either side of the date line');
+  assert.equal(tileExtentsMeet([1, 0, 2, 1], [2, 0, 3, 1]), true, 'either side of 2°E');
+  assert.equal(tileExtentsMeet([178, 0, 179, 1], [-180, 0, -179, 1]), false, 'a degree apart across the date line');
+  assert.equal(tileExtentsMeet([179, 0, 180, 1], [-180, 2, -179, 3]), false, 'apart in latitude');
+  // Two meshes side by side, sharing only a meridian, are the same case wherever the meridian is: the leg cannot change
+  // meshes in an overlap they do not have, and says the same of both pairs (not "do not overlap" for the pair at the
+  // date line alone).
+  const reasonAt = (westA: number, westB: number, start: [number, number], end: [number, number]): string => {
+    const da = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-touch-a-')), cells(2), westA);
+    const db = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-touch-b-')), cells(2), westB);
+    try {
+      const open = (dir: string, name: string) => {
+        const store = MeshStore.open(dir);
+        const boundary = boundarySeeds(store, COARSE);
+        return { store, boundary, map: buildCoarseMap(store, COARSE, new PagedMesh(store, meshRulesOf(COARSE), 1, boundary)), name };
+      };
+      const r = findMeshTransfer(open(da, 'A'), open(db, 'B'), RULES, start, end, { start: 'the start', end: 'the end' });
+      assert.equal(r.ok, false);
+      return r.ok ? '' : r.reason;
+    } finally {
+      fs.rmSync(da, { recursive: true, force: true });
+      fs.rmSync(db, { recursive: true, force: true });
+    }
+  };
+  const elsewhere = reasonAt(0, 2, [0.5, 0.5], [3.5, 0.5]);
+  const onDateLine = reasonAt(178, -180, [178.5, 0.5], [-178.5, 0.5]);
+  assert.equal(
+    elsewhere,
+    'no water on A connects the start to water that both A and B call usable for this boat and that connects on B to the end'
+  );
+  assert.equal(onDateLine, elsewhere);
 });
 
 test('the paged mesh: one frame across the date line; points either side are found and come back as usual longitudes', () => {
@@ -204,7 +282,7 @@ test('the final depth check walks a route across the date line the short way, an
       const v = r.violations[0];
       assert.equal(v.kind, 'depth');
       // The shallow column is the first east of the date line: the route enters it on the date line.
-      assert.ok((Math.abs(v.lon) > 179.99 && Math.abs(v.lat - 0.5) < 1e-6) || (v.lon > -180 && v.lon < -179), `${v.lon}, ${v.lat}`);
+      assert.ok(Math.abs(v.lon) > 179.99 && Math.abs(v.lat - 0.5) < 1e-6, `${v.lon}, ${v.lat}`);
     },
     i => (i === 2 ? 1 : 10)
   );
