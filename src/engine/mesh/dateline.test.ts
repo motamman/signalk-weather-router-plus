@@ -196,6 +196,58 @@ test('the paged mesh: one frame across the date line; points either side are fou
   });
 });
 
+test('the box of the tiles read is the narrowest that holds them, also in a frame laid out about a longitude far from the mesh', () => {
+  withMesh(store => {
+    // A frame about 1°E is cut on the meridian opposite, 181 = 179°W: the tile from 180 to 179°W is a turn on in it
+    // (180 to 181) and the tile from 179°W to 178°W is where it is stored. The two are side by side on the earth: their
+    // box is those two degrees, not the whole turn between their places in the frame.
+    const pm = new PagedMesh(store, RULES, 1).centred(1);
+    assert.equal(pm.frameLon, 1);
+    assert.equal(pm.locate(...pm.toXY(-179.5, 0.25)), 8);
+    assert.equal(pm.locate(...pm.toXY(-178.5, 0.25)), 12);
+    assert.deepEqual(pm.touchedBox(), { west: -180, south: 0, east: -178, north: 1 });
+    // The same for a leg's reach on the rough cut, in that frame.
+    const boundary = boundarySeeds(store, COARSE);
+    const map = buildCoarseMap(store, COARSE, new PagedMesh(store, meshRulesOf(COARSE), 1, boundary));
+    const far = new PagedMesh(store, meshRulesOf(COARSE), 1, boundary).centred(1);
+    const graph = new PieceGraph(map, far);
+    const reach = graph.reach([
+      [graph.pieceOf(far.locate(...far.toXY(-179.5, 0.25)))!, graph.pieceOf(far.locate(...far.toXY(-178.5, 0.25)))!],
+    ]);
+    assert.deepEqual(reach.box, { west: -180, south: 0, east: -178, north: 1 });
+    assert.throws(() => graph.reach([]), /the reach of no pieces has no box/);
+  });
+});
+
+test('a mesh all the way round the earth: the tiles either side of the date line are found, and a point on it', () => {
+  // 360 tiles of 1° from 180°W round to 180°E, one row: the index's box is -180 to 180, its middle 0, and the tiles at
+  // its two ends lie on the meridian opposite its middle.
+  const dir = writeGridMesh(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-round-')),
+    Array.from({ length: 360 }, (_, i) => ({ i, j: 0 })),
+    -180
+  );
+  try {
+    const store = MeshStore.open(dir);
+    assert.deepEqual([store.index.west, store.index.east], [-180, 180]);
+    const pm = new PagedMesh(store, RULES, 1);
+    // Each cell's lower triangle holds (lon + 0.5, 0.25): the first tile's is 0, the last tile's 718.
+    assert.equal(pm.locate(...pm.toXY(-179.5, 0.25)), 0);
+    assert.equal(pm.locate(...pm.toXY(179.5, 0.25)), 718);
+    assert.equal(pm.locate(...pm.toXY(0.5, 0.25)), 360);
+    // On the date line, by either name: a triangle of one of the two tiles that meet there.
+    for (const lon of [180, -180]) assert.ok([0, 1, 718, 719].includes(pm.locate(...pm.toXY(lon, 0.5))), `${lon}`);
+    for (const lon of [-180, -179.5, 179.5, 180, 0]) assert.equal(store.covers(lon, 0.5), true, `${lon}`);
+    // A column a whole turn on is the same column, and a run across the date line is its columns in a row.
+    assert.deepEqual(store.tileIJ(-179.5, 0.5), [0, 0]);
+    assert.deepEqual(store.tileIJ(179.5, 0.5), [359, 0]);
+    assert.deepEqual(store.columnsOf(179.5, 1), [359, 0]);
+    assert.deepEqual(store.columnsOf(-180.5, 1.5), [359, 0, 1]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the search: a leg across the date line is one short route on the mesh', () => {
   withMesh(store => {
     const s = searchMesh(store, [178.5, 0.5], [-178.5, 0.5], RULES);

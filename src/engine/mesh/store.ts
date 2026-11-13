@@ -270,12 +270,36 @@ export class MeshStore {
     return false;
   }
 
+  /**
+   * The column of a longitude counted on from the mesh's west edge (`x`: next to the mesh, lonNear, or further on along
+   * a run), named within one turn of the earth: the column a whole turn on is the same column. So a point and the run
+   * of a tile's extent name a column alike wherever they are taken, in a mesh all the way round too, where the column
+   * east of the last is the first.
+   */
+  private column(x: number): number {
+    const turn = Math.round(360 / this.index.tileDeg);
+    const c = Math.floor((x - this.index.west) / this.index.tileDeg);
+    return ((c % turn) + turn) % turn;
+  }
+
   /** The tile column and row of a point: columns count east from the mesh's west edge, across the date line when the mesh crosses it. */
   tileIJ(lon: number, lat: number): [number, number] {
-    return [
-      Math.floor((this.lonNear(lon) - this.index.west) / this.index.tileDeg),
-      Math.floor((lat - this.index.south) / this.index.tileDeg),
-    ];
+    return [this.column(this.lonNear(lon)), Math.floor((lat - this.index.south) / this.index.tileDeg)];
+  }
+
+  /**
+   * The columns a run of longitude meets, from `west` eastwards over `width` degrees, in order, each named as tileIJ
+   * names a point's: one run, counted on from its west end, so a run across the far side of the earth from the mesh's
+   * middle (a tile on the date line in a mesh all the way round) is its columns in a row and never an empty range
+   * between two ends named apart.
+   */
+  columnsOf(west: number, width: number): number[] {
+    const from = this.lonNear(west);
+    const { west: meshWest, tileDeg } = this.index;
+    const out: number[] = [];
+    for (let i = Math.floor((from - meshWest) / tileDeg); i <= Math.floor((from + width - meshWest) / tileDeg); i++)
+      out.push(this.column(meshWest + i * tileDeg + tileDeg / 2));
+    return out;
   }
 
   tile(i: number, j: number): MeshTileInfo | undefined {

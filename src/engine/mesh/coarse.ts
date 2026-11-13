@@ -23,11 +23,11 @@
  * piece of a triangle is found again from its own tile alone.
  */
 
-import { haversineDistanceM, wrapEdge, type BBox } from '../../geo/geodesy';
+import { bboxUnion, haversineDistanceM, type BBox } from '../../geo/geodesy';
 import { MinHeap } from '../heap';
 import type { BoundarySeeds, PagedMesh, PagedTile } from './paged';
 import { blockedTriangles, type MeshRules } from './route';
-import { FLAG_OPENING_BRIDGE, type MeshStore } from './store';
+import { FLAG_OPENING_BRIDGE, type MeshStore, tileBBox } from './store';
 
 // 4: the rules carry the under-keel and overhead clearances.
 // 5: the rules are to the centimetre (meshcoarse.ts coarseRulesOf), as the file name; a v4 file may hold more digits.
@@ -441,20 +441,16 @@ export class PieceGraph {
    */
   reach(chains: number[][]): Reach {
     const tiles = new Set<number>();
-    const box: BBox = { west: Infinity, south: Infinity, east: -Infinity, north: -Infinity };
+    let box: BBox | null = null;
     let lengthM = 0;
     for (const chain of chains) {
       for (const p of chain) {
         const idx = this.tileOfPiece[p];
         if (tiles.has(idx)) continue;
         tiles.add(idx);
-        // Each tile's extent next to the frame's middle, as one run of longitudes (paged.ts tileTurn).
-        const b = this.pm.infoAt(idx)!.bbox;
-        const turn = this.pm.tileTurn(b);
-        box.west = Math.min(box.west, b[0] + turn);
-        box.south = Math.min(box.south, b[1]);
-        box.east = Math.max(box.east, b[2] + turn);
-        box.north = Math.max(box.north, b[3]);
+        // The narrowest box holding the one so far and this tile's extent, round the earth (geodesy.ts bboxUnion).
+        const b = tileBBox(this.pm.infoAt(idx)!.bbox);
+        box = box ? bboxUnion(box, b) : b;
       }
       for (let k = 1; k < chain.length; k++) {
         const a = this.pieces[chain[k - 1]];
@@ -462,6 +458,7 @@ export class PieceGraph {
         lengthM += haversineDistanceM(a[0], a[1], b[0], b[1]);
       }
     }
-    return { chainTiles: tiles.size, box: { ...box, west: wrapEdge(box.west), east: wrapEdge(box.east) }, lengthM };
+    if (!box) throw new Error('the reach of no pieces has no box');
+    return { chainTiles: tiles.size, box, lengthM };
   }
 }

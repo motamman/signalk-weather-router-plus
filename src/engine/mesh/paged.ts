@@ -28,9 +28,9 @@
  */
 
 import { unwrapLonNear } from '../../geo/angles';
-import { type BBox, wrapEdge } from '../../geo/geodesy';
+import { type BBox, bboxUnion, wrapEdge } from '../../geo/geodesy';
 import { blockedTriangles, growBlocked, type MeshRules } from './route';
-import { type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo } from './store';
+import { type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo, tileBBox } from './store';
 import { U_TOL } from './width';
 
 /** Index cell size, metres: a few triangles a cell on a chart mesh (triangles are tens of metres). */
@@ -117,7 +117,7 @@ export class PagedMesh {
     prepMs: 0,
     bufferMs: 0,
   };
-  /** Union of the extents of the tiles read, degrees, its longitudes next to the frame's middle (null before the first). */
+  /** The box holding the extents of the tiles read, the short way round (geodesy.ts bboxUnion); null before the first. */
   private touched: BBox | null = null;
   /** The longitude the frame is laid out about (the file's comment); undefined for an in-memory mesh: longitudes as they are. */
   private ref: number | undefined;
@@ -303,8 +303,7 @@ export class PagedMesh {
    * greater than its east when the tiles read lie either side of the date line.
    */
   touchedBox(): BBox | null {
-    const t = this.touched;
-    return t && { west: wrapEdge(t.west), south: t.south, east: wrapEdge(t.east), north: t.north };
+    return this.touched && { ...this.touched };
   }
 
   private read(idx: number): PagedTile {
@@ -387,16 +386,9 @@ export class PagedMesh {
       for (let t = 0; t < n; t++) b += ruleBlocked[t];
       this.stats.blocked += b;
       this.stats.buffered += buffered;
-      const tb = this.touched;
-      const [tw, te] = [info.bbox[0] + turn, info.bbox[2] + turn];
-      this.touched = tb
-        ? {
-            west: Math.min(tb.west, tw),
-            south: Math.min(tb.south, info.bbox[1]),
-            east: Math.max(tb.east, te),
-            north: Math.max(tb.north, info.bbox[3]),
-          }
-        : { west: tw, south: info.bbox[1], east: te, north: info.bbox[3] };
+      // The box of the tiles read: the narrowest that holds the one so far and this tile's extent, round the earth (not
+      // the least and greatest longitude in the frame, which for tiles either side of the frame's cut is a whole turn).
+      this.touched = this.touched ? bboxUnion(this.touched, tileBBox(info.bbox)) : tileBBox(info.bbox);
     }
     return {
       idx,
@@ -542,9 +534,10 @@ export class PagedMesh {
         const b = info!.bbox;
         const tx = U_TOL * (b[2] - b[0]);
         const ty = U_TOL * (b[3] - b[1]);
-        const [i0, j0] = store.tileIJ(b[0] - tx, b[1] - ty);
-        const [i1, j1] = store.tileIJ(b[2] + tx, b[3] + ty);
-        for (let i = i0; i <= i1; i++)
+        // The extent's columns as one run from its west (store.ts columnsOf); its rows from south to north.
+        const [, j0] = store.tileIJ(b[0], b[1] - ty);
+        const [, j1] = store.tileIJ(b[0], b[3] + ty);
+        for (const i of store.columnsOf(b[0] - tx, b[2] - b[0] + 2 * tx))
           for (let j = j0; j <= j1; j++) {
             const k = `${i},${j}`;
             const list = cells.get(k);
