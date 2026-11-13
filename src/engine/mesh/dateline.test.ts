@@ -16,6 +16,7 @@ import { checkRouteOnMeshes } from './check';
 import { boundarySeeds, buildCoarseMap, type CoarseRules, meshRulesOf, PieceGraph } from './coarse';
 import { markMeshWater } from './exit';
 import { writeGridMesh } from './fixture';
+import { MeshLand } from './land';
 import { PagedMesh } from './paged';
 import { searchMesh } from './route';
 import { M_PER_DEG_MESH, MeshStore, tileExtentsMeet } from './store';
@@ -219,26 +220,45 @@ test('the box of the tiles read is the narrowest that holds them, also in a fram
   });
 });
 
-test("a point in a tile the frame's cut runs through is found in it, either side of the cut", () => {
+test("a tile the frame's cut runs through is not read into the frame, and the read says why; a tile beside the cut is", () => {
   withMesh(store => {
-    // A frame about 0.2°E is cut on 179.8°W, inside the tile from 180 to 179°W. The tile is whole on the near side
-    // of the cut (where it is stored); a point of it beyond the cut is a turn away in the frame.
+    // A frame about 0.2°E is cut on 179.8°W, inside the tile from 180 to 179°W: its points west of the cut would lie a
+    // turn from its points east of it. Nothing is answered from such a tile: not a lookup, not a leg's land test.
     const pm = new PagedMesh(store, RULES, 1).centred(0.2);
-    const [xw, yw] = pm.toXY(-179.9, 0.05);
-    const [xe, ye] = pm.toXY(-179.3, 0.25);
-    assert.ok(xw - xe > 300 * M_PER_DEG_MESH, 'the two points of one tile are a turn apart in the frame');
-    // Both lie in the tile's lower triangle (id 8).
-    assert.equal(pm.locate(xw, yw), 8);
-    assert.equal(pm.locate(xe, ye), 8);
-    assert.deepEqual(pm.locateAll(xw, yw), [8]);
-    assert.deepEqual(pm.locateAll(xe, ye), [8]);
-    const nu = pm.nearestUsable(xw, yw)!;
-    assert.deepEqual([nu.tri, nu.distM], [8, 0]);
-    // A point west of the mesh's last tile but one, beyond the cut too: the nearest usable water is that tile's edge.
-    const far = pm.nearestUsable(...pm.toXY(-179.95, 2.5))!;
-    assert.ok(Math.abs(far.distM - 0.5 * M_PER_DEG_MESH) < 1e-6, `${far.distM}`);
-    assert.deepEqual(pm.fromXY(far.x, far.y), [-179.95, 2]);
+    const cut =
+      /mesh tile t_2_0\.bin \(-180° to -179°\) lies across the meridian opposite the frame's middle \(0\.2°\), where a flat frame is cut/;
+    assert.throws(() => pm.locate(...pm.toXY(-179.9, 0.05)), cut);
+    assert.throws(() => pm.locate(...pm.toXY(-179.3, 0.25)), cut);
+    assert.throws(() => pm.locateAll(...pm.toXY(-179.9, 0.05)), cut);
+    const land = new MeshLand(pm);
+    // The legs the review named: from beyond the cut back across it, and away from it. Neither is called clear or blocked.
+    assert.throws(() => land.legCrossesLandExact(-179.95, 0.3, 178.5, 0.3), cut);
+    assert.throws(() => land.legCrossesLandExact(-179.3, 0.3, -179.95, 0.3), cut);
+    // A leg that walks into the tile from its neighbour: refused where it reaches the tile.
+    assert.throws(() => land.legCrossesLandExact(-178.5, 0.3, -179.5, 0.3), cut);
+    // The tiles beside it are read and answer: the one east of it where it is stored, the ones west of the cut a turn on.
+    assert.equal(pm.locate(...pm.toXY(-178.5, 0.25)), 12);
+    assert.equal(pm.locate(...pm.toXY(179.5, 0.25)), 4);
+    assert.equal(land.legCrossesLandExact(178.2, 0.3, 179.8, 0.3), false);
+    assert.equal(land.legCrossesLandExact(-178.9, 0.3, -178.1, 0.3), false);
   });
+  // The frame of one mesh is laid out about the mesh's middle: its cut is outside the mesh, and every tile is read.
+  withMesh(store => {
+    const pm = new PagedMesh(store, RULES, 1);
+    for (let idx = 0; idx < pm.tileCount; idx++) pm.tile(idx);
+    const land = new MeshLand(pm);
+    assert.equal(land.legCrossesLandExact(-179.95, 0.3, 178.5, 0.3), false);
+    assert.equal(land.legCrossesLandExact(178.5, 0.3, -179.95, 0.3), false);
+  });
+  // The same legs across a column the boat cannot use (179°E to 180): crossing, from either end.
+  withMesh(
+    store => {
+      const land = new MeshLand(new PagedMesh(store, RULES, 1));
+      assert.equal(land.legCrossesLandExact(-179.95, 0.3, 178.5, 0.3), true);
+      assert.equal(land.legCrossesLandExact(178.5, 0.3, -179.95, 0.3), true);
+    },
+    i => (i === 1 ? 1 : 10)
+  );
 });
 
 test('a mesh all the way round the earth: the tiles either side of the date line are found, and a point on it', () => {

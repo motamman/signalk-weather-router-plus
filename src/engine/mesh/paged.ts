@@ -22,11 +22,14 @@
  * to it, within half a turn (toXY), and a tile is placed whole, a whole number of turns from where it is stored, so
  * that its middle is next to it too (read): a mesh across the date line is one piece, and a tile is never torn. A
  * longitude within half a turn of the frame's middle is used as it is, so a mesh that does not cross the date line has
- * the numbers it always had. The frame is cut on the meridian opposite its middle: two tiles either side of that
- * meridian are a turn apart in it, half the earth away from the leg, and a tile the cut runs through is whole on one
- * side of it. So a point is looked for in a tile at its place next to that tile (xAt): a point of such a tile beyond
- * the cut, which toXY puts a turn away from the tile, is found in it all the same. Points come back as longitudes
- * between -180 and 180 (fromXY).
+ * the numbers it always had. For every tile that lies on one side of the frame's cut (the meridian opposite its
+ * middle), placing the tile whole and placing each of its points next to the frame's middle are the same thing, so a
+ * point, a walk and a search's costs meet the tile's corners where they are, with nothing converted anywhere. A tile
+ * the cut runs through has no place in a flat frame (its points lie a turn apart in it): it is not read into one, and
+ * the read ends saying so (read). The frame of one mesh is laid out about the mesh's own middle, so its cut is never
+ * inside the mesh; a frame shared by several meshes is laid out about the leg's start, so its cut is half the earth
+ * from the leg, whose box is at most 120° wide (pipeline.ts). Two tiles either side of the cut are a turn apart in the
+ * frame. Points come back as longitudes between -180 and 180 (fromXY).
  */
 
 import { unwrapLonNear } from '../../geo/angles';
@@ -183,18 +186,6 @@ export class PagedMesh {
   }
 
   /**
-   * A point's x in the frame as a tile has it (the tile's extent `bbox`): the same meridian next to the tile's own
-   * place in the frame, within half a turn of its middle there. It is the point's x itself unless the frame's cut lies
-   * between the point and the tile (the file's comment), and always for an in-memory mesh, which has no frame of its own.
-   */
-  private xAt(bbox: [number, number, number, number], px: number): number {
-    if (this.ref === undefined) return px;
-    const lon = px / (this.cl * M_PER_DEG_MESH);
-    const near = unwrapLonNear(lon, (bbox[0] + bbox[2]) / 2 + this.tileTurn(bbox));
-    return near === lon ? px : near * this.cl * M_PER_DEG_MESH;
-  }
-
-  /**
    * How far a tile is turned in the frame from where it is stored (its extent `bbox`), degrees: the whole turns that
    * put its middle next to the frame's middle; 0 for a tile within half a turn of it. The tile's corners and its
    * extent are placed with it, whole, so a tile is never torn.
@@ -332,6 +323,12 @@ export class PagedMesh {
     // The tile whole, turned from where it is stored (tileTurn; not at all for a tile within half a turn of the frame's
     // middle: its longitudes as stored).
     const turn = this.tileTurn(info.bbox);
+    // A tile the frame's cut runs through cannot be placed in it (the file's comment): west of the cut it would be a
+    // turn from its own east. Touching the cut with an edge is on one side of it.
+    if (this.ref !== undefined && (info.bbox[0] + turn < this.ref - 180 || info.bbox[2] + turn > this.ref + 180))
+      throw new Error(
+        `mesh tile ${info.file} (${info.bbox[0]}° to ${info.bbox[2]}°) lies across the meridian opposite the frame's middle (${this.ref}°), where a flat frame is cut: half the earth from the leg, which a leg does not reach`
+      );
     const lonOf = turn === 0 ? (q: number): number => a.corners[2 * q] / K : (q: number): number => a.corners[2 * q] / K + turn;
     for (let q = 0; q < n * 3; q++) {
       x[q] = lonOf(q) * this.cl * M_PER_DEG_MESH;
@@ -481,9 +478,7 @@ export class PagedMesh {
   }
 
   /** The triangle of a tile holding (px, py), local id or -1; with preferUsable a usable one wins over a blocked one. */
-  private locateIn(T: PagedTile, x0: number, py: number, preferUsable: boolean, all?: number[]): number {
-    // The point where this tile is in the frame (xAt).
-    const px = this.xAt(T.bbox, x0);
+  private locateIn(T: PagedTile, px: number, py: number, preferUsable: boolean, all?: number[]): number {
     const G = this.gridOf(T);
     // Clamped to the grid: a point handed on as lon/lat can come back a hair outside the tile's vertex extent, west or
     // south of the grid's origin (an exit on a straight chart limit, through a frame with another cosine); the
@@ -626,16 +621,15 @@ export class PagedMesh {
     if (!this.store) order.push({ idx: 0, d: 0 });
     else
       for (let idx = 0; idx < this.infos.length; idx++) {
-        // The point of the tile's extent nearest the point, the point taken where this tile is in the frame (xAt; a
+        // The point of the tile's extent nearest the point, the extent where the tile is in the frame (tileTurn; a
         // tile east of the date line is stored from -180).
         const b = this.infos[idx]!.bbox;
-        const pxT = this.xAt(b, px);
-        const lon = pxT / (this.cl * M_PER_DEG_MESH);
+        const lon = px / (this.cl * M_PER_DEG_MESH);
         const lat = py / M_PER_DEG_MESH;
         const turn = this.tileTurn(b);
         const cx = Math.min(Math.max(lon, b[0] + turn), b[2] + turn) * this.cl * M_PER_DEG_MESH;
         const cy = Math.min(Math.max(lat, b[1]), b[3]) * M_PER_DEG_MESH;
-        order.push({ idx, d: Math.hypot(cx - pxT, cy - py) });
+        order.push({ idx, d: Math.hypot(cx - px, cy - py) });
       }
     order.sort((u, v) => u.d - v.d);
     let best: { tri: number; x: number; y: number; distM: number } | null = null;
@@ -648,11 +642,10 @@ export class PagedMesh {
       const wasHeld = this.isHeld(o.idx);
       const T = this.tile(o.idx);
       let improved = false;
-      const pxT = this.xAt(T.bbox, px);
       for (let l = 0; l < T.n; l++) {
         if (T.blocked[l]) continue;
-        const [qx, qy] = closestOnTriangle(pxT, py, T.x, T.y, l * 3);
-        const d = Math.hypot(qx - pxT, qy - py);
+        const [qx, qy] = closestOnTriangle(px, py, T.x, T.y, l * 3);
+        const d = Math.hypot(qx - px, qy - py);
         if ((!best || d < best.distM) && accept(T.first + l)) {
           best = { tri: T.first + l, x: qx, y: qy, distM: d };
           improved = true;
