@@ -49,7 +49,7 @@
 import { unwrapLonNear } from '../../geo/angles';
 import { type BBox, bboxUnion, wrapEdge } from '../../geo/geodesy';
 import { blockedTriangles, growBlocked, type MeshRules } from './route';
-import { type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo, tileBBox, toTileExtent, xNear } from './store';
+import { framePeriod, type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo, tileBBox, toTileExtent, xNear } from './store';
 import { U_TOL } from './width';
 
 /** Index cell size, metres: a few triangles a cell on a chart mesh (triangles are tens of metres). */
@@ -224,9 +224,9 @@ export class PagedMesh {
     return this.lonNear(mid) - mid;
   }
 
-  /** One turn round the earth in the frame's x, metres; none (Infinity) for an in-memory mesh, which has no frame. */
+  /** One turn round the earth in the frame's x (store.ts framePeriod); none (Infinity) for an in-memory mesh, which has no frame. */
   get period(): number {
-    return this.ref === undefined ? Infinity : 360 * this.cl * M_PER_DEG_MESH;
+    return framePeriod(this.ref, this.cl);
   }
 
   /**

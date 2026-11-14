@@ -491,9 +491,18 @@ export function xNear(x: number, toX: number, period: number): number {
   return k === 0 ? x : x + k * period;
 }
 
-/** One turn round the earth in a loaded mesh's x, metres; Infinity for a mesh with no frame (the tests' own meshes). */
+/**
+ * One turn round the earth in the x of a frame laid out about `ref` and scaled by `cl`, metres; Infinity for a frame
+ * laid out about nothing (the tests' own meshes, whose x does not go round). The one place it is worked out: a loaded
+ * mesh's (meshPeriod) and a paged mesh's (paged.ts period).
+ */
+export function framePeriod(ref: number | undefined, cl: number): number {
+  return ref === undefined ? Infinity : 360 * cl * M_PER_DEG_MESH;
+}
+
+/** One turn round the earth in a loaded mesh's x (framePeriod). */
 export function meshPeriod(m: LoadedMesh): number {
-  return m.ref === undefined ? Infinity : 360 * m.cl * M_PER_DEG_MESH;
+  return framePeriod(m.ref, m.cl);
 }
 
 /** Project a point into a loaded mesh's metres frame (the same expression order as readTile). */
