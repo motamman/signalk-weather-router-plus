@@ -49,8 +49,17 @@ import { runLastMs, type ArcoRun } from './data/arco';
 import { gshhgInstalled, gshhgInstalledAt, unreadableCoastlines } from './geo/gshhg';
 import { Coastline } from './plugin/coastline';
 import { localMeshes, MeshManager, meshesToOpen, readyMeshDirs } from './plugin/meshes';
-import { coarseFile, coarseKey, coarseRulesOf, joinsFile, meshesMeet, pruneCoarse, withBuildLock } from './plugin/meshcoarse';
-import * as fs from 'node:fs';
+import {
+  coarseFile,
+  coarseKey,
+  coarseRulesOf,
+  joinsBuilt,
+  joinsFile,
+  meshesMeet,
+  pruneCoarse,
+  roughCutBuilt,
+  withBuildLock,
+} from './plugin/meshcoarse';
 import { runChildTask } from './plugin/childtask';
 import { coastTilesReady } from './geo/coasttiles';
 import { ChartsProvider } from './plugin/charts';
@@ -421,7 +430,11 @@ export = function plugin(app: SkApp): SignalKPlugin {
         const { result: r } = await withBuildLock(
           out,
           () => runChildTask({ task: 'mesh-coarse', dir: d.dir, out, rules, joins: othersOf(d) }, 15 * 60_000, signal),
-          { signal, onWait: () => (roughCut.running = `${d.name} (${path.basename(d.dir)}): waiting for a route's build of it`) }
+          {
+            built: () => roughCutBuilt(out),
+            signal,
+            onWait: () => (roughCut.running = `${d.name} (${path.basename(d.dir)}): waiting for a route's build of it`),
+          }
         );
         roughCut.done++;
         if (r)
@@ -435,13 +448,14 @@ export = function plugin(app: SkApp): SignalKPlugin {
       if (only)
         for (const o of all.filter(x => x.name !== only)) {
           const mapFile = coarseFile(dataDir, o.dir, rules);
-          if (!fs.existsSync(mapFile)) continue;
+          if (!roughCutBuilt(mapFile)) continue;
           for (const d of dirs) {
             if (signal.aborted) return;
             if (!meshesMeet(o.dir, d.dir)) continue;
             roughCut.running = `joins of ${o.name} (${path.basename(o.dir)}) to ${d.name}`;
+            const joins = joinsFile(mapFile, d.dir);
             const { result: j } = await withBuildLock(
-              joinsFile(mapFile, d.dir),
+              joins,
               () =>
                 runChildTask(
                   {
@@ -454,7 +468,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
                   15 * 60_000,
                   signal
                 ),
-              { signal }
+              { built: () => joinsBuilt(joins), signal }
             );
             if (j) log(`rough cut joins ${o.name} ${path.basename(o.dir)} to ${d.name}: ${j.joins} in ${j.ms} ms`);
           }

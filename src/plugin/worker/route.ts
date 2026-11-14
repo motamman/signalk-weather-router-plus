@@ -12,9 +12,17 @@ import { HOUR_S, NM_M } from '../../geo/units';
 import { validateRouteRequest } from '../request_schema';
 import { runLegPipeline, type LegPipelineInputs, type LegWind } from '../../engine/pipeline';
 import type { LegArrival } from '../../engine/legsim';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { boundaryFile, coarseFile, coarseRulesOf, joinsFile, markCoarseUsed, withBuildLock } from '../meshcoarse';
+import {
+  boundaryFile,
+  coarseFile,
+  coarseRulesOf,
+  joinsBuilt,
+  joinsFile,
+  markCoarseUsed,
+  roughCutBuilt,
+  withBuildLock,
+} from '../meshcoarse';
 import { ForecastStore } from '../../data/forecast';
 import { loadForecastForBBox, resolveCycle } from '../../data/loader';
 import type { WindowOptions } from '../../data/decoded';
@@ -132,7 +140,7 @@ async function ensureRoughCut(
 ): Promise<string | MeshRefusal> {
   const r = coarseRulesOf(rules);
   const file = coarseFile(st.cacheRoot, m.dir, r);
-  if (fs.existsSync(file)) {
+  if (roughCutBuilt(file)) {
     // Used now: pruneCoarse keeps the most recently used rough cuts, so this route's is never the one it removes.
     markCoarseUsed(file);
     return file;
@@ -152,7 +160,11 @@ async function ensureRoughCut(
         );
         return runChildTask({ task: 'mesh-coarse', dir: m.dir, out: file, rules: r, joins }, 15 * 60_000, signal);
       },
-      { signal, onWait: () => progress(0, 0, `${tag}chart mesh: the rough cut of ${m.name} is being built already; waiting for it`) }
+      {
+        built: () => roughCutBuilt(file),
+        signal,
+        onWait: () => progress(0, 0, `${tag}chart mesh: the rough cut of ${m.name} is being built already; waiting for it`),
+      }
     );
     if (b)
       progress(
@@ -223,15 +235,17 @@ export function meshLegRunner(
             if (typeof file !== 'string') return file;
             meshes.push({ dir: m.dir, mapFile: file, name: m.name });
           }
-          // Joins towards a mesh whose build the rough cut has none for (downloaded or updated since): built now.
+          // Joins towards a mesh whose build the rough cut has none for (downloaded or updated since), or whose file is
+          // of another version (joinsBuilt): built now.
           for (const a of near)
             for (const b of near) {
               if (a === b || !extentsMeet(a, b)) continue;
               const mapFile = coarseFile(st.cacheRoot, a.dir, r);
-              if (fs.existsSync(joinsFile(mapFile, b.dir))) continue;
+              const joins = joinsFile(mapFile, b.dir);
+              if (joinsBuilt(joins)) continue;
               c.progress(0, 0, `${c.tag}chart mesh: finding where ${a.name}'s water joins ${b.name}'s for this boat, once`);
               const { result: j } = await withBuildLock(
-                joinsFile(mapFile, b.dir),
+                joins,
                 () =>
                   runChildTask(
                     {
@@ -244,7 +258,7 @@ export function meshLegRunner(
                     15 * 60_000,
                     ac.signal
                   ),
-                { signal: ac.signal }
+                { built: () => joinsBuilt(joins), signal: ac.signal }
               );
               if (j) c.progress(0, 0, `${c.tag}chart mesh: ${j.joins} joins from ${a.name} to ${b.name} ({time:${j.ms / 1000}})`);
             }

@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { COARSE_VERSION } from '../engine/mesh/coarse';
 import { writeGridMesh } from '../engine/mesh/fixture';
+import { JOINS_VERSION } from '../engine/mesh/joins';
 import { searchMesh } from '../engine/mesh/route';
 import { MeshStore } from '../engine/mesh/store';
 import { runChildTask } from './childtask';
@@ -23,6 +24,7 @@ import {
   coarseFile,
   coarseKey,
   coarseRulesOf,
+  joinsBuilt,
   joinsFile,
   markCoarseUsed,
   type MeshReachTask,
@@ -30,6 +32,7 @@ import {
   readBoundary,
   readCoarseMap,
   readJoins,
+  roughCutBuilt,
   runMeshCoarseTask,
   runMeshJoinsTask,
   runMeshReachTask,
@@ -322,7 +325,8 @@ test('withBuildLock: two builds of one file at once run it once; a lock left by 
       return 'built';
     };
     let waits = 0;
-    const [a, b] = await Promise.all([withBuildLock(file, build), withBuildLock(file, build, { onWait: () => waits++ })]);
+    const built = (): boolean => roughCutBuilt(file);
+    const [a, b] = await Promise.all([withBuildLock(file, build, { built }), withBuildLock(file, build, { built, onWait: () => waits++ })]);
     assert.equal(builds, 1, 'built once');
     assert.deepEqual(a, { waited: false, result: 'built' });
     assert.deepEqual(b, { waited: true, result: null }, 'the second waited and found the file');
@@ -331,32 +335,66 @@ test('withBuildLock: two builds of one file at once run it once; a lock left by 
     // A lock from a process that no longer runs: taken over at once.
     fs.rmSync(file);
     fs.writeFileSync(`${file}.lock`, '2147483646\n');
-    const c = await withBuildLock(file, build);
+    const c = await withBuildLock(file, build, { built });
     assert.deepEqual(c, { waited: false, result: 'built' });
     assert.equal(builds, 2);
     // Cancelled while waiting on a live holder (this process).
     fs.writeFileSync(`${file}.lock`, `${process.pid}\n`);
     const ac = new AbortController();
     setTimeout(() => ac.abort(), 200);
-    await assert.rejects(() => withBuildLock(file, build, { signal: ac.signal }), /cancelled/);
+    await assert.rejects(() => withBuildLock(file, build, { built, signal: ac.signal }), /cancelled/);
     assert.equal(builds, 2);
   } finally {
     fs.rmSync(data, { recursive: true, force: true });
   }
 });
 
+test('withBuildLock: a lock that is a folder (the lock an earlier route worker made) is waited on while it is new and taken over once it is stale', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-data-'));
+  try {
+    const file = path.join(data, COARSE_DIR, 'x.json');
+    const lock = `${file}.lock`;
+    let builds = 0;
+    const build = async (): Promise<string> => {
+      builds++;
+      fs.writeFileSync(file, '{}');
+      return 'built';
+    };
+    const built = (): boolean => roughCutBuilt(file);
+    fs.mkdirSync(lock, { recursive: true });
+    // New: its builder may be alive (a folder names no process), so it is waited on; cancelled here.
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 1500);
+    await assert.rejects(() => withBuildLock(file, build, { built, signal: ac.signal }), /cancelled/);
+    assert.equal(builds, 0);
+    assert.ok(fs.statSync(lock).isDirectory(), 'the folder is left while it is new');
+    // Older than a build can take: removed, and the file built under this call's own lock.
+    const old = new Date(Date.now() - 21 * 60_000);
+    fs.utimesSync(lock, old, old);
+    assert.deepEqual(await withBuildLock(file, build, { built }), { waited: false, result: 'built' });
+    assert.equal(builds, 1);
+    assert.ok(!fs.existsSync(lock), 'the lock is gone');
+  } finally {
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
+// Two meshes for the joins tests: A over cells lon 0–3, B over cells lon 1–4 (lat 0–1). They overlap in cells 1 and 2;
+// B charts cell 2 at 1 m.
+const JOIN_A = [
+  { i: 0, j: 0 },
+  { i: 1, j: 0 },
+  { i: 2, j: 0 },
+];
+const JOIN_B = [
+  { i: 1, j: 0 },
+  { i: 2, j: 0, depth: 1 },
+  { i: 3, j: 0 },
+];
+
 test('joins: built with the rough cut and on their own alike: which piece of one mesh joins which of another, per direction', () => {
-  // A over cells lon 0–3, B over cells lon 1–4 (lat 0–1): they overlap in cells 1 and 2. B charts cell 2 at 1 m.
-  const a = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-a-')), [
-    { i: 0, j: 0 },
-    { i: 1, j: 0 },
-    { i: 2, j: 0 },
-  ]);
-  const b = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-b-')), [
-    { i: 1, j: 0 },
-    { i: 2, j: 0, depth: 1 },
-    { i: 3, j: 0 },
-  ]);
+  const a = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-a-')), JOIN_A);
+  const b = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-b-')), JOIN_B);
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-data-'));
   try {
     const outA = coarseFile(data, a, RULES);
@@ -390,6 +428,55 @@ test('joins: built with the rough cut and on their own alike: which piece of one
     pruneCoarse(data, new Set([coarseKey(a)]));
     assert.ok(!fs.existsSync(joinsFile(outA, b)), "A's joins towards B go when B's build is no longer in use");
     assert.ok(fs.existsSync(outA));
+  } finally {
+    for (const d of [a, b, data]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('joins: a file of another version, or cut short, is not built; a route builds it again, and so does a build that waited on one that left it', async () => {
+  // JOIN_A and JOIN_B: A's cell 1 joins B's cell 1.
+  const a = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-a-')), JOIN_A);
+  const b = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-b-')), JOIN_B);
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-data-'));
+  try {
+    const outA = coarseFile(data, a, RULES);
+    const outB = coarseFile(data, b, RULES);
+    runMeshCoarseTask({ task: 'mesh-coarse', dir: a, out: outA, rules: RULES, joins: [{ dir: b, mapFile: outB, name: 'B' }] });
+    const file = joinsFile(outA, b);
+    assert.ok(joinsBuilt(file));
+    const write = (values: number[]): void => fs.writeFileSync(file, Buffer.from(Int32Array.from(values).buffer));
+    const otherVersion = [JOINS_VERSION + 1, 1, 1, 0, 0, 0];
+    // The route's own step (worker/route.ts): built when not built, under the lock, with the same test for a build that waited.
+    const build = async (): Promise<{ joins: number; ms: number }> =>
+      runMeshJoinsTask({ task: 'mesh-joins', dir: a, mapFile: outA, rules: RULES, other: { dir: b, mapFile: outB, name: 'B' } });
+    const ensure = async (): Promise<{ waited: boolean; result: { joins: number; ms: number } | null } | 'built'> =>
+      joinsBuilt(file) ? 'built' : withBuildLock(file, build, { built: () => joinsBuilt(file) });
+    assert.equal(await ensure(), 'built');
+    // Another version: there, but not read as joins, so built again.
+    write(otherVersion);
+    assert.ok(fs.existsSync(file) && !joinsBuilt(file) && readJoins(file) === null);
+    const again = await ensure();
+    assert.ok(again !== 'built' && again.result?.joins === 1 && !again.waited, JSON.stringify(again));
+    assert.deepEqual(Array.from(readJoins(file)!), [1, 0, 0, 0]);
+    // Cut short (the count says one join, two numbers follow), and not there at all.
+    write([JOINS_VERSION, 1, 1, 0]);
+    assert.ok(!joinsBuilt(file));
+    fs.rmSync(file);
+    assert.ok(!joinsBuilt(file));
+    // A build that waits on another's, which ends leaving a file of another version: it builds the file itself.
+    write(otherVersion);
+    const failing = withBuildLock(
+      file,
+      async (): Promise<never> => {
+        await new Promise(r => setTimeout(r, 1500));
+        throw new Error('the build failed');
+      },
+      { built: () => joinsBuilt(file) }
+    );
+    const [first, second] = await Promise.allSettled([failing, withBuildLock(file, build, { built: () => joinsBuilt(file) })]);
+    assert.equal(first.status, 'rejected');
+    assert.ok(second.status === 'fulfilled' && second.value.waited && second.value.result?.joins === 1, JSON.stringify(second));
+    assert.deepEqual(Array.from(readJoins(file)!), [1, 0, 0, 0]);
   } finally {
     for (const d of [a, b, data]) fs.rmSync(d, { recursive: true, force: true });
   }
