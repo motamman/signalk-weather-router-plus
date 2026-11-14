@@ -286,7 +286,7 @@ export function findMeshGap(
   let ends = pb.locateAll(bx, by).filter(g => endGroups.includes(groupOf(g) ?? -1));
   let [fx, fy] = [bx, by];
   if (!ends.length) {
-    const nu = pb.nearestUsable(bx, by, g => endGroups.includes(groupOf(g) ?? -1))!;
+    const nu = pb.nearestUsable(bx, by, wb.graph.waterOf(endGroups))!;
     ends = [nu.tri];
     [fx, fy] = [nu.x, nu.y];
   }

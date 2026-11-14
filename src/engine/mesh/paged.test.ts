@@ -10,7 +10,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { boundarySeeds, buildCoarseMap, type CoarseRules, meshRulesOf, PieceGraph } from './coarse';
-import { writeGridMesh, writeTile } from './fixture';
+import { idFilter, writeGridMesh, writeTile } from './fixture';
 import { PagedMesh } from './paged';
 import { MeshStore } from './store';
 
@@ -93,7 +93,7 @@ test('nearestUsable lets go of the tiles it scans, but the one holding its answe
     const far = (g: number): boolean => pm.tileIndexOf(g) === pm.tileCount - 1;
     const [x, y] = pm.toXY(0.5, 0.5);
     const before = new Set(pm.heldTiles());
-    const nu = pm.nearestUsable(x, y, far);
+    const nu = pm.nearestUsable(x, y, idFilter(pm, far));
     assert.ok(nu && far(nu.tri), 'found in the farthest tile');
     const held = pm.heldTiles().filter(i => !before.has(i));
     // The point's own tile (read by the lookup of its triangle) and the answer's: nothing in between.
@@ -104,11 +104,11 @@ test('nearestUsable lets go of the tiles it scans, but the one holding its answe
   }
 });
 
-test('nearestUsable lets go of the tiles it scans under the filter the router passes, which reads a tile to answer', () => {
+test('nearestUsable under the filter the router passes reads only the tiles that can hold the water looked for, and lets go of those it scans', () => {
   // A row of twelve 1° tiles; the second is too shallow for the boat, so the first is one water and the rest another.
-  // The router's filter is "of this water" (waters.ts, meshcoarse.ts): it asks the rough cut for a triangle's piece,
-  // which reads the triangle's tile. A scan that asked it of a tile before reading the tile itself would find every
-  // tile it passes "held before the scan" and let none go.
+  // The router's filter is "of this water" (coarse.ts waterOf, as waters.ts, transfer.ts and meshcoarse.ts pass it):
+  // its test of a triangle asks the rough cut for the triangle's piece, which reads the triangle's tile, so the scan
+  // never asks it of a tile it has not read; which tiles to read comes with the filter, from the rough cut's index.
   const COARSE: CoarseRules = {
     draughtM: 2,
     airDraftM: 18,
@@ -127,15 +127,13 @@ test('nearestUsable lets go of the tiles it scans under the filter the router pa
     const map = buildCoarseMap(store, COARSE, new PagedMesh(store, meshRulesOf(COARSE), 1, boundary));
     const pm = new PagedMesh(store, meshRulesOf(COARSE), 1, boundary);
     const graph = new PieceGraph(map, pm);
-    const groupOf = (g: number): number | null => {
-      const p = graph.pieceOf(g);
-      return p === null ? null : graph.component(p);
-    };
-    const far = groupOf(pm.locate(...pm.toXY(11.5, 0.25)))!;
+    const far = graph.component(graph.pieceOf(pm.locate(...pm.toXY(11.5, 0.25)))!);
     pm.retain(() => false);
-    // From the first tile, the nearest water of the far group is the third tile's west edge; the shallow tile between
-    // is read on the way and let go.
-    const nu = pm.nearestUsable(...pm.toXY(0.5, 0.5), g => groupOf(g) === far)!;
+    const reads = pm.stats.reads;
+    // From the first tile, the nearest water of the far group is the third tile's west edge. The shallow tile between
+    // holds none of that water and is not read; the fourth tile is farther than the answer.
+    const nu = pm.nearestUsable(...pm.toXY(0.5, 0.5), graph.waterOf([far]))!;
+    assert.equal(pm.stats.reads - reads, 2, "the point's own tile and the answer's are read");
     assert.equal(pm.tileIndexOf(nu.tri), 2);
     assert.deepEqual(pm.fromXY(nu.x, nu.y), [2, 0.5]);
     assert.deepEqual(

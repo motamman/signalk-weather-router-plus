@@ -15,7 +15,7 @@ import { cellOf, type CellMask } from '../../geo/landmask';
 import { checkRouteOnMeshes } from './check';
 import { boundarySeeds, buildCoarseMap, type CoarseRules, meshRulesOf, PieceGraph } from './coarse';
 import { markMeshWater } from './exit';
-import { writeGridMesh } from './fixture';
+import { idFilter, writeGridMesh } from './fixture';
 import { MeshLand } from './land';
 import { PagedMesh } from './paged';
 import { searchMesh } from './route';
@@ -242,28 +242,71 @@ test("a tile the frame's cut runs through is not read into the frame, and the re
     assert.equal(land.legCrossesLandExact(178.2, 0.3, 179.8, 0.3), false);
     assert.equal(land.legCrossesLandExact(-178.9, 0.3, -178.1, 0.3), false);
   });
-  // The nearest usable water in that frame. The column from 180 to 179°W (ids 8 to 11, both rows) is cut. A filter that
-  // accepts nothing ends in null, the cut tiles unread; one that accepts none of their triangles passes over them to
-  // the water it accepts; one that accepts a triangle of theirs is refused, since they may hold the nearest.
+  // The nearest usable water in that frame. The column from 180 to 179°W (ids 8 to 11, both rows) is cut. A search for
+  // water no tile holds ends in null, the cut tiles unread; one for water the cut tiles do not hold passes over them
+  // to it; one for water they can hold is refused, since they may hold the nearest.
   withMesh(store => {
     const pm = new PagedMesh(store, RULES, 1).centred(0.2);
     const cut = /lies across the meridian opposite the frame's middle \(0\.2°\), where a flat frame is cut/;
-    const inCut = (g: number): boolean => g >= 8 && g < 12;
-    const none = (): boolean => false;
+    const inCut = idFilter(pm, g => g >= 8 && g < 12);
+    const none = idFilter(pm, () => false);
     assert.equal(pm.nearestUsable(...pm.toXY(177.5, 0.5), none), null);
     assert.equal(pm.nearestUsable(...pm.toXY(-177.5, 0.5), none), null);
     assert.deepEqual(pm.heldTiles(), [], 'no tile of the scan stays held');
     // From east of the mesh, only the water west of the date line accepted: the cut column, nearer, is passed over. That
     // water is a turn on in the frame, west of the point, so its nearest is the column from 178°E.
-    const west = pm.nearestUsable(...pm.toXY(-177.5, 0.5), g => g < 8)!;
+    const west = pm.nearestUsable(
+      ...pm.toXY(-177.5, 0.5),
+      idFilter(pm, g => g < 8)
+    )!;
     assert.ok(west.tri >= 0 && west.tri < 4, `${west.tri}`);
     assert.deepEqual(pm.fromXY(west.x, west.y), [178, 0.5]);
     assert.throws(() => pm.nearestUsable(...pm.toXY(177.5, 0.5), inCut), cut);
-    assert.throws(() => pm.nearestUsable(...pm.toXY(-177.5, 0.5), g => g < 12), cut);
+    assert.throws(
+      () =>
+        pm.nearestUsable(
+          ...pm.toXY(-177.5, 0.5),
+          idFilter(pm, g => g < 12)
+        ),
+      cut
+    );
     // No filter: the water beside the point, nearer than the cut column, as before.
     const beside = pm.nearestUsable(...pm.toXY(177.5, 0.5))!;
     assert.deepEqual(pm.fromXY(beside.x, beside.y), [178, 0.5]);
   });
+  // The same search with the filter the router passes (the rough cut's water of a connected group, coarse.ts waterOf),
+  // which reads a triangle's tile to say whether it is wanted. The cut column is too shallow for the boat, so the water
+  // west of the date line and the water east of it are two groups and the cut tiles hold neither: from east of the
+  // mesh the west water is found, the cut tiles passed over unread (asking the filter of their triangles read them,
+  // and ended with the cut's error: found in review).
+  withMesh(
+    store => {
+      const seeds = boundarySeeds(store, COARSE);
+      const map = buildCoarseMap(store, COARSE, new PagedMesh(store, meshRulesOf(COARSE), 1, seeds));
+      const pm = new PagedMesh(store, meshRulesOf(COARSE), 1, seeds).centred(0.2);
+      const graph = new PieceGraph(map, pm);
+      const groupAt = (lon: number, lat: number): number => graph.component(graph.pieceOf(pm.locate(...pm.toXY(lon, lat)))!);
+      const west = groupAt(178.5, 0.5);
+      assert.notEqual(west, groupAt(-178.5, 0.5), 'two waters');
+      assert.deepEqual(
+        [...graph.tilesOf([west])].sort((a, b) => a - b),
+        [0, 1, 2, 3]
+      );
+      pm.retain(() => false);
+      const reads = pm.stats.reads;
+      const nu = pm.nearestUsable(...pm.toXY(-177.5, 0.5), graph.waterOf([west]))!;
+      assert.ok(nu.tri >= 0 && nu.tri < 4, `${nu.tri}`);
+      assert.deepEqual(pm.fromXY(nu.x, nu.y), [178, 0.5]);
+      // Read: one tile, the one from 178°E level with the point. Its water lies straight across from the point, so the
+      // west water's other three tiles are farther than the answer; the cut tiles and the east water's are not looked at.
+      assert.equal(pm.stats.reads - reads, 1);
+      // The east water from the same point is beside it; water of both groups likewise, the cut tiles holding neither.
+      const east = groupAt(-178.5, 0.5);
+      const near = pm.nearestUsable(...pm.toXY(-177.5, 0.5), graph.waterOf([west, east]))!;
+      assert.deepEqual(pm.fromXY(near.x, near.y), [-178, 0.5]);
+    },
+    i => (i === 2 ? 1 : 10)
+  );
   // The frame of one mesh is laid out about the mesh's middle: its cut is outside the mesh, and every tile is read.
   withMesh(store => {
     const pm = new PagedMesh(store, RULES, 1);

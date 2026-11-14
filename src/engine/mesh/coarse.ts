@@ -25,7 +25,7 @@
 
 import { bboxUnion, haversineDistanceM, type BBox } from '../../geo/geodesy';
 import { MinHeap } from '../heap';
-import type { BoundarySeeds, PagedMesh, PagedTile } from './paged';
+import type { BoundarySeeds, PagedMesh, PagedTile, WaterFilter } from './paged';
 import { blockedTriangles, type MeshRules } from './route';
 import { FLAG_OPENING_BRIDGE, type MeshStore, tileBBox } from './store';
 
@@ -433,6 +433,21 @@ export class PieceGraph {
     const out = new Set<number>();
     for (let p = 0; p < this.pieces.length; p++) if (groups.includes(this.component(p))) out.add(this.tileOfPiece[p]);
     return out;
+  }
+
+  /**
+   * The usable water of these connected groups, as the nearest-water search asks for it (paged.ts WaterFilter): its
+   * triangles (pieceOf, which reads the triangle's tile) and the tiles holding a piece of it (tilesOf, which reads
+   * none), so the search reads only tiles that can hold it.
+   */
+  waterOf(groups: number[]): WaterFilter {
+    return {
+      accept: g => {
+        const p = this.pieceOf(g);
+        return p !== null && groups.includes(this.component(p));
+      },
+      tiles: this.tilesOf(groups),
+    };
   }
 
   /**

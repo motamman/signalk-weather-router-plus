@@ -306,7 +306,7 @@ export function writeJoins(file: string, joins: Int32Array): void {
   fs.renameSync(tmp, file);
 }
 
-/** A joins file's joins (4 numbers each), or null when there is none or it is of another version. */
+/** A joins file's joins (4 numbers each), or null when there is none, it is of another version or it is cut short. */
 export function readJoins(file: string): Int32Array | null {
   let buf: Buffer;
   try {
@@ -314,6 +314,8 @@ export function readJoins(file: string): Int32Array | null {
   } catch {
     return null;
   }
+  // Whole 32-bit numbers only: a file cut inside one is not a joins file (and a typed array of it cannot be made).
+  if (buf.byteLength % Int32Array.BYTES_PER_ELEMENT !== 0) return null;
   const all = new Int32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
   if (all.length < 2 || all[0] !== JOINS_VERSION || all.length !== 2 + 4 * all[1]) return null;
   return all.subarray(2);
@@ -631,10 +633,7 @@ export function runMeshReachTask(t: MeshReachTask): MeshReachResult {
       continue;
     }
     // An approximate waypoint: itself when it is usable water of the route's group, else the nearest that is.
-    const nu = pm.nearestUsable(...pm.toXY(p.lon, p.lat), tri => {
-      const q = graph.pieceOf(tri);
-      return q !== null && graph.component(q) === group;
-    });
+    const nu = pm.nearestUsable(...pm.toXY(p.lon, p.lat), graph.waterOf([group]));
     if (!nu) return { ok: false, reason: noWater(p.name, t.rules) };
     const [lon, lat] = nu.distM > 0 ? pm.fromXY(nu.x, nu.y) : [p.lon, p.lat];
     pieces.push(graph.pieceOf(nu.tri)!);
@@ -743,7 +742,7 @@ export function runMeshSnapTask(t: MeshSnapTask): MeshSnapResult {
     const why = usable
       ? 'its water does not connect to the route for this boat'
       : whyUnusable(pm, pm.locate(px, py, true), t.rules.bufferM);
-    const nu = pm.nearestUsable(px, py, tri => groupOf(tri) === group);
+    const nu = pm.nearestUsable(px, py, graph.waterOf([group]));
     if (!nu)
       return {
         ok: false,

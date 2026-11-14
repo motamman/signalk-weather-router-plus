@@ -375,7 +375,7 @@ export function planWaters(
         let ends = pm.locateAll(ex, ey).filter(t => groupOf(i, t) === g);
         let [gx, gy] = [ex, ey];
         if (!ends.length) {
-          const nu = pm.nearestUsable(ex, ey, t => groupOf(i, t) === g)!;
+          const nu = pm.nearestUsable(ex, ey, graphs[i].waterOf([g]))!;
           ends = [nu.tri];
           [gx, gy] = [nu.x, nu.y];
         }

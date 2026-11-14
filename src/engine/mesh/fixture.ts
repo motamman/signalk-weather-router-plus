@@ -7,6 +7,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { wrapEdge } from '../../geo/geodesy';
+import type { PagedMesh, WaterFilter } from './paged';
 import { NO_HAZARD, NO_VALUE } from './store';
 
 /** A triangle as three [x, y] corners (lon, lat in degrees with xScale 1). */
@@ -193,4 +194,21 @@ export function writeTwoTileMesh(
     })
   );
   return dir;
+}
+
+/**
+ * A filter for the nearest-water search (paged.ts WaterFilter) from a test of triangle ids that reads no tile: the
+ * test, and the tiles holding an id it takes (from the mesh's index).
+ */
+export function idFilter(pm: PagedMesh, accept: (g: number) => boolean): WaterFilter {
+  const tiles = new Set<number>();
+  for (let idx = 0; idx < pm.tileCount; idx++) {
+    const info = pm.infoAt(idx)!;
+    for (let g = info.first; g < info.first + info.n; g++)
+      if (accept(g)) {
+        tiles.add(idx);
+        break;
+      }
+  }
+  return { accept, tiles };
 }

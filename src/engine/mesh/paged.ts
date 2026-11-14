@@ -104,6 +104,18 @@ export interface PagedStats {
   bufferMs: number;
 }
 
+/**
+ * The usable water nearestUsable looks among: the triangles wanted, and the tiles that can hold one. The two go
+ * together: `accept` may read a triangle's tile to answer (the rough cut's does: coarse.ts PieceGraph.pieceOf), so it
+ * cannot say whether a tile is worth reading; `tiles` says that, from an index alone (PieceGraph.waterOf).
+ */
+export interface WaterFilter {
+  /** Whether a usable triangle (global id) is wanted. */
+  accept: (g: number) => boolean;
+  /** The tiles (positions in the mesh's tile list) that can hold a wanted triangle; no tile is read to say so. */
+  tiles: ReadonlySet<number>;
+}
+
 export class PagedMesh {
   private readonly firsts: number[];
   private readonly infos: (MeshTileInfo | null)[];
@@ -614,29 +626,27 @@ export class PagedMesh {
 
   /**
    * The usable water nearest a point of the metres frame (docs/drafts/mesh-no-gshhg-design.md, part 3): the triangle
-   * not blocked for the search (rules and buffer), and accepted by `accept` (the rough cut: water connected to the
-   * leg's start), whose nearest point is closest, that point, and its distance in metres; null when there is none.
-   * The point's own triangle first; otherwise the tiles are read in order of the distance to their extent and the
-   * scan stops at the first tile farther than the best found, so the answer is exact with no distance limit (the
-   * mesh's edge is the limit).
+   * not blocked for the search (rules and buffer), and of the water `only` names when given (the rough cut: water
+   * connected to the leg's start), whose nearest point is closest, that point, and its distance in metres; null when
+   * there is none. The point's own triangle first; otherwise the tiles that can hold such water (`only.tiles`; every
+   * tile without `only`) are read in order of the distance to their extent and the scan stops at the first tile
+   * farther than the best found, so the answer is exact with no distance limit (the mesh's edge is the limit). A tile
+   * that cannot hold it is not read.
    *
-   * A tile the frame's cut runs through cannot be read into the frame (read). It is ordered by the nearer of its two
-   * places in the frame, either side of the cut, so the scan never stops short of it. When the scan reaches it, `accept`
-   * is asked of each of its ids, from the index alone: when it accepts none, the tile cannot hold the answer whatever
-   * its water and is passed over unread (so a filter that accepts nothing ends in null); when it accepts one, the tile
-   * may hold the nearest usable water, and the read ends saying why it cannot be read.
+   * A tile the frame's cut runs through cannot be read into the frame (read). It is ordered by the nearest of its
+   * places in the frame, either side of the cut, so the scan never stops short of it: when it can hold the water
+   * looked for it may hold the nearest, and the read ends saying why it cannot be read.
    */
-  nearestUsable(
-    px: number,
-    py: number,
-    accept: (g: number) => boolean = () => true
-  ): { tri: number; x: number; y: number; distM: number } | null {
+  nearestUsable(px: number, py: number, only?: WaterFilter): { tri: number; x: number; y: number; distM: number } | null {
+    const accept = only ? only.accept : (): boolean => true;
     const own = this.locate(px, py, true);
     if (own >= 0 && !this.isBlocked(own) && accept(own)) return { tri: own, x: px, y: py, distM: 0 };
-    const order: { idx: number; d: number; cut: boolean }[] = [];
-    if (!this.store) order.push({ idx: 0, d: 0, cut: false });
-    else
+    const order: { idx: number; d: number }[] = [];
+    if (!this.store) {
+      if (!only || only.tiles.has(0)) order.push({ idx: 0, d: 0 });
+    } else
       for (let idx = 0; idx < this.infos.length; idx++) {
+        if (only && !only.tiles.has(idx)) continue;
         // The point of the tile's extent nearest the point, the extent where the tile is in the frame (tileTurn; a
         // tile east of the date line is stored from -180). A tile the cut runs through lies at both ends of the frame:
         // the nearer of its places, the one tileTurn gives and those a turn either side of it.
@@ -644,14 +654,13 @@ export class PagedMesh {
         const lon = px / (this.cl * M_PER_DEG_MESH);
         const lat = py / M_PER_DEG_MESH;
         const turn = this.tileTurn(b);
-        const cut = this.cutRunsThrough(b);
         const cy = Math.min(Math.max(lat, b[1]), b[3]) * M_PER_DEG_MESH;
         let d = Infinity;
-        for (const tn of cut ? [turn - 360, turn, turn + 360] : [turn]) {
+        for (const tn of this.cutRunsThrough(b) ? [turn - 360, turn, turn + 360] : [turn]) {
           const cx = Math.min(Math.max(lon, b[0] + tn), b[2] + tn) * this.cl * M_PER_DEG_MESH;
           d = Math.min(d, Math.hypot(cx - px, cy - py));
         }
-        order.push({ idx, d, cut });
+        order.push({ idx, d });
       }
     order.sort((u, v) => u.d - v.d);
     let best: { tri: number; x: number; y: number; distM: number } | null = null;
@@ -661,13 +670,6 @@ export class PagedMesh {
     let bestTile = -1;
     for (const o of order) {
       if (best && o.d >= best.distM) break;
-      if (o.cut) {
-        // Not readable into the frame: passed over when `accept` takes none of its triangles, else read, which throws.
-        const info = this.infos[o.idx]!;
-        let any = false;
-        for (let g = info.first; g < info.first + info.n && !any; g++) any = accept(g);
-        if (!any) continue;
-      }
       const wasHeld = this.isHeld(o.idx);
       const T = this.tile(o.idx);
       let improved = false;

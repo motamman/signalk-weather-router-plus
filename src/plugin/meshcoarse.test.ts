@@ -458,6 +458,13 @@ test('joins: a file of another version, or cut short, is not built; a route buil
     const again = await ensure();
     assert.ok(again !== 'built' && again.result?.joins === 1 && !again.waited, JSON.stringify(again));
     assert.deepEqual(Array.from(readJoins(file)!), [1, 0, 0, 0]);
+    // Cut inside a number (its last byte gone): not built, said without an error, and built again.
+    fs.writeFileSync(file, fs.readFileSync(file).subarray(0, -1));
+    assert.equal(fs.statSync(file).size % 4, 3);
+    assert.ok(!joinsBuilt(file) && readJoins(file) === null);
+    const cut = await ensure();
+    assert.ok(cut !== 'built' && cut.result?.joins === 1, JSON.stringify(cut));
+    assert.deepEqual(Array.from(readJoins(file)!), [1, 0, 0, 0]);
     // Cut short (the count says one join, two numbers follow), and not there at all.
     write([JOINS_VERSION, 1, 1, 0]);
     assert.ok(!joinsBuilt(file));
