@@ -50,7 +50,7 @@ import { emptyMask, forEachEdgeSide, isFree, markMeshWater } from './exit';
 import { JoinFinder } from './joins';
 import { type BoundarySeeds, PagedMesh } from './paged';
 import type { MeshRules } from './route';
-import type { MeshStore } from './store';
+import { type MeshStore, tileExtentsMeet as meets } from './store';
 
 export interface WaterMesh {
   store: MeshStore;
@@ -85,9 +85,6 @@ export type WatersPlan =
     }
   | { ok: false; reason: string };
 
-type Box = [number, number, number, number];
-const meets = (a: Box, b: Box): boolean => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
-
 export function planWaters(
   meshes: WaterMesh[],
   /** The leg's rules; null when the boat's draught or air draft is not set (`why` says which). */
@@ -101,8 +98,11 @@ export function planWaters(
 ): WatersPlan {
   const cl = Math.cos((((start[1] + end[1]) / 2) * Math.PI) / 180);
   const speed = rules?.motorSpeedMs ?? 1;
-  // Each mesh in the leg's frame, with its connected groups for this boat.
-  const pms = meshes.map(m => new PagedMesh(m.store, rules ?? { draughtM: 0, airDraftM: 0, motorSpeedMs: 1 }, cl, m.boundary));
+  // Each mesh in the leg's frame (one frame for all: laid out about the leg's start, paged.ts centred), with its
+  // connected groups for this boat.
+  const pms = meshes.map(m =>
+    new PagedMesh(m.store, rules ?? { draughtM: 0, airDraftM: 0, motorSpeedMs: 1 }, cl, m.boundary).centred(start[0])
+  );
   const graphs = rules ? meshes.map((m, i) => new PieceGraph(m.map!, pms[i])) : [];
   const groupOfPiece = (i: number, p: number | null): number | null => (p === null ? null : graphs[i].component(p));
   const groupOf = (i: number, t: number): number | null => groupOfPiece(i, graphs[i].pieceOf(t));
@@ -375,7 +375,7 @@ export function planWaters(
         let ends = pm.locateAll(ex, ey).filter(t => groupOf(i, t) === g);
         let [gx, gy] = [ex, ey];
         if (!ends.length) {
-          const nu = pm.nearestUsable(ex, ey, t => groupOf(i, t) === g)!;
+          const nu = pm.nearestUsable(ex, ey, graphs[i].waterOf([g]))!;
           ends = [nu.tri];
           [gx, gy] = [nu.x, nu.y];
         }

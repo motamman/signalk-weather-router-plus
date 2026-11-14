@@ -14,7 +14,7 @@
  */
 
 import { HOUR_S, M_PER_DEG, NM_M } from '../geo/units';
-import { bboxFromLonLat, bboxHeight, bboxWidth, haversineDistanceM, type BBox } from '../geo/geodesy';
+import { bboxFromLonLat, bboxHeight, bboxUnion, bboxWidth, haversineDistanceM, type BBox } from '../geo/geodesy';
 import type { LandMask } from '../geo/landmask';
 import type { WaterGrid } from '../geo/watergrid';
 import type { PolarDiagram } from '../vessel/polar';
@@ -190,14 +190,7 @@ async function meshLeg(
     pts.map(p => p[1]),
     MESH_BOX_PAD_MAX_DEG
   );
-  const bbox: BBox = reach
-    ? {
-        west: Math.min(ends.west, reach.box.west),
-        south: Math.min(ends.south, reach.box.south),
-        east: Math.max(ends.east, reach.box.east),
-        north: Math.max(ends.north, reach.box.north),
-      }
-    : ends;
+  const bbox: BBox = reach ? bboxUnion(ends, reach.box) : ends;
   await inp.loadAreas(bbox, multi ? `${tag}area` : 'route area');
   const { names: currentNames } = inp.currents();
   if (currentNames && plan.index === 0) progress(0, 0, `currents: ${currentNames.join(' > ')}`);

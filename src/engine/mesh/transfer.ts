@@ -37,7 +37,7 @@ import { emptyMask, floodFree, forEachEdgeSide, isFree, markMeshWater } from './
 import { type CoarseMap, PieceGraph } from './coarse';
 import { type BoundarySeeds, PagedMesh } from './paged';
 import type { MeshRules } from './route';
-import type { MeshStore } from './store';
+import { type MeshStore, tileExtentsMeet as meets } from './store';
 
 export interface TransferMesh {
   store: MeshStore;
@@ -66,9 +66,6 @@ export type MeshTransferResult =
     }
   | { ok: false; reason: string };
 
-type Box = [number, number, number, number];
-const meets = (a: Box, b: Box): boolean => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
-
 export function findMeshTransfer(
   from: TransferMesh,
   to: TransferMesh,
@@ -77,10 +74,10 @@ export function findMeshTransfer(
   end: [number, number],
   names: { start: string; end: string }
 ): MeshTransferResult {
-  // One frame for both meshes (the leg's), so a point of A is the same point of B.
+  // One frame for both meshes (the leg's, laid out about its start: paged.ts centred), so a point of A is the same point of B.
   const cl = Math.cos((((start[1] + end[1]) / 2) * Math.PI) / 180);
-  const pa = new PagedMesh(from.store, rules, cl, from.boundary);
-  const pb = new PagedMesh(to.store, rules, cl, to.boundary);
+  const pa = new PagedMesh(from.store, rules, cl, from.boundary).centred(start[0]);
+  const pb = new PagedMesh(to.store, rules, cl, to.boundary).centred(start[0]);
   const wa = waterOf(pa, from.map);
   const wb = waterOf(pb, to.map);
   const ga = wa.groupOf;
@@ -216,8 +213,8 @@ export function findMeshGap(
   names: { start: string; end: string }
 ): MeshGapResult {
   const cl = Math.cos((((start[1] + end[1]) / 2) * Math.PI) / 180);
-  const pa = new PagedMesh(from.store, rules, cl, from.boundary);
-  const pb = new PagedMesh(to.store, rules, cl, to.boundary);
+  const pa = new PagedMesh(from.store, rules, cl, from.boundary).centred(start[0]);
+  const pb = new PagedMesh(to.store, rules, cl, to.boundary).centred(start[0]);
   const wa = waterOf(pa, from.map);
   const wb = waterOf(pb, to.map);
   const ga = wa.groupOf;
@@ -289,7 +286,7 @@ export function findMeshGap(
   let ends = pb.locateAll(bx, by).filter(g => endGroups.includes(groupOf(g) ?? -1));
   let [fx, fy] = [bx, by];
   if (!ends.length) {
-    const nu = pb.nearestUsable(bx, by, g => endGroups.includes(groupOf(g) ?? -1))!;
+    const nu = pb.nearestUsable(bx, by, wb.graph.waterOf(endGroups))!;
     ends = [nu.tri];
     [fx, fy] = [nu.x, nu.y];
   }

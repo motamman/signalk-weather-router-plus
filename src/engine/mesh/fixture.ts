@@ -6,6 +6,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { wrapEdge } from '../../geo/geodesy';
+import type { PagedMesh, WaterFilter } from './paged';
 import { NO_HAZARD, NO_VALUE } from './store';
 
 /** A triangle as three [x, y] corners (lon, lat in degrees with xScale 1). */
@@ -89,9 +91,14 @@ export function squareTile(i: number, j: number): Tri[] {
  * A mesh of 1° tiles at the given cells (each tile two triangles split along
  * its rising diagonal, squareTile), neighbours joined across every shared
  * tile edge; per cell an optional depth and flags for both its triangles
- * (default 10 m, 0). Index origin (0, 0), xScale 1. Returns the mesh folder.
+ * (default 10 m, 0). Index origin (`west`, 0), xScale 1: column i is the degree
+ * from `west + i` eastwards, and a column at or past 180 is stored as the mesh
+ * format stores it (store.ts, the date line): its longitudes from -180, the
+ * index's box with its west greater than its east. Returns the mesh folder.
  */
-export function writeGridMesh(dir: string, cells: { i: number; j: number; depth?: number; flags?: number }[]): string {
+export function writeGridMesh(dir: string, cells: { i: number; j: number; depth?: number; flags?: number }[], west = 0): string {
+  /** The longitude of column i's west edge, as stored. */
+  const lonOf = (i: number): number => (west + i >= 180 ? west + i - 360 : west + i);
   const id = new Map(cells.map((c, k) => [`${c.i},${c.j}`, k]));
   // Global ids: cell k's lower triangle 2k, upper 2k + 1.
   const lower = (i: number, j: number): number => (id.has(`${i},${j}`) ? 2 * id.get(`${i},${j}`)! : -1);
@@ -109,16 +116,16 @@ export function writeGridMesh(dir: string, cells: { i: number; j: number; depth?
     const file = `t_${i}_${j}.bin`;
     const d = c.depth ?? 10;
     const f = c.flags ?? 0;
-    writeTile(dir, file, squareTile(i, j), nb, rev, [d, d], [f, f]);
-    return { i, j, file, first: 2 * k, n: 2, bbox: [i, j, i + 1, j + 1] };
+    writeTile(dir, file, squareTile(lonOf(i), j), nb, rev, [d, d], [f, f]);
+    return { i, j, file, first: 2 * k, n: 2, bbox: [lonOf(i), j, lonOf(i) + 1, j + 1] };
   });
   fs.writeFileSync(
     path.join(dir, 'index.json'),
     JSON.stringify({
       version: 1,
-      west: 0,
+      west,
       south: 0,
-      east: Math.max(...cells.map(c => c.i)) + 1,
+      east: wrapEdge(west + Math.max(...cells.map(c => c.i)) + 1),
       north: Math.max(...cells.map(c => c.j)) + 1,
       tileDeg: 1,
       xScale: 1,
@@ -187,4 +194,21 @@ export function writeTwoTileMesh(
     })
   );
   return dir;
+}
+
+/**
+ * A filter for the nearest-water search (paged.ts WaterFilter) from a test of triangle ids that reads no tile: the
+ * test, and the tiles holding an id it takes (from the mesh's index).
+ */
+export function idFilter(pm: PagedMesh, accept: (g: number) => boolean): WaterFilter {
+  const tiles = new Set<number>();
+  for (let idx = 0; idx < pm.tileCount; idx++) {
+    const info = pm.infoAt(idx)!;
+    for (let g = info.first; g < info.first + info.n; g++)
+      if (accept(g)) {
+        tiles.add(idx);
+        break;
+      }
+  }
+  return { accept, tiles };
 }

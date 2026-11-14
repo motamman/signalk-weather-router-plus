@@ -25,6 +25,7 @@
  *   corners    float64[n*6]  (x0, y0, x1, y1, x2, y2): x = lon × xScale (the
  *                            build's cos(mid-latitude)), y = lat; the build's own
  *                            values, so a seam vertex is identical in both tiles
+ *                            (but on the date line, below)
  *   neighbours int32[n*3]    global triangle ids (contiguous per tile), -1 = none
  *   mult       float32[n]    shore penalty × depth penalty
  *   depth      float32[n]    charted depth, -999 = unknown
@@ -37,11 +38,20 @@
  *                            with none charted, 1e9 = no hazard
  *   rev        int8[n*3]     index of the shared edge on the neighbour's side
  *   flags      uint8[n]      see FLAG_*
+ *
+ * The date line. A mesh's longitudes are the router's (geo/geodesy.ts): between -180 and 180, and a box whose west is
+ * greater than its east crosses the date line. The date line is a tile edge, so no tile lies across it: a tile's
+ * corners and its extent are plain numbers, and only the index's own box (west, east) may cross (171.5 to -67 is
+ * 171.5°E eastwards to 67°W). A vertex on the date line is 180 in the tile west of it and -180 in the tile east of
+ * it. Whatever needs the mesh in one piece takes a longitude next to the mesh's middle (lonNear): the tile a point is
+ * in (tileIJ), and the corners in a frame of metres (loadTiles here, the leg's frame in paged.ts). For a mesh that
+ * does not cross the date line and a point within half a turn of its middle that is the longitude itself, unchanged.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { bboxContains, type BBox } from '../../geo/geodesy';
+import { unwrapLonNear } from '../../geo/angles';
+import { bboxContains, bboxWidth, boxesMeet, wrapEdge, type BBox } from '../../geo/geodesy';
 
 export const FLAG_NAVIGABLE = 1;
 export const FLAG_HAZARD = 2;
@@ -133,8 +143,23 @@ export interface MeshTileInfo {
   bbox: [number, number, number, number];
 }
 
+/** A tile's vertex extent (MeshTileInfo.bbox) as a box. */
+export function tileBBox(b: [number, number, number, number]): BBox {
+  return { west: b[0], south: b[1], east: b[2], north: b[3] };
+}
+
+/**
+ * Do two tiles' vertex extents share at least a point (of one mesh or of two)? The one test of it (geodesy.ts
+ * boxesMeet): longitude goes round, so a tile that ends on the date line at 180 and one that starts on it at -180 meet
+ * there, as two tiles that share an edge anywhere else do.
+ */
+export function tileExtentsMeet(a: [number, number, number, number], b: [number, number, number, number]): boolean {
+  return boxesMeet(tileBBox(a), tileBBox(b));
+}
+
 export interface MeshIndex {
   version: number;
+  /** The mesh's box; `west` greater than `east` when the mesh crosses the date line (see the file's comment). */
   west: number;
   south: number;
   east: number;
@@ -154,6 +179,11 @@ export interface LoadedMesh {
   y: Float64Array;
   /** cos(latitude) the x axis was scaled with. */
   cl: number;
+  /**
+   * The longitude the frame is laid out about: a longitude is taken next to it (within half a turn) before it is
+   * scaled, so a mesh across the date line is in one piece. Absent (the tests' own meshes): a longitude as it is.
+   */
+  ref?: number;
   /** Local index of the neighbour across edge k of t (edge k runs from corner k to corner k+1), -1 = none or not loaded. */
   neighbours: Int32Array;
   rev: Int8Array;
@@ -184,6 +214,9 @@ export class MeshStore {
   /** The global id ranges [first, end) of the tiles left out (no chart data), ascending by first. */
   private readonly gaps: [number, number][];
 
+  /** The longitude of the middle of the mesh's box, counted east from its west edge (past 180 when the box crosses the date line). */
+  readonly midLon: number;
+
   private constructor(
     readonly dir: string,
     /** The index with the tiles without chart data left out (the triangle count as built). */
@@ -192,6 +225,16 @@ export class MeshStore {
   ) {
     for (const t of index.tiles) this.byIJ.set(`${t.i},${t.j}`, t);
     this.gaps = gaps.sort((a, b) => a[0] - b[0]);
+    this.midLon = index.west + bboxWidth(index) / 2;
+  }
+
+  /**
+   * A longitude next to the mesh: the same meridian, within half a turn of the mesh's middle, so every point of the
+   * mesh and round it lies in one run of numbers from its west edge eastwards (190 for 170°W in a mesh that starts at
+   * 171.5°E). A longitude already within half a turn of the middle is returned as it is.
+   */
+  lonNear(lon: number): number {
+    return unwrapLonNear(lon, this.midLon);
   }
 
   /** Open a mesh folder; throws when index.json is missing or not a version this code reads. Tiles without chart data are left out. */
@@ -227,8 +270,36 @@ export class MeshStore {
     return false;
   }
 
+  /**
+   * The column of a longitude counted on from the mesh's west edge (`x`: next to the mesh, lonNear, or further on along
+   * a run), named within one turn of the earth: the column a whole turn on is the same column. So a point and the run
+   * of a tile's extent name a column alike wherever they are taken, in a mesh all the way round too, where the column
+   * east of the last is the first.
+   */
+  private column(x: number): number {
+    const turn = Math.round(360 / this.index.tileDeg);
+    const c = Math.floor((x - this.index.west) / this.index.tileDeg);
+    return ((c % turn) + turn) % turn;
+  }
+
+  /** The tile column and row of a point: columns count east from the mesh's west edge, across the date line when the mesh crosses it. */
   tileIJ(lon: number, lat: number): [number, number] {
-    return [Math.floor((lon - this.index.west) / this.index.tileDeg), Math.floor((lat - this.index.south) / this.index.tileDeg)];
+    return [this.column(this.lonNear(lon)), Math.floor((lat - this.index.south) / this.index.tileDeg)];
+  }
+
+  /**
+   * The columns a run of longitude meets, from `west` eastwards over `width` degrees, in order, each named as tileIJ
+   * names a point's: one run, counted on from its west end, so a run across the far side of the earth from the mesh's
+   * middle (a tile on the date line in a mesh all the way round) is its columns in a row and never an empty range
+   * between two ends named apart.
+   */
+  columnsOf(west: number, width: number): number[] {
+    const from = this.lonNear(west);
+    const { west: meshWest, tileDeg } = this.index;
+    const out: number[] = [];
+    for (let i = Math.floor((from - meshWest) / tileDeg); i <= Math.floor((from + width - meshWest) / tileDeg); i++)
+      out.push(this.column(meshWest + i * tileDeg + tileDeg / 2));
+    return out;
   }
 
   tile(i: number, j: number): MeshTileInfo | undefined {
@@ -243,19 +314,37 @@ export class MeshStore {
     return bboxContains({ west: t.bbox[0], south: t.bbox[1], east: t.bbox[2], north: t.bbox[3] }, lon, lat);
   }
 
-  /** The tiles whose cells meet the box, sorted by first id. */
+  /**
+   * The tiles whose cells meet the box, sorted by first id. The box is its whole run of longitude, from its west
+   * eastwards to its east (across the date line when its west is the greater, all the way round for -180 to 180): the
+   * run starts at the box's west taken next to the mesh (lonNear) and may go on past the far side of the earth from
+   * the mesh's middle, where it is a turn on from the mesh's own columns, so the columns are those of the run and of
+   * the run a turn back. A run nearly all the way round comes back over the mesh, and the two runs then name a column
+   * twice: a tile is in the answer once.
+   */
   private tilesIn(box: BBox): MeshTileInfo[] {
-    const [i0, j0] = this.tileIJ(box.west, box.south);
-    const [i1, j1] = this.tileIJ(box.east, box.north);
-    const infos: MeshTileInfo[] = [];
-    for (let i = i0; i <= i1; i++)
-      for (let j = j0; j <= j1; j++) {
-        const t = this.tile(i, j);
-        if (t) infos.push(t);
+    const { west: meshWest, south: meshSouth, tileDeg } = this.index;
+    const j0 = Math.floor((box.south - meshSouth) / tileDeg);
+    const j1 = Math.floor((box.north - meshSouth) / tileDeg);
+    const found = new Set<MeshTileInfo>();
+    if (bboxWidth(box) >= 360) {
+      for (const t of this.index.tiles) if (t.j >= j0 && t.j <= j1) found.add(t);
+    } else {
+      const west = this.lonNear(box.west);
+      // The box's east counted on from that west: the same turns on as the west, and one more across the date line.
+      const east = box.east + (west - box.west) + (box.west <= box.east ? 0 : 360);
+      for (const turn of [0, -360]) {
+        const i0 = Math.floor((west + turn - meshWest) / tileDeg);
+        const i1 = Math.floor((east + turn - meshWest) / tileDeg);
+        for (let i = i0; i <= i1; i++)
+          for (let j = j0; j <= j1; j++) {
+            const t = this.tile(i, j);
+            if (t) found.add(t);
+          }
       }
+    }
     // Sorted by first id so neighbours can be remapped by binary search.
-    infos.sort((a, b) => a.first - b.first);
-    return infos;
+    return [...found].sort((a, b) => a.first - b.first);
   }
 
   /** How many triangles load(box) would read, from the index alone. */
@@ -290,6 +379,7 @@ export class MeshStore {
       x: new Float64Array(n * 3),
       y: new Float64Array(n * 3),
       cl,
+      ref: this.midLon,
       neighbours: new Int32Array(n * 3),
       rev: new Int8Array(n * 3),
       mult: new Float32Array(n),
@@ -361,7 +451,7 @@ export class MeshStore {
     // The same expression, in the same order, as toMeshXY.
     const K = this.index.xScale;
     for (let k = 0; k < n * 3; k++) {
-      m.x[offset * 3 + k] = (corners[2 * k] / K) * m.cl * M_PER_DEG_MESH;
+      m.x[offset * 3 + k] = this.lonNear(corners[2 * k] / K) * m.cl * M_PER_DEG_MESH;
       m.y[offset * 3 + k] = corners[2 * k + 1] * M_PER_DEG_MESH;
       const g = nb[k];
       m.neighbours[offset * 3 + k] = g < 0 ? -1 : toLocal(g);
@@ -377,12 +467,12 @@ export class MeshStore {
 
 /** Project a point into a loaded mesh's metres frame (the same expression order as readTile). */
 export function toMeshXY(m: LoadedMesh, lon: number, lat: number): [number, number] {
-  return [lon * m.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];
+  return [(m.ref === undefined ? lon : unwrapLonNear(lon, m.ref)) * m.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];
 }
 
-/** Back from the metres frame to degrees. */
+/** Back from the metres frame to degrees (a longitude between -180 and 180). */
 export function fromMeshXY(m: LoadedMesh, x: number, y: number): [number, number] {
-  return [x / (m.cl * M_PER_DEG_MESH), y / M_PER_DEG_MESH];
+  return [wrapEdge(x / (m.cl * M_PER_DEG_MESH)), y / M_PER_DEG_MESH];
 }
 
 /**

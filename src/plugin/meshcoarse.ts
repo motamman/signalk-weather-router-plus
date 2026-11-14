@@ -117,13 +117,35 @@ function lockPid(text: string): number {
 }
 
 /**
+ * A lock as it is on disk: its date and its text, or undefined when it is gone. The text is null for a lock that is
+ * there and cannot be read as a file (a folder of that name, as a lock made with mkdir is; a file this process may
+ * not read). Such a lock names no process, so only its age says whether it is still held; waiting on it is a poll,
+ * where reading it again at once never ended.
+ */
+function lockOnDisk(lock: string): { text: string | null; mtimeMs: number } | undefined {
+  let mtimeMs: number;
+  const gone = (err: unknown): boolean => (err as NodeJS.ErrnoException).code === 'ENOENT';
+  try {
+    mtimeMs = fs.statSync(lock).mtimeMs;
+  } catch (err) {
+    if (gone(err)) return undefined;
+    throw err;
+  }
+  try {
+    return { text: fs.readFileSync(lock, 'utf8'), mtimeMs };
+  } catch (err) {
+    return gone(err) ? undefined : { text: null, mtimeMs };
+  }
+}
+
+/**
  * Remove `lock` when `same` holds for its contents and date, holding `<lock>.guard` (created exclusively), so a stale
  * lock's removal and its owner's release never interleave and neither removes a lock taken anew meanwhile. False
  * when another holds the guard (try again). A guard left by a process that died inside this synchronous step is
  * removed: its pid gone; this process's pid on a guard dated before this process started (the pid reused); or no pid
  * (died before writing it) and older than GUARD_STALE_MS. A guard whose owner is alive is never removed for its age.
  */
-function removeLockIf(lock: string, same: (text: string, mtimeMs: number) => boolean): boolean {
+function removeLockIf(lock: string, same: (text: string | null, mtimeMs: number) => boolean): boolean {
   const guard = `${lock}.guard`;
   let fd: number;
   try {
@@ -147,15 +169,9 @@ function removeLockIf(lock: string, same: (text: string, mtimeMs: number) => boo
     } finally {
       fs.closeSync(fd);
     }
-    let text: string;
-    let mtimeMs: number;
-    try {
-      text = fs.readFileSync(lock, 'utf8');
-      mtimeMs = fs.statSync(lock).mtimeMs;
-    } catch {
-      return true; // gone already
-    }
-    if (same(text, mtimeMs)) fs.rmSync(lock, { force: true });
+    const on = lockOnDisk(lock);
+    // Gone already, or the lock to remove (a folder with what it holds).
+    if (on && same(on.text, on.mtimeMs)) fs.rmSync(lock, { force: true, recursive: true });
     return true;
   } finally {
     fs.rmSync(guard, { force: true });
@@ -166,13 +182,15 @@ function removeLockIf(lock: string, same: (text: string, mtimeMs: number) => boo
  * Run `build` for `file` (a rough cut, or a joins file) holding `<file>.lock`, created exclusively, so the main
  * thread's rebuild and a route's own build never build the same file at once (each in its own child process, the
  * same work twice). A build finding the lock taken waits for it to go, then calls `build` itself unless the file is
- * there by then (result null: the other build made it; `waited` tells the caller). A lock left by a process that is gone, or older than
- * BUILD_LOCK_STALE_MS, is removed. Cancelled through `signal` while waiting.
+ * built by then (result null: the other build made it; `waited` tells the caller). What built means is the caller's
+ * to say, `opts.built`: roughCutBuilt for a rough cut, joinsBuilt for a joins file; this has no test of its own. A
+ * lock left by a process that is gone, or older than BUILD_LOCK_STALE_MS, is removed; one that cannot be read as a
+ * file (lockOnDisk) by its age alone. Cancelled through `signal` while waiting.
  */
 export async function withBuildLock<T>(
   file: string,
   build: () => Promise<T>,
-  opts: { signal?: AbortSignal; onWait?: () => void } = {}
+  opts: { built: () => boolean; signal?: AbortSignal; onWait?: () => void }
 ): Promise<{ waited: boolean; result: T | null }> {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -196,24 +214,18 @@ export async function withBuildLock<T>(
       }
       try {
         // Another build finished while this one waited: its file is the same one this would write.
-        if (waited && fs.existsSync(file)) return { waited, result: null };
+        if (waited && opts.built()) return { waited, result: null };
         return { waited, result: await build() };
       } finally {
         while (!removeLockIf(lock, text => text === token)) await pause();
       }
     }
     // Taken: the holder's pid and the lock's age decide whether it is still building.
-    let stale: boolean;
-    let text: string;
-    let mtimeMs: number;
-    try {
-      text = fs.readFileSync(lock, 'utf8');
-      mtimeMs = fs.statSync(lock).mtimeMs;
-      const pid = lockPid(text);
-      stale = Date.now() - mtimeMs > BUILD_LOCK_STALE_MS || (pid !== 0 && pid !== process.pid && !processAlive(pid));
-    } catch {
-      continue; // gone meanwhile (or not written yet): try again
-    }
+    const on = lockOnDisk(lock);
+    if (!on) continue; // gone meanwhile: try again
+    const { text, mtimeMs } = on;
+    const pid = text === null ? 0 : lockPid(text);
+    const stale = Date.now() - mtimeMs > BUILD_LOCK_STALE_MS || (pid !== 0 && pid !== process.pid && !processAlive(pid));
     if (stale) {
       // Removed only while it is still the lock inspected (same contents and date), not one taken anew since.
       if (!removeLockIf(lock, (t, m) => t === text && m === mtimeMs)) await pause();
@@ -239,6 +251,14 @@ export function markCoarseUsed(mapFile: string): void {
       /* gone or read-only: the route reads it as it is */
     }
   }
+}
+
+/**
+ * Whether a rough cut is built: its map file is there. The file's name carries the mesh build, the version and the
+ * rules (coarseFile), and it is written last, by a rename, after its boundary file: one that is there is the one wanted.
+ */
+export function roughCutBuilt(mapFile: string): boolean {
+  return fs.existsSync(mapFile);
 }
 
 /** The tile-boundary file (.bnd) beside a rough-cut file. */
@@ -286,7 +306,7 @@ export function writeJoins(file: string, joins: Int32Array): void {
   fs.renameSync(tmp, file);
 }
 
-/** A joins file's joins (4 numbers each), or null when there is none or it is of another version. */
+/** A joins file's joins (4 numbers each), or null when there is none, it is of another version or it is cut short. */
 export function readJoins(file: string): Int32Array | null {
   let buf: Buffer;
   try {
@@ -294,9 +314,20 @@ export function readJoins(file: string): Int32Array | null {
   } catch {
     return null;
   }
+  // Whole 32-bit numbers only: a file cut inside one is not a joins file (and a typed array of it cannot be made).
+  if (buf.byteLength % Int32Array.BYTES_PER_ELEMENT !== 0) return null;
   const all = new Int32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
   if (all.length < 2 || all[0] !== JOINS_VERSION || all.length !== 2 + 4 * all[1]) return null;
   return all.subarray(2);
+}
+
+/**
+ * Whether a joins file is built: there and read as joins (readJoins). Its name carries no version (a rough cut's
+ * does: roughCutBuilt), so a file of another version, or cut short, is there and not built, and is built again; a test
+ * of the file being there took it as built, and its reader (meshwaters.ts) then found no joins.
+ */
+export function joinsBuilt(file: string): boolean {
+  return readJoins(file) !== null;
 }
 
 /** The other mesh's tile-boundary record for the rules: from its rough cut's `.bnd` when there, else read and written now. */
@@ -315,7 +346,8 @@ function boundaryOf(store: MeshStore, mapFile: string, rules: CoarseRules): Boun
  */
 function joinsTo(pa: PagedMesh, storeA: MeshStore, other: { dir: string; mapFile: string }, rules: CoarseRules) {
   const storeB = MeshStore.open(other.dir);
-  const pb = new PagedMesh(storeB, meshRulesOf(rules), pa.cl, boundaryOf(storeB, other.mapFile, rules));
+  // B in A's frame: the same scale, laid out about the same longitude (paged.ts centred).
+  const pb = new PagedMesh(storeB, meshRulesOf(rules), pa.cl, boundaryOf(storeB, other.mapFile, rules)).centred(pa.frameLon);
   const finder = new JoinFinder({ store: storeA, pm: pa }, { store: storeB, pm: pb });
   const bPieces = new Map<number, Int32Array>();
   const seen = new Set<string>();
@@ -601,10 +633,7 @@ export function runMeshReachTask(t: MeshReachTask): MeshReachResult {
       continue;
     }
     // An approximate waypoint: itself when it is usable water of the route's group, else the nearest that is.
-    const nu = pm.nearestUsable(...pm.toXY(p.lon, p.lat), tri => {
-      const q = graph.pieceOf(tri);
-      return q !== null && graph.component(q) === group;
-    });
+    const nu = pm.nearestUsable(...pm.toXY(p.lon, p.lat), graph.waterOf([group]));
     if (!nu) return { ok: false, reason: noWater(p.name, t.rules) };
     const [lon, lat] = nu.distM > 0 ? pm.fromXY(nu.x, nu.y) : [p.lon, p.lat];
     pieces.push(graph.pieceOf(nu.tri)!);
@@ -713,7 +742,7 @@ export function runMeshSnapTask(t: MeshSnapTask): MeshSnapResult {
     const why = usable
       ? 'its water does not connect to the route for this boat'
       : whyUnusable(pm, pm.locate(px, py, true), t.rules.bufferM);
-    const nu = pm.nearestUsable(px, py, tri => groupOf(tri) === group);
+    const nu = pm.nearestUsable(px, py, graph.waterOf([group]));
     if (!nu)
       return {
         ok: false,

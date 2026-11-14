@@ -16,11 +16,26 @@
  * A tile's blocked set (rules, then the buffer) is computed in the tile's own frame, not the leg's, so it is the
  * same for every leg and for the rough cut built from the same reads (coarse.ts): the rough cut's "connected" is
  * the search's.
+ *
+ * The date line (store.ts, the file's comment): the frame is flat, laid out about one longitude (`frameLon`: the middle
+ * of the mesh, or the one given with centred() where several meshes share a frame). A point's longitude is taken next
+ * to it, within half a turn (toXY), and a tile is placed whole, a whole number of turns from where it is stored, so
+ * that its middle is next to it too (read): a mesh across the date line is one piece, and a tile is never torn. A
+ * longitude within half a turn of the frame's middle is used as it is, so a mesh that does not cross the date line has
+ * the numbers it always had. For every tile that lies on one side of the frame's cut (the meridian opposite its
+ * middle), placing the tile whole and placing each of its points next to the frame's middle are the same thing, so a
+ * point, a walk and a search's costs meet the tile's corners where they are, with nothing converted anywhere. A tile
+ * the cut runs through has no place in a flat frame (its points lie a turn apart in it): it is not read into one, and
+ * the read ends saying so (read). The frame of one mesh is laid out about the mesh's own middle, so its cut is never
+ * inside the mesh; a frame shared by several meshes is laid out about the leg's start, so its cut is half the earth
+ * from the leg, whose box is at most 120° wide (pipeline.ts). Two tiles either side of the cut are a turn apart in the
+ * frame. Points come back as longitudes between -180 and 180 (fromXY).
  */
 
-import type { BBox } from '../../geo/geodesy';
+import { unwrapLonNear } from '../../geo/angles';
+import { type BBox, bboxUnion, wrapEdge } from '../../geo/geodesy';
 import { blockedTriangles, growBlocked, type MeshRules } from './route';
-import { type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo } from './store';
+import { type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo, tileBBox } from './store';
 import { U_TOL } from './width';
 
 /** Index cell size, metres: a few triangles a cell on a chart mesh (triangles are tens of metres). */
@@ -89,6 +104,18 @@ export interface PagedStats {
   bufferMs: number;
 }
 
+/**
+ * The usable water nearestUsable looks among: the triangles wanted, and the tiles that can hold one. The two go
+ * together: `accept` may read a triangle's tile to answer (the rough cut's does: coarse.ts PieceGraph.pieceOf), so it
+ * cannot say whether a tile is worth reading; `tiles` says that, from an index alone (PieceGraph.waterOf).
+ */
+export interface WaterFilter {
+  /** Whether a usable triangle (global id) is wanted. */
+  accept: (g: number) => boolean;
+  /** The tiles (positions in the mesh's tile list) that can hold a wanted triangle; no tile is read to say so. */
+  tiles: ReadonlySet<number>;
+}
+
 export class PagedMesh {
   private readonly firsts: number[];
   private readonly infos: (MeshTileInfo | null)[];
@@ -107,8 +134,10 @@ export class PagedMesh {
     prepMs: 0,
     bufferMs: 0,
   };
-  /** Union of the extents of the tiles read, degrees (null before the first). */
+  /** The box holding the extents of the tiles read, the short way round (geodesy.ts bboxUnion); null before the first. */
   private touched: BBox | null = null;
+  /** The longitude the frame is laid out about (the file's comment); undefined for an in-memory mesh: longitudes as they are. */
+  private ref: number | undefined;
   /** A tile that cannot be read again (an in-memory mesh) is never dropped. */
   private readonly droppable: boolean;
 
@@ -140,7 +169,52 @@ export class PagedMesh {
       this.firsts = infos.map(t => t.first);
       this.infos = infos;
       this.droppable = true;
+      this.ref = store!.midLon;
     }
+  }
+
+  /** The longitude the frame is laid out about: the mesh's middle unless centred() set another; undefined in memory. */
+  get frameLon(): number | undefined {
+    return this.ref;
+  }
+
+  /**
+   * Lay the frame out about `lon` instead of the mesh's middle, before anything is asked of the mesh: where several
+   * meshes are used in one frame (a leg across the limits of the charts, the joins of two meshes), all are centred on
+   * the same longitude, so a point has the same place in each. The tiles held, read in the old frame, are let go. An
+   * in-memory mesh has no frame of its own and is left as it is.
+   */
+  centred(lon: number | undefined): this {
+    if (!this.store || lon === undefined || lon === this.ref) return this;
+    this.retain(() => false);
+    this.touched = null;
+    this.ref = lon;
+    return this;
+  }
+
+  /** A longitude next to the frame's middle: the same meridian, within half a turn of it. */
+  lonNear(lon: number): number {
+    return this.ref === undefined ? lon : unwrapLonNear(lon, this.ref);
+  }
+
+  /**
+   * How far a tile is turned in the frame from where it is stored (its extent `bbox`), degrees: the whole turns that
+   * put its middle next to the frame's middle; 0 for a tile within half a turn of it. The tile's corners and its
+   * extent are placed with it, whole, so a tile is never torn.
+   */
+  tileTurn(bbox: [number, number, number, number]): number {
+    const mid = (bbox[0] + bbox[2]) / 2;
+    return this.lonNear(mid) - mid;
+  }
+
+  /**
+   * Does the frame's cut (the meridian opposite its middle) run through a tile's extent? Such a tile has no place in a
+   * flat frame (the file's comment) and is not read into one. Touching the cut with an edge is on one side of it.
+   */
+  private cutRunsThrough(bbox: [number, number, number, number]): boolean {
+    if (this.ref === undefined) return false;
+    const turn = this.tileTurn(bbox);
+    return bbox[0] + turn < this.ref - 180 || bbox[2] + turn > this.ref + 180;
   }
 
   /** An in-memory mesh (the tests' synthetic meshes) as one tile that is never dropped, with its blocked set as given. */
@@ -179,11 +253,12 @@ export class PagedMesh {
   }
 
   toXY(lon: number, lat: number): [number, number] {
-    return [lon * this.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];
+    return [this.lonNear(lon) * this.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];
   }
 
+  /** Back to degrees: a longitude between -180 and 180. */
   fromXY(x: number, y: number): [number, number] {
-    return [x / (this.cl * M_PER_DEG_MESH), y / M_PER_DEG_MESH];
+    return [wrapEdge(x / (this.cl * M_PER_DEG_MESH)), y / M_PER_DEG_MESH];
   }
 
   /** Position in the tile list of the tile holding a global id. */
@@ -250,9 +325,12 @@ export class PagedMesh {
     for (const [idx, T] of [...this.held]) if (!keep(T)) this.drop(idx);
   }
 
-  /** The union of the extents of every tile read so far (the leg's area, for the currents read beside it). */
+  /**
+   * The union of the extents of every tile read so far (the leg's area, for the currents read beside it); its west
+   * greater than its east when the tiles read lie either side of the date line.
+   */
   touchedBox(): BBox | null {
-    return this.touched;
+    return this.touched && { ...this.touched };
   }
 
   private read(idx: number): PagedTile {
@@ -264,8 +342,18 @@ export class PagedMesh {
     const K = this.store.index.xScale;
     const x = new Float64Array(n * 3);
     const y = new Float64Array(n * 3);
+    // The tile whole, turned from where it is stored (tileTurn; not at all for a tile within half a turn of the frame's
+    // middle: its longitudes as stored).
+    const turn = this.tileTurn(info.bbox);
+    // A tile the frame's cut runs through cannot be placed in it (the file's comment): west of the cut it would be a
+    // turn from its own east. Touching the cut with an edge is on one side of it.
+    if (this.cutRunsThrough(info.bbox))
+      throw new Error(
+        `mesh tile ${info.file} (${info.bbox[0]}° to ${info.bbox[2]}°) lies across the meridian opposite the frame's middle (${this.ref}°), where a flat frame is cut: half the earth from the leg, which a leg does not reach`
+      );
+    const lonOf = turn === 0 ? (q: number): number => a.corners[2 * q] / K : (q: number): number => a.corners[2 * q] / K + turn;
     for (let q = 0; q < n * 3; q++) {
-      x[q] = (a.corners[2 * q] / K) * this.cl * M_PER_DEG_MESH;
+      x[q] = lonOf(q) * this.cl * M_PER_DEG_MESH;
       y[q] = a.corners[2 * q + 1] * M_PER_DEG_MESH;
     }
     const t1 = Date.now();
@@ -282,13 +370,14 @@ export class PagedMesh {
     let xt = x;
     if (clT !== this.cl) {
       xt = new Float64Array(n * 3);
-      for (let q = 0; q < n * 3; q++) xt[q] = (a.corners[2 * q] / K) * clT * M_PER_DEG_MESH;
+      for (let q = 0; q < n * 3; q++) xt[q] = lonOf(q) * clT * M_PER_DEG_MESH;
     }
     const m: LoadedMesh = {
       n,
       x: xt,
       y,
       cl: clT,
+      ref: this.ref,
       neighbours: local,
       rev: a.rev,
       mult: a.mult,
@@ -330,15 +419,9 @@ export class PagedMesh {
       for (let t = 0; t < n; t++) b += ruleBlocked[t];
       this.stats.blocked += b;
       this.stats.buffered += buffered;
-      const tb = this.touched;
-      this.touched = tb
-        ? {
-            west: Math.min(tb.west, info.bbox[0]),
-            south: Math.min(tb.south, info.bbox[1]),
-            east: Math.max(tb.east, info.bbox[2]),
-            north: Math.max(tb.north, info.bbox[3]),
-          }
-        : { west: info.bbox[0], south: info.bbox[1], east: info.bbox[2], north: info.bbox[3] };
+      // The box of the tiles read: the narrowest that holds the one so far and this tile's extent, round the earth (not
+      // the least and greatest longitude in the frame, which for tiles either side of the frame's cut is a whole turn).
+      this.touched = this.touched ? bboxUnion(this.touched, tileBBox(info.bbox)) : tileBBox(info.bbox);
     }
     return {
       idx,
@@ -484,9 +567,10 @@ export class PagedMesh {
         const b = info!.bbox;
         const tx = U_TOL * (b[2] - b[0]);
         const ty = U_TOL * (b[3] - b[1]);
-        const [i0, j0] = store.tileIJ(b[0] - tx, b[1] - ty);
-        const [i1, j1] = store.tileIJ(b[2] + tx, b[3] + ty);
-        for (let i = i0; i <= i1; i++)
+        // The extent's columns as one run from its west (store.ts columnsOf); its rows from south to north.
+        const [, j0] = store.tileIJ(b[0], b[1] - ty);
+        const [, j1] = store.tileIJ(b[0], b[3] + ty);
+        for (const i of store.columnsOf(b[0] - tx, b[2] - b[0] + 2 * tx))
           for (let j = j0; j <= j1; j++) {
             const k = `${i},${j}`;
             const list = cells.get(k);
@@ -542,27 +626,41 @@ export class PagedMesh {
 
   /**
    * The usable water nearest a point of the metres frame (docs/drafts/mesh-no-gshhg-design.md, part 3): the triangle
-   * not blocked for the search (rules and buffer), and accepted by `accept` (the rough cut: water connected to the
-   * leg's start), whose nearest point is closest, that point, and its distance in metres; null when there is none.
-   * The point's own triangle first; otherwise the tiles are read in order of the distance to their extent and the
-   * scan stops at the first tile farther than the best found, so the answer is exact with no distance limit (the
-   * mesh's edge is the limit).
+   * not blocked for the search (rules and buffer), and of the water `only` names when given (the rough cut: water
+   * connected to the leg's start), whose nearest point is closest, that point, and its distance in metres; null when
+   * there is none. The point's own triangle first; otherwise the tiles that can hold such water (`only.tiles`; every
+   * tile without `only`) are read in order of the distance to their extent and the scan stops at the first tile
+   * farther than the best found, so the answer is exact with no distance limit (the mesh's edge is the limit). A tile
+   * that cannot hold it is not read.
+   *
+   * A tile the frame's cut runs through cannot be read into the frame (read). It is ordered by the nearest of its
+   * places in the frame, either side of the cut, so the scan never stops short of it: when it can hold the water
+   * looked for it may hold the nearest, and the read ends saying why it cannot be read.
    */
-  nearestUsable(
-    px: number,
-    py: number,
-    accept: (g: number) => boolean = () => true
-  ): { tri: number; x: number; y: number; distM: number } | null {
+  nearestUsable(px: number, py: number, only?: WaterFilter): { tri: number; x: number; y: number; distM: number } | null {
+    const accept = only ? only.accept : (): boolean => true;
     const own = this.locate(px, py, true);
     if (own >= 0 && !this.isBlocked(own) && accept(own)) return { tri: own, x: px, y: py, distM: 0 };
     const order: { idx: number; d: number }[] = [];
-    if (!this.store) order.push({ idx: 0, d: 0 });
-    else
+    if (!this.store) {
+      if (!only || only.tiles.has(0)) order.push({ idx: 0, d: 0 });
+    } else
       for (let idx = 0; idx < this.infos.length; idx++) {
+        if (only && !only.tiles.has(idx)) continue;
+        // The point of the tile's extent nearest the point, the extent where the tile is in the frame (tileTurn; a
+        // tile east of the date line is stored from -180). A tile the cut runs through lies at both ends of the frame:
+        // the nearer of its places, the one tileTurn gives and those a turn either side of it.
         const b = this.infos[idx]!.bbox;
-        const [lon, lat] = this.fromXY(px, py);
-        const [cx, cy] = this.toXY(Math.min(Math.max(lon, b[0]), b[2]), Math.min(Math.max(lat, b[1]), b[3]));
-        order.push({ idx, d: Math.hypot(cx - px, cy - py) });
+        const lon = px / (this.cl * M_PER_DEG_MESH);
+        const lat = py / M_PER_DEG_MESH;
+        const turn = this.tileTurn(b);
+        const cy = Math.min(Math.max(lat, b[1]), b[3]) * M_PER_DEG_MESH;
+        let d = Infinity;
+        for (const tn of this.cutRunsThrough(b) ? [turn - 360, turn, turn + 360] : [turn]) {
+          const cx = Math.min(Math.max(lon, b[0] + tn), b[2] + tn) * this.cl * M_PER_DEG_MESH;
+          d = Math.min(d, Math.hypot(cx - px, cy - py));
+        }
+        order.push({ idx, d });
       }
     order.sort((u, v) => u.d - v.d);
     let best: { tri: number; x: number; y: number; distM: number } | null = null;
@@ -657,11 +755,14 @@ function closestOnTriangle(px: number, py: number, x: Float64Array, y: Float64Ar
 
 /**
  * Is the point inside a tile's vertex extent, within the walk's tolerance (width.ts U_TOL) of its size? A point on
- * the tile's outer edge comes back from the metres frame a hair outside it (3.0000000000000004 against 3).
+ * the tile's outer edge comes back from the metres frame a hair outside it (3.0000000000000004 against 3). The point's
+ * longitude is taken next to the tile's own middle, as the tile is stored: a tile east of the date line is stored from
+ * -180, and a point on the date line is 180 or -180. (No frame comes into it: the question is the earth's.)
  */
 function nearExtent(info: MeshTileInfo, lon: number, lat: number): boolean {
   const b = info.bbox;
   const tx = U_TOL * (b[2] - b[0]);
   const ty = U_TOL * (b[3] - b[1]);
-  return lon >= b[0] - tx && lat >= b[1] - ty && lon <= b[2] + tx && lat <= b[3] + ty;
+  const l = unwrapLonNear(lon, (b[0] + b[2]) / 2);
+  return l >= b[0] - tx && lat >= b[1] - ty && l <= b[2] + tx && lat <= b[3] + ty;
 }
