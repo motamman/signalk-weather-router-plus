@@ -349,7 +349,7 @@ test('withBuildLock: two builds of one file at once run it once; a lock left by 
   }
 });
 
-test('withBuildLock: a lock that is a folder (the lock an earlier route worker made) is waited on while it is new and taken over once it is stale', async () => {
+test('withBuildLock: a lock that is a folder, not a file, is waited on while it is new and taken over once it is stale', async () => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-data-'));
   try {
     const file = path.join(data, COARSE_DIR, 'x.json');

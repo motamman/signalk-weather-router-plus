@@ -118,21 +118,23 @@ function lockPid(text: string): number {
 
 /**
  * A lock as it is on disk: its date and its text, or undefined when it is gone. The text is null for a lock that is
- * there and cannot be read as a file: a folder, the lock zeddisplay-router's copy of the route worker made before it
- * used this one (`<file>.lock`, the same name), left by a server that died while building. Such a lock names no
- * process, so only its age says whether it is still held.
+ * there and cannot be read as a file (a folder of that name, as a lock made with mkdir is; a file this process may
+ * not read). Such a lock names no process, so only its age says whether it is still held; waiting on it is a poll,
+ * where reading it again at once never ended.
  */
 function lockOnDisk(lock: string): { text: string | null; mtimeMs: number } | undefined {
   let mtimeMs: number;
+  const gone = (err: unknown): boolean => (err as NodeJS.ErrnoException).code === 'ENOENT';
   try {
     mtimeMs = fs.statSync(lock).mtimeMs;
-  } catch {
-    return undefined;
+  } catch (err) {
+    if (gone(err)) return undefined;
+    throw err;
   }
   try {
     return { text: fs.readFileSync(lock, 'utf8'), mtimeMs };
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : { text: null, mtimeMs };
+    return gone(err) ? undefined : { text: null, mtimeMs };
   }
 }
 
