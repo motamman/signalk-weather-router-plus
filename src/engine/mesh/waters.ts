@@ -388,7 +388,7 @@ export function planWaters(
         const last = p + 1 === path.length - 1;
         const to = last ? overWater(end) : null;
         for (const sd of sides.get(`${i}:${g}|${after.slice(1)}`) ?? []) {
-          const d = last ? (to && sd.cell >= 0 ? to[sd.cell] : Infinity) : Math.hypot(ex - sd.x, ey - sd.y);
+          const d = last ? (to && sd.cell >= 0 ? to[sd.cell] : Infinity) : Math.hypot(pm.near(ex, sd.x) - sd.x, ey - sd.y);
           if (!Number.isFinite(d)) continue;
           const r = d / speed;
           const b = best.get(sd.tri);
@@ -451,7 +451,7 @@ export function planWaters(
           const cy = (T.y[q] + T.y[q + 1] + T.y[q + 2]) / 3;
           const [lon, lat] = pa.fromXY(cx, cy);
           if (meshes[i].store.covers(lon, lat) && meshes[j].store.covers(lon, lat) && pb.locateAll(cx, cy).some(u => groupOf(j, u) === h))
-            e = { x: cx, y: cy, restS: Math.hypot(ex - cx, ey - cy) / speed };
+            e = { x: cx, y: cy, restS: Math.hypot(pa.near(ex, cx) - cx, ey - cy) / speed };
         }
         memo.set(t, e);
         return e ?? undefined;

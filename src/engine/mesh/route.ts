@@ -393,7 +393,7 @@ export function searchMesh(
           'the water the rough cut chose for the waypoint is not usable on the mesh; rebuild the rough cut in the plugin configuration',
         stats: stats(),
       });
-    target = { lon: approach.aim.lon, lat: approach.aim.lat, radiusM: approach.radiusM, movedM: Math.hypot(ex - wx, ey - wy) };
+    target = { lon: approach.aim.lon, lat: approach.aim.lat, radiusM: approach.radiusM, movedM: Math.hypot(pm.near(ex, wx) - wx, ey - wy) };
   } else if (approach) {
     const nu = pm.nearestUsable(wx, wy);
     if (!nu) return done({ ok: false, reason: 'the mesh has no water the boat can use near the waypoint', stats: stats() });
@@ -431,20 +431,26 @@ export function searchMesh(
     });
   const t1 = Date.now();
   // The crossed edges from the start, each as [left corner, right corner] going forward.
+  // One line of points for the funnel: each crossed edge next to the one before it, the first next to the start and the
+  // end next to the last (paged.ts near), so the route is laid out unbroken wherever its tiles are in the frame.
+  let lastX = sx;
   const portals: [XY, XY][] = r.crossings().map(([t, k]) => {
     const T = pm.tileOf(t);
     const l = t - T.first;
     const a = l * 3 + ((k + 1) % 3);
     const b = l * 3 + k;
+    const shift = pm.near(T.x[a], lastX) - T.x[a];
+    lastX = T.x[a] + shift;
     return [
-      [T.x[a], T.y[a]],
-      [T.x[b], T.y[b]],
+      [T.x[a] + shift, T.y[a]],
+      [T.x[b] + shift, T.y[b]],
     ];
   });
-  let pathXY = funnel(portals, [sx, sy], [ex, ey]);
+  let pathXY = funnel(portals, [sx, sy], [pm.near(ex, lastX), ey]);
   // An inner waypoint of a run: the route stops where it enters the circle (the water there being usable, or the
   // nearest usable water inside the circle; the route goes on to water moved outside it).
-  if (approach?.trim && target!.movedM <= approach.radiusM) pathXY = trimAtCircle(pathXY, wx, wy, approach.radiusM);
+  if (approach?.trim && target!.movedM <= approach.radiusM)
+    pathXY = trimAtCircle(pathXY, pm.near(wx, pathXY[pathXY.length - 1][0]), wy, approach.radiusM);
   const widths = passageWidths(pm, pathXY, r.startTri);
   funnelMs = Date.now() - t1;
   const path = pathXY.map(p => pm.fromXY(p[0], p[1]));

@@ -93,9 +93,12 @@ export function meshAstar(
   const endSet = exits ? null : new Set(Array.isArray(ends) ? ends : [ends]);
   const isGoal = (t: number): boolean => (exits ? exits.get(t) !== undefined : endSet!.has(t));
   /** The cost of finishing in goal triangle t from (hx, hy): to its end point, and on beyond it for an exit. */
+  // The run from (hx, hy) to an end point, the end taken next to it (paged.ts near): the short way round.
   const finish = (t: number, hx: number, hy: number, mult: number): number => {
     const e = exits?.get(t);
-    return e ? (Math.hypot(e.x - hx, e.y - hy) * mult) / speedMs + e.restS : (Math.hypot(ex - hx, ey - hy) * mult) / speedMs;
+    return e
+      ? (Math.hypot(pm.near(e.x, hx) - hx, e.y - hy) * mult) / speedMs + e.restS
+      : (Math.hypot(pm.near(ex, hx) - hx, ey - hy) * mult) / speedMs;
   };
   let goalTri = -1;
   let direct = st[0];
@@ -135,7 +138,7 @@ export function meshAstar(
           S.state[q] = 1;
           S.open++;
         }
-        heap.push(gc + Math.hypot(mx - ex, my - ey) / speedMs, n * 3 + kn);
+        heap.push(gc + Math.hypot(mx - pm.near(ex, mx), my - ey) / speedMs, n * 3 + kn);
       }
     }
   };
@@ -143,7 +146,8 @@ export function meshAstar(
   st.forEach((s0, k) => {
     const S0 = pm.tileOf(s0);
     const a = at(k);
-    relax(S0, s0 - S0.first, -1, a.g, a.x, a.y, -2 - k);
+    // The start point where its triangle's tile is (paged.ts xIn).
+    relax(S0, s0 - S0.first, -1, a.g, pm.xIn(S0, a.x), a.y, -2 - k);
   });
   let expanded = 0;
   // The start and end tiles stay held; with exits (possibly many tiles along a coverage edge) only the start's.

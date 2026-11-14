@@ -157,6 +157,17 @@ export function tileExtentsMeet(a: [number, number, number, number], b: [number,
   return boxesMeet(tileBBox(a), tileBBox(b));
 }
 
+/**
+ * How far a point lies from a tile's vertex extent, degrees [east, north] from the point to the extent's nearest point
+ * ([0, 0] inside it). The point's longitude is taken next to the extent's middle, as the tile is stored: the short way
+ * round (a tile east of the date line is stored from -180, and a point on the date line is 180 or -180). The one
+ * place a point and a tile's extent are compared; no frame comes into it, the question is the earth's.
+ */
+export function toTileExtent(bbox: [number, number, number, number], lon: number, lat: number): [number, number] {
+  const l = unwrapLonNear(lon, (bbox[0] + bbox[2]) / 2);
+  return [Math.min(Math.max(l, bbox[0]), bbox[2]) - l, Math.min(Math.max(lat, bbox[1]), bbox[3]) - lat];
+}
+
 export interface MeshIndex {
   version: number;
   /** The mesh's box; `west` greater than `east` when the mesh crosses the date line (see the file's comment). */

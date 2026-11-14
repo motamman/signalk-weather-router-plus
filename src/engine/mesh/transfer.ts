@@ -122,7 +122,7 @@ export function findMeshTransfer(
         tested++;
         // Each leg part is planned on the mesh covering its ends (the runner's choice), so both must cover the point.
         if (from.store.covers(lon, lat) && to.store.covers(lon, lat) && pb.locateAll(cx, cy).some(g => endGroups.includes(gb(g) ?? -1))) {
-          e = { x: cx, y: cy, restS: Math.hypot(ex - cx, ey - cy) / rules.motorSpeedMs };
+          e = { x: cx, y: cy, restS: Math.hypot(pa.near(ex, cx) - cx, ey - cy) / rules.motorSpeedMs };
           transfers++;
         }
         if (tested % DROP_EVERY === 0) dropB();
@@ -258,7 +258,7 @@ export function findMeshGap(
     mask,
     (g, mx, my, c) => {
       if (c < 0 || !reached[c] || !startGroups.includes(ga(g) ?? -1)) return;
-      const restS = Math.hypot(ex - mx, ey - my) / rules.motorSpeedMs;
+      const restS = Math.hypot(pa.near(ex, mx) - mx, ey - my) / rules.motorSpeedMs;
       const prev = exits.get(g);
       if (!prev || restS < prev.restS) exits.set(g, { x: mx, y: my, restS, cell: c });
     },
@@ -280,7 +280,7 @@ export function findMeshGap(
   const fromExit = floodFree(land, mask, [x.cell]);
   const entries = new Map<number, { x: number; y: number; restS: number }>();
   for (const [g, v] of sides)
-    if (fromExit[v.cell]) entries.set(g, { x: v.x, y: v.y, restS: Math.hypot(v.x - x.x, v.y - x.y) / rules.motorSpeedMs });
+    if (fromExit[v.cell]) entries.set(g, { x: v.x, y: v.y, restS: Math.hypot(pa.near(v.x, x.x) - x.x, v.y - x.y) / rules.motorSpeedMs });
   // The search on B from the end (its usable triangles, or the usable water nearest it on the end's water).
   const [bx, by] = pb.toXY(end[0], end[1]);
   let ends = pb.locateAll(bx, by).filter(g => endGroups.includes(groupOf(g) ?? -1));
