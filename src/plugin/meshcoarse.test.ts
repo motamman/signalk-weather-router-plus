@@ -338,12 +338,65 @@ test('withBuildLock: two builds of one file at once run it once; a lock left by 
     const c = await withBuildLock(file, build, { built });
     assert.deepEqual(c, { waited: false, result: 'built' });
     assert.equal(builds, 2);
-    // Cancelled while waiting on a live holder (this process).
-    fs.writeFileSync(`${file}.lock`, `${process.pid}\n`);
+    // Cancelled while waiting on a live holder: a build of this process that is still going.
+    fs.rmSync(file);
+    let finish = (): void => {};
+    const held = withBuildLock(
+      file,
+      () =>
+        new Promise<string>(resolve => {
+          finish = () => resolve('held');
+        }),
+      { built }
+    );
     const ac = new AbortController();
     setTimeout(() => ac.abort(), 200);
     await assert.rejects(() => withBuildLock(file, build, { built, signal: ac.signal }), /cancelled/);
     assert.equal(builds, 2);
+    assert.ok(fs.existsSync(`${file}.lock`), "the holder's lock is still there");
+    finish();
+    assert.deepEqual(await held, { waited: false, result: 'held' });
+    assert.ok(!fs.existsSync(`${file}.lock`), 'and gone when the holder ends');
+  } finally {
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test("withBuildLock: a lock or a guard with this process's pid from an earlier run is cleared at once", async () => {
+  // A container gives its server the same pid at every start: a server that died while building leaves a lock with the
+  // pid the next start has. Such a lock names another run (or none: a lock written before runs were named), and the
+  // process that wrote it is gone; this run's own locks name this run and are waited on (the test above).
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'wrp-data-'));
+  try {
+    const file = path.join(data, COARSE_DIR, 'x.json');
+    const lock = `${file}.lock`;
+    let builds = 0;
+    const build = async (): Promise<string> => {
+      builds++;
+      fs.writeFileSync(file, '{}');
+      return 'built';
+    };
+    const built = (): boolean => roughCutBuilt(file);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const earlier = [
+      `${process.pid}\n${process.pid}:00000000-0000-4000-8000-000000000000\nsome-token\n`,
+      `${process.pid}\nsome-token\n`,
+      `${process.pid}\n`,
+    ];
+    for (const [k, text] of earlier.entries()) {
+      fs.rmSync(file, { force: true });
+      fs.writeFileSync(lock, text);
+      // Not waited on (`waited` false): taken over the first time it is looked at.
+      assert.deepEqual(await withBuildLock(file, build, { built }), { waited: false, result: 'built' }, `lock ${k}`);
+      assert.equal(builds, k + 1);
+      assert.ok(!fs.existsSync(lock), 'the lock is gone');
+    }
+    // The same for a guard left beside a lock by such a process: it is removed, and the stale lock after it.
+    fs.rmSync(file, { force: true });
+    fs.writeFileSync(lock, '2147483646\n');
+    fs.writeFileSync(`${lock}.guard`, `${process.pid}\n`);
+    assert.deepEqual(await withBuildLock(file, build, { built }), { waited: false, result: 'built' });
+    assert.ok(!fs.existsSync(lock) && !fs.existsSync(`${lock}.guard`), 'the lock and the guard are gone');
   } finally {
     fs.rmSync(data, { recursive: true, force: true });
   }

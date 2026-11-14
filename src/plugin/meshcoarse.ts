@@ -32,6 +32,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isMainThread } from 'node:worker_threads';
 import { type BBox, boxesMeet, latLonText } from '../geo/geodesy';
 import {
   boundarySeeds,
@@ -98,8 +99,26 @@ const BUILD_LOCK_STALE_MS = 20 * 60_000;
 const BUILD_LOCK_POLL_MS = 1000;
 /** A lock's guard without a pid older than this was left by a step that died before writing it (a step holds it for one read, stat and remove). */
 const GUARD_STALE_MS = 30_000;
-/** When this process started (process-wide, worker threads included): a guard with this pid dated before it is an earlier process's. */
-const PROCESS_START_MS = Date.now() - process.uptime() * 1000;
+/**
+ * This run of the process, to tell its own locks from those of an earlier process that had the same pid (a container
+ * gives its server the same pid at every start): the pid and a random id, made by the main thread when it first loads
+ * this module and kept in the process's environment under RUN_ENV. A worker thread is given a copy of the environment
+ * when it is started (worker_threads; a thread started after the value was set sees it: Node 22.16, 24.5 and 24.22
+ * on macOS, 2026-11-14), so every thread of one run names the same run; a child process is given it too, and makes its own, as
+ * the pid in it is not the child's. A worker thread that finds none of its own process's was started before the main
+ * thread loaded this module, and could not tell its process's locks from an earlier one's: an error, not a guess.
+ */
+const RUN_ENV = 'WRP_MESH_BUILD_RUN';
+function thisRun(): string {
+  const have = process.env[RUN_ENV];
+  if (have?.startsWith(`${process.pid}:`)) return have;
+  if (!isMainThread)
+    throw new Error(
+      `the mesh build locks: no run id of this process in ${RUN_ENV}; the main thread must load the module before it starts a worker thread`
+    );
+  return (process.env[RUN_ENV] = `${process.pid}:${randomUUID()}`);
+}
+const RUN_ID = thisRun();
 
 function processAlive(pid: number): boolean {
   try {
@@ -110,10 +129,17 @@ function processAlive(pid: number): boolean {
   }
 }
 
-/** The pid on a lock's first line, or 0. */
-function lockPid(text: string): number {
-  const pid = Number(text.split('\n')[0]);
-  return Number.isInteger(pid) && pid > 0 ? pid : 0;
+/**
+ * Whether the process that wrote a lock or a guard is gone; null when it names none (nothing written yet, or not a
+ * pid). Its pid is on the first line and its run on the second. Another process's: gone when no process has that pid.
+ * This process's own pid: this run's when it carries this run's id; else it was written by an earlier process that had
+ * the pid, which is gone (this run writes its id on every lock and guard it makes).
+ */
+function writerGone(text: string): boolean | null {
+  const [first, run] = text.split('\n');
+  const pid = Number(first);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  return pid === process.pid ? run !== RUN_ID : !processAlive(pid);
 }
 
 /**
@@ -142,8 +168,8 @@ function lockOnDisk(lock: string): { text: string | null; mtimeMs: number } | un
  * Remove `lock` when `same` holds for its contents and date, holding `<lock>.guard` (created exclusively), so a stale
  * lock's removal and its owner's release never interleave and neither removes a lock taken anew meanwhile. False
  * when another holds the guard (try again). A guard left by a process that died inside this synchronous step is
- * removed: its pid gone; this process's pid on a guard dated before this process started (the pid reused); or no pid
- * (died before writing it) and older than GUARD_STALE_MS. A guard whose owner is alive is never removed for its age.
+ * removed: its writer gone (writerGone: its pid gone, or this process's pid from an earlier run); or no pid (died
+ * before writing it) and older than GUARD_STALE_MS. A guard whose owner is alive is never removed for its age.
  */
 function removeLockIf(lock: string, same: (text: string | null, mtimeMs: number) => boolean): boolean {
   const guard = `${lock}.guard`;
@@ -153,10 +179,8 @@ function removeLockIf(lock: string, same: (text: string | null, mtimeMs: number)
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     try {
-      const pid = lockPid(fs.readFileSync(guard, 'utf8'));
-      const mtimeMs = fs.statSync(guard).mtimeMs;
-      const dead =
-        pid === 0 ? Date.now() - mtimeMs > GUARD_STALE_MS : pid === process.pid ? mtimeMs < PROCESS_START_MS : !processAlive(pid);
+      const gone = writerGone(fs.readFileSync(guard, 'utf8'));
+      const dead = gone === null ? Date.now() - fs.statSync(guard).mtimeMs > GUARD_STALE_MS : gone;
       if (dead) fs.rmSync(guard, { force: true });
     } catch {
       /* gone meanwhile */
@@ -165,7 +189,7 @@ function removeLockIf(lock: string, same: (text: string | null, mtimeMs: number)
   }
   try {
     try {
-      fs.writeSync(fd, `${process.pid}\n`);
+      fs.writeSync(fd, `${process.pid}\n${RUN_ID}\n`);
     } finally {
       fs.closeSync(fd);
     }
@@ -184,8 +208,9 @@ function removeLockIf(lock: string, same: (text: string | null, mtimeMs: number)
  * same work twice). A build finding the lock taken waits for it to go, then calls `build` itself unless the file is
  * built by then (result null: the other build made it; `waited` tells the caller). What built means is the caller's
  * to say, `opts.built`: roughCutBuilt for a rough cut, joinsBuilt for a joins file; this has no test of its own. A
- * lock left by a process that is gone, or older than BUILD_LOCK_STALE_MS, is removed; one that cannot be read as a
- * file (lockOnDisk) by its age alone. Cancelled through `signal` while waiting.
+ * lock whose writer is gone (writerGone: its process gone, or this process's pid from an earlier run), or older than
+ * BUILD_LOCK_STALE_MS, is removed; one that cannot be read as a file (lockOnDisk) by its age alone. Cancelled through
+ * `signal` while waiting.
  */
 export async function withBuildLock<T>(
   file: string,
@@ -194,8 +219,9 @@ export async function withBuildLock<T>(
 ): Promise<{ waited: boolean; result: T | null }> {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  // This call's own token (pid first): only the lock that still holds it is this call's to release.
-  const token = `${process.pid}\n${randomUUID()}\n`;
+  // This call's own token (the pid, this run, then an id of its own): only the lock that still holds it is this
+  // call's to release.
+  const token = `${process.pid}\n${RUN_ID}\n${randomUUID()}\n`;
   const pause = (): Promise<void> => new Promise(r => setTimeout(r, BUILD_LOCK_POLL_MS));
   let waited = false;
   for (;;) {
@@ -220,12 +246,11 @@ export async function withBuildLock<T>(
         while (!removeLockIf(lock, text => text === token)) await pause();
       }
     }
-    // Taken: the holder's pid and the lock's age decide whether it is still building.
+    // Taken: its writer and its age decide whether it is still building.
     const on = lockOnDisk(lock);
     if (!on) continue; // gone meanwhile: try again
     const { text, mtimeMs } = on;
-    const pid = text === null ? 0 : lockPid(text);
-    const stale = Date.now() - mtimeMs > BUILD_LOCK_STALE_MS || (pid !== 0 && pid !== process.pid && !processAlive(pid));
+    const stale = Date.now() - mtimeMs > BUILD_LOCK_STALE_MS || (text !== null && writerGone(text) === true);
     if (stale) {
       // Removed only while it is still the lock inspected (same contents and date), not one taken anew since.
       if (!removeLockIf(lock, (t, m) => t === text && m === mtimeMs)) await pause();
