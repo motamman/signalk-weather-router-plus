@@ -480,6 +480,22 @@ export class MeshStore {
   }
 }
 
+/**
+ * The x of the same meridian as `x` that lies next to `toX`, within half a turn of it, in a frame whose x goes round
+ * the earth every `period` metres (Infinity: a frame that does not, where `x` is as it is). The one place a turn is
+ * added or taken off an x (paged.ts near, the file's comment there; the areas to avoid in route.ts).
+ */
+export function xNear(x: number, toX: number, period: number): number {
+  if (period === Infinity) return x;
+  const k = Math.round((toX - x) / period);
+  return k === 0 ? x : x + k * period;
+}
+
+/** One turn round the earth in a loaded mesh's x, metres; Infinity for a mesh with no frame (the tests' own meshes). */
+export function meshPeriod(m: LoadedMesh): number {
+  return m.ref === undefined ? Infinity : 360 * m.cl * M_PER_DEG_MESH;
+}
+
 /** Project a point into a loaded mesh's metres frame (the same expression order as readTile). */
 export function toMeshXY(m: LoadedMesh, lon: number, lat: number): [number, number] {
   return [(m.ref === undefined ? lon : unwrapLonNear(lon, m.ref)) * m.cl * M_PER_DEG_MESH, lat * M_PER_DEG_MESH];

@@ -10,7 +10,9 @@
  * length goes as far as its 1° pieces chained, through the same triangles; a route as returned, read the short way
  * between its points, crosses no unusable water, has no step as long as half a turn, and its steps add up to the way
  * the search went, the same route wherever the ring is written from; and the nearest usable water is what a search of
- * every triangle finds, the short way round, also where the point's antipode lies inside a tile.
+ * every triangle finds, the short way round, also where the point's antipode lies inside a tile. An area to avoid makes
+ * the same triangles unusable in every frame, and a route is cut at a waypoint's circle at the same place wherever the
+ * scene lies round the earth.
  */
 
 import { test } from 'node:test';
@@ -23,7 +25,7 @@ import { boundarySeeds, buildCoarseMap, type CoarseRules, meshRulesOf, PieceGrap
 import { idFilter, type Tri, writeGridMesh, writeRingMesh, writeTile } from './fixture';
 import { MeshLand } from './land';
 import { PagedMesh } from './paged';
-import { searchMesh } from './route';
+import { searchMesh, trimAtCircle } from './route';
 import { M_PER_DEG_MESH, MeshStore } from './store';
 import { walkMesh } from './width';
 
@@ -522,4 +524,97 @@ test('the nearest usable water is what a search of every triangle finds, the sho
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('an area to avoid makes the same triangles unusable wherever the frame is laid out: those whose middle lies within it', () => {
+  // Two meshes of two rows: one from 0° to 3°E, one across the date line. Areas large enough to hold triangles' middles.
+  const scenes: { west: number; avoid: { lon: number; lat: number; radiusM: number }[] }[] = [
+    { west: 0, avoid: [{ lon: 1 / 3, lat: 2 / 3, radiusM: 1000 }] },
+    { west: 0, avoid: [{ lon: 1.5, lat: 1, radiusM: 60_000 }] },
+    { west: 178, avoid: [{ lon: 180, lat: 1, radiusM: 60_000 }] },
+    { west: 178, avoid: [{ lon: -179.4, lat: 0.4, radiusM: 45_000 }] },
+  ];
+  for (const sc of scenes) {
+    const cells: { i: number; j: number }[] = [];
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) cells.push({ i, j });
+    const dir = writeGridMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-frame-')), cells, sc.west);
+    try {
+      const store = MeshStore.open(dir);
+      const rules = { ...RULES, avoid: sc.avoid };
+      // What it must be: a triangle is unusable when its middle lies within the area, measured in its own tile's frame
+      // (x scaled by the cosine of the tile's middle latitude, paged.ts), the short way round.
+      const own = new PagedMesh(store, RULES, 1);
+      const want: number[] = [];
+      for (let idx = 0; idx < own.tileCount; idx++) {
+        const T = own.tile(idx);
+        const clT = Math.cos((((T.bbox[1] + T.bbox[3]) / 2) * Math.PI) / 180);
+        for (let l = 0; l < T.n; l++) {
+          const [lon, lat] = own.fromXY(
+            (T.x[l * 3] + T.x[l * 3 + 1] + T.x[l * 3 + 2]) / 3,
+            (T.y[l * 3] + T.y[l * 3 + 1] + T.y[l * 3 + 2]) / 3
+          );
+          const a = sc.avoid[0];
+          if (Math.hypot(shortWay(a.lon, lon) * clT * M_PER_DEG_MESH, (lat - a.lat) * M_PER_DEG_MESH) <= a.radiusM) want.push(T.first + l);
+        }
+      }
+      assert.ok(want.length > 0, `the area about ${sc.avoid[0].lon}° holds no triangle's middle: the scene says nothing`);
+      const what = `the area about (${sc.avoid[0].lon}, ${sc.avoid[0].lat}) on the mesh from ${sc.west}°`;
+      // Every tenth of a degree round the earth.
+      for (let k = 0; k < 3600; k++) {
+        const pm = new PagedMesh(store, rules, 1).centred(k / 10 - 180);
+        const got: number[] = [];
+        for (let g = 0; g < 2 * cells.length; g++) if (pm.isBlocked(g)) got.push(g);
+        assert.deepEqual(got, want, `${what}, frame about ${k / 10 - 180}°`);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a route is cut where it first enters a waypoint's circle, the same wherever the scene lies round the earth", () => {
+  // In the frame's own numbers: a straight step east along y = 0 and a circle of radius r whose centre is `ahead` of the
+  // step's start, given as the frame would give it, within half a turn of the frame's middle (0 here). The step enters
+  // the circle at `ahead` - r from its start when it is long enough to, whatever turn the centre was given in.
+  const S = M_PER_DEG_MESH;
+  const period = 360 * S;
+  const r = 0.003 * S;
+  for (const [stepDeg, aheadDeg] of [
+    [179.999, 180.001],
+    [179.999, 100],
+    [10, 9.999],
+    [350, 349],
+    [350, 190],
+  ]) {
+    for (let from = -180; from < 180; from += 7.5) {
+      const what = `a step of ${stepDeg}° from ${from}°, the circle ${aheadDeg}° ahead`;
+      const ax = from * S;
+      const centre = (((from + aheadDeg + 180) % 360) - 180) * S;
+      const cut = trimAtCircle(
+        [
+          [ax, 0],
+          [ax + stepDeg * S, 0],
+        ],
+        centre,
+        0,
+        r,
+        period
+      );
+      assert.equal(cut.length, 2, what);
+      // To the millimetre: the cut is a root of a quadratic over a step up to 39,000 km long, where a float's own
+      // step in x is nanometres and the root loses digits to the subtraction under its square root.
+      assert.ok(
+        Math.abs(cut[1][0] - (ax + aheadDeg * S - r)) < 1e-3 && cut[1][1] === 0,
+        `${what}: cut at ${(cut[1][0] - ax) / S}° from its start`
+      );
+    }
+  }
+  // A step that stops short of the circle, or passes it more than its radius to the side, is left whole.
+  const whole: [number, number][] = [
+    [0, 0],
+    [100 * S, 0],
+  ];
+  assert.deepEqual(trimAtCircle(whole, 100.01 * S, 0, r, period), whole);
+  assert.deepEqual(trimAtCircle(whole, 50 * S, 2 * r, r, period), whole);
+  assert.deepEqual(trimAtCircle(whole, -310 * S, 2 * r, r, period), whole);
 });

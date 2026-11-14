@@ -41,8 +41,10 @@ import {
   FLAG_STRUCTURE,
   type LoadedMesh,
   type MeshStore,
+  meshPeriod,
   NO_VALUE,
   toMeshXY,
+  xNear,
 } from './store';
 
 /** How a route treats opening bridges: ask (plan as open, report the ones crossed), open, or avoid them. */
@@ -147,6 +149,9 @@ export function blockedTriangles(m: LoadedMesh, rules: MeshRules): Uint8Array {
     else if (f & FLAG_STRUCTURE) b[t] = 1;
   }
   if (rules.avoid?.length) {
+    // The area's centre and each triangle's middle, one next to the other (store.ts xNear): the distance between them
+    // is the short way round, wherever the mesh's frame put either.
+    const period = meshPeriod(m);
     for (const a of rules.avoid) {
       const [ax, ay] = toMeshXY(m, a.lon, a.lat);
       const r2 = a.radiusM * a.radiusM;
@@ -154,7 +159,8 @@ export function blockedTriangles(m: LoadedMesh, rules: MeshRules): Uint8Array {
         if (b[t]) continue;
         const cx = (m.x[t * 3] + m.x[t * 3 + 1] + m.x[t * 3 + 2]) / 3;
         const cy = (m.y[t * 3] + m.y[t * 3 + 1] + m.y[t * 3 + 2]) / 3;
-        if ((cx - ax) * (cx - ax) + (cy - ay) * (cy - ay) <= r2) b[t] = 1;
+        const dx = cx - xNear(ax, cx, period);
+        if (dx * dx + (cy - ay) * (cy - ay) <= r2) b[t] = 1;
       }
     }
   }
@@ -452,8 +458,7 @@ export function searchMesh(
   let pathXY = shortSteps(funnel(portals, [sx, sy], [pm.near(ex, lastX), ey]), pm.period / 2);
   // An inner waypoint of a run: the route stops where it enters the circle (the water there being usable, or the
   // nearest usable water inside the circle; the route goes on to water moved outside it).
-  if (approach?.trim && target!.movedM <= approach.radiusM)
-    pathXY = trimAtCircle(pathXY, wx, wy, approach.radiusM, (x, toX) => pm.near(x, toX));
+  if (approach?.trim && target!.movedM <= approach.radiusM) pathXY = trimAtCircle(pathXY, wx, wy, approach.radiusM, pm.period);
   const widths = passageWidths(pm, pathXY, r.startTri);
   funnelMs = Date.now() - t1;
   const path = pathXY.map(p => pm.fromXY(p[0], p[1]));
@@ -486,29 +491,37 @@ export function shortSteps(path: XY[], limit: number): XY[] {
 }
 
 /**
- * The polyline cut where it first comes within `r` of (cx, cy) (metres frame): the points before, then the point
- * where that segment enters the circle. Unchanged when it starts inside the circle or never reaches it. `near` (paged.ts
- * near) takes the circle's centre next to each step's start: the steps are shorter than half a turn (shortSteps), so
- * the circle a step can enter is the one next to it.
+ * The polyline cut where it first comes within `r` of (centreX, cy) (metres frame): the points before, then the point
+ * where that step enters the circle. Unchanged when it starts inside the circle or never reaches it. In a frame whose
+ * x goes round the earth every `period` metres the circle has a place every turn: a step is tried against each of them
+ * it can reach (those within `r` of its span in x), and is cut where it enters the first.
  */
-export function trimAtCircle(path: XY[], centreX: number, cy: number, r: number, near: (x: number, toX: number) => number = x => x): XY[] {
-  if (!path.length || Math.hypot(path[0][0] - near(centreX, path[0][0]), path[0][1] - cy) <= r) return path;
+export function trimAtCircle(path: XY[], centreX: number, cy: number, r: number, period = Infinity): XY[] {
+  if (!path.length || Math.hypot(path[0][0] - xNear(centreX, path[0][0], period), path[0][1] - cy) <= r) return path;
   for (let i = 1; i < path.length; i++) {
     const [ax, ay] = path[i - 1];
-    const cx = near(centreX, ax);
     const dx = path[i][0] - ax;
     const dy = path[i][1] - ay;
     const L2 = dx * dx + dy * dy;
     if (!(L2 > 0)) continue;
-    // Does the segment come within r of the centre? Then it enters at the smaller root of |a + t d - c| = r.
-    const t = Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / L2));
-    if (Math.hypot(ax + t * dx - cx, ay + t * dy - cy) > r) continue;
-    const fx = ax - cx;
-    const fy = ay - cy;
-    const B = 2 * (fx * dx + fy * dy);
-    const C = fx * fx + fy * fy - r * r;
-    const t0 = Math.max(0, Math.min(1, (-B - Math.sqrt(Math.max(0, B * B - 4 * L2 * C))) / (2 * L2)));
-    return [...path.slice(0, i), [ax + t0 * dx, ay + t0 * dy]];
+    // The circle's places this step can reach: every turn of the centre within r of the step's span in x.
+    const lo = Math.min(ax, path[i][0]) - r;
+    const hi = Math.max(ax, path[i][0]) + r;
+    const k0 = period === Infinity ? 0 : Math.ceil((lo - centreX) / period);
+    const k1 = period === Infinity ? 0 : Math.floor((hi - centreX) / period);
+    let first = Infinity;
+    for (let k = k0; k <= k1; k++) {
+      const cx = period === Infinity ? centreX : centreX + k * period;
+      // Does the step come within r of this place of the centre? Then it enters at the smaller root of |a + t d - c| = r.
+      const t = Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / L2));
+      if (Math.hypot(ax + t * dx - cx, ay + t * dy - cy) > r) continue;
+      const fx = ax - cx;
+      const fy = ay - cy;
+      const B = 2 * (fx * dx + fy * dy);
+      const C = fx * fx + fy * fy - r * r;
+      first = Math.min(first, Math.max(0, Math.min(1, (-B - Math.sqrt(Math.max(0, B * B - 4 * L2 * C))) / (2 * L2))));
+    }
+    if (first !== Infinity) return [...path.slice(0, i), [ax + first * dx, ay + first * dy]];
   }
   return path;
 }

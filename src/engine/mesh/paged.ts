@@ -49,7 +49,7 @@
 import { unwrapLonNear } from '../../geo/angles';
 import { type BBox, bboxUnion, wrapEdge } from '../../geo/geodesy';
 import { blockedTriangles, growBlocked, type MeshRules } from './route';
-import { type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo, tileBBox, toTileExtent } from './store';
+import { type LoadedMesh, M_PER_DEG_MESH, type MeshStore, type MeshTileInfo, tileBBox, toTileExtent, xNear } from './store';
 import { U_TOL } from './width';
 
 /** Index cell size, metres: a few triangles a cell on a chart mesh (triangles are tens of metres). */
@@ -235,10 +235,7 @@ export class PagedMesh {
    * joined by a line, with one taken next to the other (the file's comment).
    */
   near(x: number, toX: number): number {
-    const P = this.period;
-    if (P === Infinity) return x;
-    const k = Math.round((toX - x) / P);
-    return k === 0 ? x : x + k * P;
+    return xNear(x, toX, this.period);
   }
 
   /** A point's x where a tile is: next to the tile's middle. A point is tested against a tile's corners so (near). */
@@ -411,7 +408,9 @@ export class PagedMesh {
       x: xt,
       y,
       cl: clT,
-      ref: this.ref,
+      // The tile's own place (its middle as it is placed), not the frame's middle: what is projected into this one
+      // tile (an area to avoid, route.ts blockedTriangles) lies next to the tile.
+      ref: (info.bbox[0] + info.bbox[2]) / 2 + turn,
       neighbours: local,
       rev: a.rev,
       mult: a.mult,
