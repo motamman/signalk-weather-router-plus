@@ -27,7 +27,7 @@ import { bboxUnion, haversineDistanceM, type BBox } from '../../geo/geodesy';
 import { MinHeap } from '../heap';
 import type { BoundarySeeds, PagedMesh, PagedTile, WaterFilter } from './paged';
 import { blockedTriangles, type MeshRules } from './route';
-import { FLAG_OPENING_BRIDGE, type MeshStore, tileBBox } from './store';
+import { FLAG_OPENING_BRIDGE, type MeshStore, tileBBox, toTileExtent } from './store';
 
 // 4: the rules carry the under-keel and overhead clearances.
 // 5: the rules are to the centimetre (meshcoarse.ts coarseRulesOf), as the file name; a v4 file may hold more digits.
@@ -328,13 +328,11 @@ export class PieceGraph {
     const recomputed: number[] = [];
     for (let idx = 0; idx < pm.tileCount && avoid.length; idx++) {
       const b = pm.infoAt(idx)!.bbox;
-      // The point of the tile's extent nearest the area's centre, both next to the frame's middle (paged.ts lonNear,
-      // tileTurn: a tile east of the date line is stored from -180, an area west of it at 179).
-      const turn = pm.tileTurn(b);
+      // The point of the tile's extent nearest the area's centre, the short way round (store.ts toTileExtent: a tile
+      // east of the date line is stored from -180, an area west of it at 179).
       const touched = avoid.some(a => {
-        const lon = Math.min(Math.max(pm.lonNear(a.lon), b[0] + turn), b[2] + turn);
-        const lat = Math.min(Math.max(a.lat, b[1]), b[3]);
-        return haversineDistanceM(a.lon, a.lat, lon, lat) <= a.radiusM;
+        const [dLon, dLat] = toTileExtent(b, a.lon, a.lat);
+        return haversineDistanceM(a.lon, a.lat, a.lon + dLon, a.lat + dLat) <= a.radiusM;
       });
       if (!touched) continue;
       // Its stored pieces go with their links; its pieces under the request's rules are added after the others.

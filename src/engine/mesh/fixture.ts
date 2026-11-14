@@ -197,6 +197,43 @@ export function writeTwoTileMesh(
 }
 
 /**
+ * A mesh joined into a ring: one row of 1° tiles (lat 0 to 1) from `west` eastwards, one per entry of `depths` (its
+ * depth, both triangles), the last tile joined to the first. With 360 entries it goes all the way round the earth.
+ * Tiles and ids as writeGridMesh's (tile i: ids 2i and 2i + 1). Returns the mesh folder.
+ */
+export function writeRingMesh(dir: string, depths: number[], west = -180): string {
+  const n = depths.length;
+  const lonOf = (i: number): number => (west + i >= 180 ? west + i - 360 : west + i);
+  const tiles = depths.map((d, i) => {
+    const east = (i + 1) % n;
+    const before = (i - 1 + n) % n;
+    // As writeGridMesh's one row: the lower triangle's right edge to the upper of the tile east, the upper's left edge
+    // to the lower of the tile west.
+    writeTile(
+      dir,
+      `t_${i}_0.bin`,
+      squareTile(lonOf(i), 0),
+      [
+        [-1, 2 * east + 1, 2 * i + 1],
+        [2 * i, -1, 2 * before],
+      ],
+      [
+        [-1, 2, 0],
+        [2, -1, 1],
+      ],
+      [d, d],
+      [0, 0]
+    );
+    return { i, j: 0, file: `t_${i}_0.bin`, first: 2 * i, n: 2, bbox: [lonOf(i), 0, lonOf(i) + 1, 1] };
+  });
+  fs.writeFileSync(
+    path.join(dir, 'index.json'),
+    JSON.stringify({ version: 1, west, south: 0, east: wrapEdge(west + n), north: 1, tileDeg: 1, xScale: 1, triangles: 2 * n, tiles })
+  );
+  return dir;
+}
+
+/**
  * A filter for the nearest-water search (paged.ts WaterFilter) from a test of triangle ids that reads no tile: the
  * test, and the tiles holding an id it takes (from the mesh's index).
  */

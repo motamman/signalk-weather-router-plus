@@ -53,10 +53,12 @@ function nearestCorner(T: PagedTile, l: number, px: number, py: number): { k: nu
  * (dx, dy); with the direction along an edge between two of them, the usable one. Corners wind counter-clockwise:
  * for corner v with next corner p and previous q, the angle holds d when d is left of v→p and right of v→q.
  */
-function enterAtCorner(pm: PagedMesh, t: number, vx: number, vy: number, dx: number, dy: number): number {
+function enterAtCorner(pm: PagedMesh, t: number, cornerX: number, vy: number, dx: number, dy: number): number {
+  // The corner where each triangle's tile is (paged.ts xIn): the triangles round a corner can lie in several tiles.
   const holds = (g: number): { yes: boolean; onEdge: boolean } => {
     const T = pm.tileOf(g);
     const l = g - T.first;
+    const vx = pm.xIn(T, cornerX);
     const { k } = nearestCorner(T, l, vx, vy);
     const p = l * 3 + ((k + 1) % 3);
     const q = l * 3 + ((k + 2) % 3);
@@ -78,7 +80,7 @@ function enterAtCorner(pm: PagedMesh, t: number, vx: number, vy: number, dx: num
     for (;;) {
       const T = pm.tileOf(cur);
       const l = cur - T.first;
-      const { k } = nearestCorner(T, l, vx, vy);
+      const { k } = nearestCorner(T, l, pm.xIn(T, cornerX), vy);
       // Edge k runs from the corner to the next one, edge k + 2 from the previous one to the corner.
       const n = T.nb[l * 3 + ((k + side) % 3)];
       if (n < 0 || n === t || fan.includes(n)) break;
@@ -102,9 +104,11 @@ function enterAtCorner(pm: PagedMesh, t: number, vx: number, vy: number, dx: num
  * for a point inside it; for a point on one of its edges, t or its neighbour there, by the side the direction points
  * to (along the edge: the usable one); for a point on a corner, the triangle round that corner holding the direction.
  */
-export function enterTriangle(pm: PagedMesh, t: number, px: number, py: number, dx: number, dy: number): number {
+export function enterTriangle(pm: PagedMesh, t: number, pointX: number, py: number, dx: number, dy: number): number {
   const T = pm.tileOf(t);
   const l = t - T.first;
+  // The point where the triangle's tile is (paged.ts xIn).
+  const px = pm.xIn(T, pointX);
   let longest = 0;
   for (let k = 0; k < 3; k++) {
     const a = l * 3 + k;
@@ -145,7 +149,7 @@ export function enterTriangle(pm: PagedMesh, t: number, px: number, py: number, 
 export function walkMesh(
   pm: PagedMesh,
   tri: number,
-  px: number,
+  pointX: number,
   py: number,
   dx: number,
   dy: number,
@@ -153,9 +157,13 @@ export function walkMesh(
   through = false,
   fn?: (tri: number, from: number, to: number) => void
 ): { dist: number; tri: number } {
-  let cur = enterTriangle(pm, tri, px, py, dx, dy);
+  let cur = enterTriangle(pm, tri, pointX, py, dx, dy);
   if (!through && pm.isBlocked(cur)) return { dist: 0, tri: cur };
   let T = pm.tileOf(cur);
+  // The ray's start where the tile walked in is (paged.ts xIn: the start lies in that tile), then carried across each
+  // tile edge the walk crosses (xAcross), so the ray goes on unbroken however long it is: the distance along it is the
+  // same wherever the tiles are.
+  let px = pm.xIn(T, pointX);
   let entry = -1;
   let s = 0;
   // Degenerate geometry (slivers) can still make a walk circle at one point; the cap ends it rather than hang.
@@ -213,6 +221,7 @@ export function walkMesh(
     if (!through && N.blocked[n - N.first]) return { dist: Math.max(bestS, 0), tri: cur };
     s = Math.max(bestS, s);
     cur = n;
+    if (N !== T) px = pm.xAcross(T, N, px);
     T = N;
   }
   return { dist: s, tri: cur };
@@ -233,7 +242,8 @@ export function rayWalk(
 }
 
 /**
- * For each point of a route through the mesh (metres frame; `startTri` holds the first point): [left, right] distances
+ * For each point of a route through the mesh (metres frame, laid out unbroken: each point where the route reaches it,
+ * as route.ts lays a route out, not brought back next to anything; `startTri` holds the first point): [left, right] distances
  * to the first blocked or missing triangle, perpendicular to the track there, capped at MAX_SCAN_M. The track's
  * direction at a point is towards the next point (the last point: from the previous one); a zero-length step keeps
  * the previous direction.

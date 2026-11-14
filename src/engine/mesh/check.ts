@@ -171,7 +171,9 @@ function walkPiece(land: MeshLand, p: Piece, rules: CheckRules): void {
     return { depth: T.depth[l], blocked: kind, value };
   };
   const [ax, ay] = pm.toXY(p.a[0], p.a[1]);
-  const [bx, by] = pm.toXY(p.b[0], p.b[1]);
+  const [farX, by] = pm.toXY(p.b[0], p.b[1]);
+  // The piece's end next to its start (paged.ts near): the piece the short way.
+  const bx = pm.near(farX, ax);
   const len = Math.hypot(bx - ax, by - ay);
   if (!(len > 0)) return;
   const dx = (bx - ax) / len;

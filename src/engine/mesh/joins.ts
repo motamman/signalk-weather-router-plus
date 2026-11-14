@@ -63,8 +63,11 @@ export class JoinFinder {
     const pb = this.b.pm;
     let u = this.prev;
     // Each step moves to a neighbour the point lies beyond, so the walk ends; it is bounded by B's triangles.
+    const pointX = px;
     for (let step = 0; u >= 0 && step < this.b.store.index.triangles; step++) {
       const U = pb.tileOf(u);
+      // The point where this triangle's tile is (paged.ts xIn).
+      px = pb.xIn(U, pointX);
       const q = (u - U.first) * 3;
       const ax = U.x[q];
       const ay = U.y[q];
@@ -93,8 +96,8 @@ export class JoinFinder {
       if (d[k] >= -tol) break;
       u = U.nb[q + k];
     }
-    const all = pb.locateAll(px, py);
-    const any = all.length ? all[0] : pb.locate(px, py, false);
+    const all = pb.locateAll(pointX, py);
+    const any = all.length ? all[0] : pb.locate(pointX, py, false);
     if (any >= 0) this.prev = any;
     return all;
   }

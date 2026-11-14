@@ -64,9 +64,11 @@ export class MeshLand implements LandTest {
    * from a, the exit capped at the move's end). Returns how far the walk got: the move's length when it reached b,
    * less where it left the mesh, -1 when no triangle holds a.
    */
-  forEachTriangleAlong(ax: number, ay: number, bx: number, by: number, fn: (tri: number, from: number, to: number) => void): number {
+  forEachTriangleAlong(ax: number, ay: number, farX: number, by: number, fn: (tri: number, from: number, to: number) => void): number {
     const t = this.locate(ax, ay, true);
     if (t < 0) return -1;
+    // The move's end next to its start (paged.ts near): the move the short way.
+    const bx = this.pm.near(farX, ax);
     const len = Math.hypot(bx - ax, by - ay);
     if (len <= 0) {
       fn(t, 0, 0);
@@ -113,7 +115,9 @@ export class MeshLand implements LandTest {
   /** Does the straight move a→b (in the mesh frame) meet a blocked triangle or leave the mesh? */
   legCrossesLandExact(lonA: number, latA: number, lonB: number, latB: number): boolean {
     const [ax, ay] = this.pm.toXY(lonA, latA);
-    const [bx, by] = this.pm.toXY(lonB, latB);
+    const [farX, by] = this.pm.toXY(lonB, latB);
+    // The move's end next to its start (paged.ts near): the move the short way.
+    const bx = this.pm.near(farX, ax);
     const ta = this.locate(ax, ay, true);
     if (ta < 0) return true;
     const len = Math.hypot(bx - ax, by - ay);
@@ -134,7 +138,9 @@ export class MeshLand implements LandTest {
     if (!(maxM > 0)) return none;
     const [ax, ay] = this.pm.toXY(lon, lat);
     const [bLon, bLat] = projectAlongBearing(lon, lat, bearingDeg, maxM);
-    const [bx, by] = this.pm.toXY(bLon, bLat);
+    const [farX, by] = this.pm.toXY(bLon, bLat);
+    // The move's end next to its start (paged.ts near): the move the short way.
+    const bx = this.pm.near(farX, ax);
     const ta = this.locate(ax, ay, true);
     if (ta < 0) return none;
     const len = Math.hypot(bx - ax, by - ay);

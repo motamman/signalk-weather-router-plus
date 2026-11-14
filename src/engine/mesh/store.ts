@@ -157,6 +157,21 @@ export function tileExtentsMeet(a: [number, number, number, number], b: [number,
   return boxesMeet(tileBBox(a), tileBBox(b));
 }
 
+/**
+ * How far a point lies from a tile's vertex extent, degrees [east, north] from the point to the extent's nearest point
+ * ([0, 0] inside it). The point's longitude is taken next to the extent's middle, as the tile is stored: the short way
+ * round (a tile east of the date line is stored from -180, and a point on the date line is 180 or -180). The one
+ * place a point and a tile's extent are compared; no frame comes into it, the question is the earth's.
+ */
+export function toTileExtent(bbox: [number, number, number, number], lon: number, lat: number): [number, number] {
+  const l = unwrapLonNear(lon, (bbox[0] + bbox[2]) / 2);
+  // East to the extent or west to it, whichever is less: a point more than half a turn from the extent's near side
+  // is nearer its far side the other way round.
+  const east = Math.min(Math.max(l, bbox[0]), bbox[2]) - l;
+  const other = l <= bbox[0] ? bbox[2] - (l + 360) : l >= bbox[2] ? bbox[0] - (l - 360) : 0;
+  return [Math.abs(other) < Math.abs(east) ? other : east, Math.min(Math.max(lat, bbox[1]), bbox[3]) - lat];
+}
+
 export interface MeshIndex {
   version: number;
   /** The mesh's box; `west` greater than `east` when the mesh crosses the date line (see the file's comment). */
@@ -463,6 +478,31 @@ export class MeshStore {
     m.hazv.set(hazv, offset);
     m.flags.set(flags, offset);
   }
+}
+
+/**
+ * The x of the same meridian as `x` that lies next to `toX`, within half a turn of it, in a frame whose x goes round
+ * the earth every `period` metres (Infinity: a frame that does not, where `x` is as it is). The one place a turn is
+ * added or taken off an x (paged.ts near, the file's comment there; the areas to avoid in route.ts).
+ */
+export function xNear(x: number, toX: number, period: number): number {
+  if (period === Infinity) return x;
+  const k = Math.round((toX - x) / period);
+  return k === 0 ? x : x + k * period;
+}
+
+/**
+ * One turn round the earth in the x of a frame laid out about `ref` and scaled by `cl`, metres; Infinity for a frame
+ * laid out about nothing (the tests' own meshes, whose x does not go round). The one place it is worked out: a loaded
+ * mesh's (meshPeriod) and a paged mesh's (paged.ts period).
+ */
+export function framePeriod(ref: number | undefined, cl: number): number {
+  return ref === undefined ? Infinity : 360 * cl * M_PER_DEG_MESH;
+}
+
+/** One turn round the earth in a loaded mesh's x (framePeriod). */
+export function meshPeriod(m: LoadedMesh): number {
+  return framePeriod(m.ref, m.cl);
 }
 
 /** Project a point into a loaded mesh's metres frame (the same expression order as readTile). */
