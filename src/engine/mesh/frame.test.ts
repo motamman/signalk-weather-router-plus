@@ -5,6 +5,12 @@
  * point and tile edge, a quarter and half a degree either side) and at every 30° round the earth, and each question
  * must get one answer: of a mesh across the date line, of a mesh joined all the way round the earth, of the rough cut
  * under areas to avoid, and of the whole mesh search across the join of a ring written from four longitudes.
+ *
+ * Nor does an answer depend on how long a thing is or on where round the earth the mesh lies: a straight walk of any
+ * length goes as far as its 1° pieces chained, through the same triangles; a route as returned, read the short way
+ * between its points, crosses no unusable water, has no step as long as half a turn, and its steps add up to the way
+ * the search went, the same route wherever the ring is written from; and the nearest usable water is what a search of
+ * every triangle finds, the short way round, also where the point's antipode lies inside a tile.
  */
 
 import { test } from 'node:test';
@@ -14,11 +20,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { meshAstar } from './astar';
 import { boundarySeeds, buildCoarseMap, type CoarseRules, meshRulesOf, PieceGraph } from './coarse';
-import { writeGridMesh, writeRingMesh } from './fixture';
+import { idFilter, type Tri, writeGridMesh, writeRingMesh, writeTile } from './fixture';
 import { MeshLand } from './land';
 import { PagedMesh } from './paged';
 import { searchMesh } from './route';
 import { M_PER_DEG_MESH, MeshStore } from './store';
+import { walkMesh } from './width';
 
 const RULES = { draughtM: 2, airDraftM: 18, motorSpeedMs: 3 };
 const COARSE: CoarseRules = {
@@ -312,5 +319,207 @@ test('the whole mesh search across the join of a ring, and across the meridian o
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+/** The longitude from `a` to `b` the short way round, degrees (east positive). */
+const shortWay = (a: number, b: number): number => {
+  const d = b - a;
+  return d - 360 * Math.round(d / 360);
+};
+
+test('a straight walk of any length, up to all the way round, goes as far as its 1° pieces chained, through the same triangles', () => {
+  const meshes: [string, number[]][] = [
+    ['a ring, all of it usable', new Array<number>(360).fill(10)],
+    ['a ring with the tile from 20°E to 21°E too shallow', Array.from({ length: 360 }, (_, i) => (i === 200 ? 1 : 10))],
+  ];
+  for (const [title, depths] of meshes) {
+    const dir = writeRingMesh(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-frame-')), depths);
+    try {
+      const store = MeshStore.open(dir);
+      for (const centre of [undefined, 100, -37.25]) {
+        const pm = new PagedMesh(store, RULES, 1).centred(centre);
+        for (const lon0 of [19.5, -179.5, 150.25])
+          for (const dir of [-1, 1])
+            for (const lat of [0.5, 0.25])
+              for (const deg of [1.3, 100, 181, 358]) {
+                const what = `${title}, frame about ${pm.frameLon}°, from ${lon0}° ${dir < 0 ? 'west' : 'east'} at latitude ${lat} for ${deg}°`;
+                const [x0, y0] = pm.toXY(lon0, lat);
+                const start = pm.locate(x0, y0, true);
+                const whole: number[] = [];
+                const w = walkMesh(pm, start, x0, y0, dir, 0, deg * M_PER_DEG_MESH, false, t => {
+                  if (whole[whole.length - 1] !== t) whole.push(t);
+                });
+                // The same walk in pieces of 1° (the last one the rest), each from where the one before ended, until
+                // one stops short (unusable water).
+                let gone = 0;
+                let tri = start;
+                const pieces: number[] = [];
+                for (let stopped = false; gone < deg * M_PER_DEG_MESH - 1e-6 && !stopped;) {
+                  const step = Math.min(M_PER_DEG_MESH, deg * M_PER_DEG_MESH - gone);
+                  const [x, y] = pm.toXY(lon0 + (dir * gone) / M_PER_DEG_MESH, lat);
+                  const p = walkMesh(pm, tri, x, y, dir, 0, step, false, t => {
+                    if (pieces[pieces.length - 1] !== t) pieces.push(t);
+                  });
+                  gone += p.dist;
+                  tri = p.tri;
+                  stopped = p.dist < step - 1e-6;
+                }
+                assert.ok(Math.abs(w.dist - gone) < 1e-3, `${what}: the walk went ${w.dist} m, its pieces ${gone} m`);
+                assert.deepEqual(whole, pieces, what);
+              }
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('a route as returned crosses no unusable water, has no step as long as half a turn, adds up to the way the search went, and is the same wherever the ring is written from', () => {
+  // A ring of 360 tiles of 1°; `walls` are tiles too shallow for the boat, numbered from the ring's first tile; the
+  // leg from `from` to `to`, degrees east of the ring's start. `way`: the longitude the only open way covers.
+  const scenes = [
+    // One wall between the ends, 2° apart: the only way is west, all the way round but those 2°.
+    { name: 'past a wall, the long way round', walls: [200], from: 199.5, to: 201.5, way: 201.5 - 199.5 - 360 },
+    { name: 'the short way, no wall near', walls: [200], from: 10.5, to: 13.5, way: 13.5 - 10.5 },
+    // Two walls 200° apart and both ends between them: the way is east, between the walls.
+    { name: 'between two walls, 150° east', walls: [40, 240], from: 60.5, to: 210.5, way: 210.5 - 60.5 },
+    { name: 'between two walls, 190° east (more than half a turn)', walls: [40, 240], from: 45.5, to: 235.5, way: 235.5 - 45.5 },
+  ];
+  const cl = Math.cos((0.5 * Math.PI) / 180);
+  for (const sc of scenes) {
+    const routes = new Map<string, number[]>();
+    for (const west of [-180, -90, 10, 123]) {
+      const what = `${sc.name}, the ring from ${west}°`;
+      const dir = writeRingMesh(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-frame-')),
+        Array.from({ length: 360 }, (_, i) => (sc.walls.includes(i) ? 1 : 10)),
+        west
+      );
+      try {
+        const store = MeshStore.open(dir);
+        const s = searchMesh(store, [wrap(west + sc.from), 0.5], [wrap(west + sc.to), 0.5], RULES);
+        const r = s.result;
+        assert.ok(r.ok, r.ok ? '' : `${what}: ${r.reason}`);
+        if (!r.ok) continue;
+        // The search's cost is the way along the row (the frame is scaled by the cosine of the leg's latitude, route.ts).
+        close(r.costS, runS(Math.abs(sc.way), cl), `${what}: the search's cost`);
+        const land = new MeshLand(new PagedMesh(store, RULES, cl));
+        let sum = 0;
+        for (let i = 1; i < r.path.length; i++) {
+          const a: LonLat = r.path[i - 1];
+          const b: LonLat = r.path[i];
+          const step = shortWay(a[0], b[0]);
+          assert.ok(Math.abs(step) < 180 - 1e-9, `${what}: step ${i} is half a turn or more (${a[0]} to ${b[0]})`);
+          assert.equal(
+            land.legCrossesLandExact(a[0], a[1], b[0], b[1]),
+            false,
+            `${what}: step ${i} (${a[0]} to ${b[0]}) crosses unusable water`
+          );
+          sum += step;
+        }
+        assert.ok(Math.abs(sum - sc.way) < 1e-6, `${what}: the returned steps add up to ${sum}° of longitude, the way is ${sc.way}°`);
+        assert.equal(r.widths.length, r.path.length, `${what}: a width for every point`);
+        // The route with the ring's start taken off its longitudes: the same for every ring.
+        assert.ok(r.endTri !== undefined, `${what}: the triangle the route ends in`);
+        const end = s.paged.tileOf(r.endTri);
+        const said = JSON.stringify({
+          path: r.path.map(p => [wrap(p[0] - west), mm(p[1])]),
+          widths: r.widths.map(w => w.map(mm)),
+          cost: mm(r.costS),
+          lengthM: mm(r.lengthM),
+          endsInTheTileAt: wrap((end.bbox[0] + end.bbox[2]) / 2 - west),
+        });
+        routes.set(said, [...(routes.get(said) ?? []), west]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    assert.equal(routes.size, 1, `${sc.name}: ${[...routes].map(([r, ws]) => `rings from ${ws.join(', ')}°: ${r}`).join('; ')}`);
+  }
+});
+
+test('the nearest usable water is what a search of every triangle finds, the short way round, also where the point antipode lies inside a tile', () => {
+  // Five tiles of 1° with no neighbours (the scan needs none), at 0°, 90°E, 179°E, 180° and 90°W, each with water in
+  // two corners only: a thin triangle along its west side and a small one in its north-east corner.
+  const corners = [0, 90, 179, -180, -90];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-frame-'));
+  const tris: Tri[] = [];
+  const tiles = corners.map((lon, k) => {
+    const t: Tri[] = [
+      [
+        [lon, 0],
+        [lon + 0.1, 0],
+        [lon, 1],
+      ],
+      [
+        [lon + 0.9, 0.9],
+        [lon + 1, 0.9],
+        [lon + 1, 1],
+      ],
+    ];
+    const none = [
+      [-1, -1, -1],
+      [-1, -1, -1],
+    ];
+    writeTile(dir, `t${k}.bin`, t, none, none, [10, 10], [0, 0]);
+    tris.push(...t);
+    return { i: k, j: 0, file: `t${k}.bin`, first: 2 * k, n: 2, bbox: [lon, 0, lon + 1, 1] };
+  });
+  fs.writeFileSync(
+    path.join(dir, 'index.json'),
+    JSON.stringify({ version: 1, west: -180, south: 0, east: 180, north: 1, tileDeg: 1, xScale: 1, triangles: tris.length, tiles })
+  );
+  /** How far (px, py) is from a triangle on a flat sheet, degrees (the frame's scale is 1 here). */
+  const flat = (px: number, py: number, t: Tri): number => {
+    const side = (k: number): number => {
+      const [ux, uy] = t[k];
+      const [vx, vy] = t[(k + 1) % 3];
+      return (vx - ux) * (py - uy) - (vy - uy) * (px - ux);
+    };
+    if (side(0) >= 0 && side(1) >= 0 && side(2) >= 0) return 0;
+    let best = Infinity;
+    for (let k = 0; k < 3; k++) {
+      const [ux, uy] = t[k];
+      const [vx, vy] = t[(k + 1) % 3];
+      const ex = vx - ux;
+      const ey = vy - uy;
+      const f = Math.max(0, Math.min(1, ((px - ux) * ex + (py - uy) * ey) / (ex * ex + ey * ey)));
+      best = Math.min(best, Math.hypot(ux + f * ex - px, uy + f * ey - py));
+    }
+    return best;
+  };
+  try {
+    const store = MeshStore.open(dir);
+    // Every 7.25° round the earth, and closely where a point's antipode lies inside one of the tiles.
+    const lons: number[] = [];
+    for (let lon = -180; lon < 180; lon += 7.25) lons.push(lon);
+    for (const c of corners) for (let d = -0.1; d <= 1.1001; d += 0.05) lons.push(wrap(c + 180 + d));
+    for (const centre of [undefined, 45, 179.9]) {
+      const pm = new PagedMesh(store, RULES, 1).centred(centre);
+      for (const wanted of [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [0], [1], [0, 3], [5, 6], [4, 7, 8]]) {
+        const only = idFilter(pm, g => wanted.includes(g));
+        for (const lon of lons)
+          for (const lat of [0.05, 0.95, 4]) {
+            const what = `frame about ${pm.frameLon}°, the water of triangles ${wanted}, from (${lon}, ${lat})`;
+            // The short way round: the nearest of the point where it is and a turn either way.
+            let want = Infinity;
+            for (const g of wanted) for (const turn of [-360, 0, 360]) want = Math.min(want, flat(lon + turn, lat, tris[g]));
+            const u = pm.nearestUsable(...pm.toXY(lon, lat), only)!;
+            assert.ok(
+              Math.abs(u.distM / M_PER_DEG_MESH - want) < 1e-6,
+              `${what}: ${u.distM / M_PER_DEG_MESH}° away, a search of every triangle finds ${want}°`
+            );
+            // The point returned is that far from the point asked about.
+            const [qLon, qLat] = pm.fromXY(u.x, u.y);
+            assert.ok(
+              Math.abs(Math.hypot(shortWay(lon, qLon), qLat - lat) - want) < 1e-6,
+              `${what}: the point returned, (${qLon}, ${qLat})`
+            );
+          }
+      }
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

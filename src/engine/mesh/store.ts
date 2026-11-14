@@ -165,7 +165,11 @@ export function tileExtentsMeet(a: [number, number, number, number], b: [number,
  */
 export function toTileExtent(bbox: [number, number, number, number], lon: number, lat: number): [number, number] {
   const l = unwrapLonNear(lon, (bbox[0] + bbox[2]) / 2);
-  return [Math.min(Math.max(l, bbox[0]), bbox[2]) - l, Math.min(Math.max(lat, bbox[1]), bbox[3]) - lat];
+  // East to the extent or west to it, whichever is less: a point more than half a turn from the extent's near side
+  // is nearer its far side the other way round.
+  const east = Math.min(Math.max(l, bbox[0]), bbox[2]) - l;
+  const other = l <= bbox[0] ? bbox[2] - (l + 360) : l >= bbox[2] ? bbox[0] - (l - 360) : 0;
+  return [Math.abs(other) < Math.abs(east) ? other : east, Math.min(Math.max(lat, bbox[1]), bbox[3]) - lat];
 }
 
 export interface MeshIndex {

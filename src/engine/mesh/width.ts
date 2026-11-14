@@ -160,8 +160,9 @@ export function walkMesh(
   let cur = enterTriangle(pm, tri, pointX, py, dx, dy);
   if (!through && pm.isBlocked(cur)) return { dist: 0, tri: cur };
   let T = pm.tileOf(cur);
-  // The ray's start where the tile walked in is (paged.ts xIn), taken again at each tile the walk enters: the distance
-  // along the ray is the same wherever the tile is.
+  // The ray's start where the tile walked in is (paged.ts xIn: the start lies in that tile), then carried across each
+  // tile edge the walk crosses (xAcross), so the ray goes on unbroken however long it is: the distance along it is the
+  // same wherever the tiles are.
   let px = pm.xIn(T, pointX);
   let entry = -1;
   let s = 0;
@@ -220,7 +221,7 @@ export function walkMesh(
     if (!through && N.blocked[n - N.first]) return { dist: Math.max(bestS, 0), tri: cur };
     s = Math.max(bestS, s);
     cur = n;
-    if (N !== T) px = pm.xIn(N, px);
+    if (N !== T) px = pm.xAcross(T, N, px);
     T = N;
   }
   return { dist: s, tri: cur };
@@ -241,7 +242,8 @@ export function rayWalk(
 }
 
 /**
- * For each point of a route through the mesh (metres frame; `startTri` holds the first point): [left, right] distances
+ * For each point of a route through the mesh (metres frame, laid out unbroken: each point where the route reaches it,
+ * as route.ts lays a route out, not brought back next to anything; `startTri` holds the first point): [left, right] distances
  * to the first blocked or missing triangle, perpendicular to the track there, capped at MAX_SCAN_M. The track's
  * direction at a point is towards the next point (the last point: from the previous one); a zero-length step keeps
  * the previous direction.
@@ -253,8 +255,7 @@ export function passageWidths(pm: PagedMesh, pathXY: [number, number][], startTr
   let dirY = 1;
   for (let i = 0; i < pathXY.length; i++) {
     const [px, py] = pathXY[i];
-    // The next point next to this one (paged.ts near): the step between them the short way.
-    const nxt: [number, number] | null = i + 1 < pathXY.length ? [pm.near(pathXY[i + 1][0], px), pathXY[i + 1][1]] : null;
+    const nxt = i + 1 < pathXY.length ? pathXY[i + 1] : null;
     if (nxt) {
       const L = Math.hypot(nxt[0] - px, nxt[1] - py);
       if (L > 0) {

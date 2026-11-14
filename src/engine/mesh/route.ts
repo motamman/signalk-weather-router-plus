@@ -446,11 +446,14 @@ export function searchMesh(
       [T.x[b] + shift, T.y[b]],
     ];
   });
-  let pathXY = funnel(portals, [sx, sy], [pm.near(ex, lastX), ey]);
+  // No step of the route as long as half a turn: a straight run that long gets points along it, so that each step,
+  // given by its two ends, can only be read one way (as longitudes and latitudes the short way between two points is
+  // the only way there is).
+  let pathXY = shortSteps(funnel(portals, [sx, sy], [pm.near(ex, lastX), ey]), pm.period / 2);
   // An inner waypoint of a run: the route stops where it enters the circle (the water there being usable, or the
   // nearest usable water inside the circle; the route goes on to water moved outside it).
   if (approach?.trim && target!.movedM <= approach.radiusM)
-    pathXY = trimAtCircle(pathXY, pm.near(wx, pathXY[pathXY.length - 1][0]), wy, approach.radiusM);
+    pathXY = trimAtCircle(pathXY, wx, wy, approach.radiusM, (x, toX) => pm.near(x, toX));
   const widths = passageWidths(pm, pathXY, r.startTri);
   funnelMs = Date.now() - t1;
   const path = pathXY.map(p => pm.fromXY(p[0], p[1]));
@@ -467,13 +470,32 @@ export function searchMesh(
 }
 
 /**
- * The polyline cut where it first comes within `r` of (cx, cy) (metres frame): the points before, then the point
- * where that segment enters the circle. Unchanged when it starts inside the circle or never reaches it.
+ * A polyline with points added along every step as long as `limit` in x or longer, evenly, so that each step is
+ * shorter: the same line, in more pieces.
  */
-export function trimAtCircle(path: XY[], cx: number, cy: number, r: number): XY[] {
-  if (!path.length || Math.hypot(path[0][0] - cx, path[0][1] - cy) <= r) return path;
+export function shortSteps(path: XY[], limit: number): XY[] {
+  const out: XY[] = path.slice(0, 1);
   for (let i = 1; i < path.length; i++) {
     const [ax, ay] = path[i - 1];
+    const [bx, by] = path[i];
+    const n = Math.floor(Math.abs(bx - ax) / limit) + 1;
+    for (let k = 1; k < n; k++) out.push([ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n]);
+    out.push(path[i]);
+  }
+  return out;
+}
+
+/**
+ * The polyline cut where it first comes within `r` of (cx, cy) (metres frame): the points before, then the point
+ * where that segment enters the circle. Unchanged when it starts inside the circle or never reaches it. `near` (paged.ts
+ * near) takes the circle's centre next to each step's start: the steps are shorter than half a turn (shortSteps), so
+ * the circle a step can enter is the one next to it.
+ */
+export function trimAtCircle(path: XY[], centreX: number, cy: number, r: number, near: (x: number, toX: number) => number = x => x): XY[] {
+  if (!path.length || Math.hypot(path[0][0] - near(centreX, path[0][0]), path[0][1] - cy) <= r) return path;
+  for (let i = 1; i < path.length; i++) {
+    const [ax, ay] = path[i - 1];
+    const cx = near(centreX, ax);
     const dx = path[i][0] - ax;
     const dy = path[i][1] - ay;
     const L2 = dx * dx + dy * dy;

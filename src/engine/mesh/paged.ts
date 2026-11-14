@@ -31,10 +31,19 @@
  * width.ts at every tile it enters, the search's start in astar.ts, the joins in joins.ts); the far end of a move next
  * to its near end (land.ts, check.ts); a distance between two points with one next to the other (astar.ts, route.ts,
  * transfer.ts, waters.ts); a route's crossed edges each next to the one before (route.ts). Inside one tile nothing is
- * converted: its corners are one source. Where everything lies within half a turn, `near` changes nothing. No answer
- * depends on where the frame is laid out (frame.test.ts asks the same questions in frames laid out so that the
- * meridian opposite their middle falls on every place the questions touch, and at every 30°, of a mesh across the
- * date line and of one all the way round the earth). Points come back as longitudes between -180 and 180 (fromXY).
+ * converted: its corners are one source. Where everything lies within half a turn, `near` changes nothing.
+ *
+ * "Next to" is between the two things that are in fact near each other, so that the length of a thing never matters: a
+ * walk is carried across each tile edge it crosses by the two tiles' places (`xAcross`), not brought back next to
+ * where it started; a route laid out unbroken stays so (width.ts passageWidths, route.ts); a route handed on has no
+ * step as long as half a turn (route.ts shortSteps), since two points given as longitudes and latitudes can only mean
+ * the short way between them; and a distance is the nearer way round also to a tile that reaches past the point's
+ * antipode (nearestUsable; store.ts toTileExtent). No answer
+ * depends on where the frame is laid out, on how long a thing is, or on where round the earth the mesh lies
+ * (frame.test.ts: the same questions in frames laid out so that the meridian opposite their middle falls on every
+ * place the questions touch, and at every 30°; a walk against its pieces chained; a route as returned against the
+ * water it may use; the nearest water against a search of every triangle; a route against the same route with the
+ * mesh moved round the earth). Points come back as longitudes between -180 and 180 (fromXY).
  */
 
 import { unwrapLonNear } from '../../geo/angles';
@@ -235,6 +244,16 @@ export class PagedMesh {
   /** A point's x where a tile is: next to the tile's middle. A point is tested against a tile's corners so (near). */
   xIn(T: PagedTile, x: number): number {
     return this.near(x, T.midX);
+  }
+
+  /**
+   * An x given where tile `from` is, where the tile next to it, `to`, is: moved by the turns that lie between the two
+   * tiles' places in the frame. Two tiles that share an edge are next to each other on the earth, so this is exact
+   * however far the thing carried across (a walk's start, a ray) lies from either: a walk goes on unbroken through
+   * any number of tiles, right round the earth.
+   */
+  xAcross(from: PagedTile, to: PagedTile, x: number): number {
+    return x + (to.midX - this.near(to.midX, from.midX));
   }
 
   /** An in-memory mesh (the tests' synthetic meshes) as one tile that is never dropped, with its blocked set as given. */
@@ -674,16 +693,24 @@ export class PagedMesh {
       if (best && o.d >= best.distM) break;
       const wasHeld = this.isHeld(o.idx);
       const T = this.tile(o.idx);
-      // The point where the tile is; the answer back next to the point as it was given.
+      // The point where the tile is. A tile that reaches more than half a turn from the point there is nearer, in that
+      // part, from the point a turn the other way: the point is tried from both, each triangle by the nearer. The
+      // answer comes back next to the point as it was given.
       const tx = this.xIn(T, px);
+      const half = ((T.bbox[2] - T.bbox[0]) / 2) * this.cl * M_PER_DEG_MESH;
+      const from = [tx];
+      if (tx - (T.midX - half) > this.period / 2) from.push(tx - this.period);
+      if (T.midX + half - tx > this.period / 2) from.push(tx + this.period);
       let improved = false;
       for (let l = 0; l < T.n; l++) {
         if (T.blocked[l]) continue;
-        const [qx, qy] = closestOnTriangle(tx, py, T.x, T.y, l * 3);
-        const d = Math.hypot(qx - tx, qy - py);
-        if ((!best || d < best.distM) && accept(T.first + l)) {
-          best = { tri: T.first + l, x: qx + (px - tx), y: qy, distM: d };
-          improved = true;
+        for (const fx of from) {
+          const [qx, qy] = closestOnTriangle(fx, py, T.x, T.y, l * 3);
+          const d = Math.hypot(qx - fx, qy - py);
+          if ((!best || d < best.distM) && accept(T.first + l)) {
+            best = { tri: T.first + l, x: qx + (px - fx), y: qy, distM: d };
+            improved = true;
+          }
         }
       }
       if (improved) {
