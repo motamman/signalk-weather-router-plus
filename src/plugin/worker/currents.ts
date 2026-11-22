@@ -25,6 +25,8 @@ import {
   RtofsCurrentSource,
   type RtofsRun,
   rtofsRunFor,
+  rtofsSetForConfig,
+  type SerializedRtofsSet,
   shareRtofsSteps,
 } from '../../currents/rtofs';
 import { type CurrentSourceLike } from '../../currents/types';
@@ -36,10 +38,12 @@ import {
   SMOC_DEFAULT_BUDGET_BYTES,
   SmocClient,
   SmocCurrentSource,
+  type SerializedSmoc,
   type SmocRun,
   type SmocSettings,
 } from '../../currents/smoc';
 import { isOffline, OfflineError } from '../../data/http';
+import { releaseMemory } from '../../util/gc';
 import { type ResolvedConfig } from '../config';
 import { type CheckedSource, type CheckOutcome, type DataStatus, type QueryArgs } from '../protocol';
 import { backgroundHold, requireInit } from './state';
@@ -105,6 +109,69 @@ export function makeSmocClient(st: WorkerState, cfg: ResolvedConfig): SmocClient
 /** data worker → main → route worker: the run and the resident area (shared memory). */
 export function sendSmoc(st: WorkerState): void {
   if (st.role === 'data') st.send({ type: 'smoc', smoc: st.smoc ? st.smoc.serialize() : null });
+}
+
+/**
+ * Route worker: a full GC once relayed shared memory has been replaced or dropped. V8 does not count a
+ * SharedArrayBuffer received from another thread toward this thread's memory, so dropping one never prompts a
+ * collection here, and between routes this thread allocates almost nothing: every SMOC resident area it was handed
+ * (a new one at each step of the window, 3 h by default) stayed alive for hours, held by the old objects (issue #113).
+ */
+function releaseDropped(st: WorkerState, what: string): void {
+  const ms = releaseMemory();
+  st.log('debug', `${what}: full GC after dropping shared memory: ${ms === null ? 'not available' : `${ms} ms`}`);
+}
+
+/** Route worker: the data worker's SMOC run and resident area, relayed by the main thread (shared memory). */
+export function adoptSmoc(st: WorkerState, s: SerializedSmoc | null): void {
+  const cfg = requireInit(st).config;
+  const dropped = !!st.smoc?.resident;
+  if (!s || !cfg.currents.smocEnabled) st.smoc = null;
+  else if (
+    st.smoc &&
+    st.smoc.run.key === s.run.key &&
+    st.smoc.run.settled === s.run.settled &&
+    JSON.stringify(st.smoc.settings) === JSON.stringify(s.settings)
+  )
+    st.smoc.setResident(s.resident, s.centre);
+  else st.smoc = SmocCurrentSource.fromSerialized(s, st.smocClient, m => st.log('info', m));
+  rebuildStack(st);
+  sendCurrents(st);
+  if (st.smoc)
+    st.log(
+      'debug',
+      `smoc: adopted run ${st.smoc.run.key}${st.smoc.resident ? `, resident ${(st.smoc.memoryBytes() / 1e6).toFixed(1)} MB ${st.smoc.resident.u.buffer instanceof SharedArrayBuffer ? 'shared (no copy)' : 'copied'}` : ', nothing resident'}`
+    );
+  if (dropped) releaseDropped(st, 'smoc');
+}
+
+/** Route worker: the data worker's RTOFS products, relayed by the main thread (shared memory). */
+export function adoptRtofs(st: WorkerState, rtofs: SerializedRtofsSet | null): void {
+  const cur = requireInit(st).config.currents;
+  const set = rtofsSetForConfig(rtofs, cur.rtofsEnabled, cur.rtofsExtra);
+  const dropped = st.rtofs.length > 0;
+  st.rtofs = set ? set.runs.map(r => RtofsCurrentSource.fromSerialized(r)) : [];
+  rebuildStack(st);
+  sendCurrents(st);
+  if (dropped) releaseDropped(st, 'rtofs');
+}
+
+/**
+ * A currents settings change: drop SMOC and / or RTOFS, to be loaded again (data worker) or relayed again (route
+ * worker). In the route worker the dropped memory is collected now, as it may never be replaced (turned off).
+ */
+export function dropCurrents(st: WorkerState, cfg: ResolvedConfig, drop: { smoc: boolean; rtofs: boolean }): void {
+  const dropped = st.role === 'route' && ((drop.rtofs && st.rtofs.length > 0) || (drop.smoc && !!st.smoc?.resident));
+  if (drop.rtofs) {
+    st.rtofsClients = new Map();
+    st.rtofs = [];
+  }
+  if (drop.smoc) {
+    st.smocClient = makeSmocClient(st, cfg);
+    st.smoc = null;
+  }
+  rebuildStack(st);
+  if (dropped) releaseDropped(st, 'currents');
 }
 
 /** Record what a source's check found (st.checks, reported in the data status). */

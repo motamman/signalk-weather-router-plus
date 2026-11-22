@@ -38,8 +38,6 @@ import { CoastTiles } from '../geo/coasttiles';
 import { PolarDiagram } from '../vessel/polar';
 import { HarmonicCurrentSource } from '../currents/harmonic';
 import { CurrentStack } from '../currents/stack';
-import { RtofsCurrentSource, rtofsSetForConfig } from '../currents/rtofs';
-import { SmocCurrentSource } from '../currents/smoc';
 import { TideSource } from '../tides/sealevel';
 import { type MainToWorker, type WorkerRole, type WorkerToMain } from './protocol';
 import { rtofsLoadSame, smocLoadSame } from './config';
@@ -49,6 +47,9 @@ import { EnsemblePasses, refreshEnsembles, refreshForecast } from './worker/fore
 import { prepareWaterGrid } from './worker/landgrid';
 import {
   adoptCurrentsRef,
+  adoptRtofs,
+  adoptSmoc,
+  dropCurrents,
   loadHarmonic,
   makeSmocClient,
   rebuildStack,
@@ -283,15 +284,7 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
         // the RTOFS horizon or step changed or it was turned on or off; extra products are added or dropped alone.
         const smocSame = smocLoadSame(prev, st.config);
         const rtofsSame = rtofsLoadSame(prev, st.config);
-        if (!rtofsSame) {
-          st.rtofsClients = new Map();
-          st.rtofs = [];
-        }
-        if (!smocSame) {
-          st.smocClient = makeSmocClient(st, st.config);
-          st.smoc = null;
-        }
-        rebuildStack(st);
+        dropCurrents(st, st.config, { smoc: !smocSame, rtofs: !rtofsSame });
         if (msg.position !== undefined) st.vesselPos = msg.position;
         // Route worker: SMOC comes back from the data worker (relayed 'smoc').
         if (st.role === 'data' && !smocSame) {
@@ -378,34 +371,13 @@ export async function handle(st: WorkerState, msg: MainToWorker): Promise<void> 
     case 'rtofs': {
       // Route worker: the data worker's RTOFS products (shared memory; tiles workers: 'currents-ref').
       if (st.role === 'data') return;
-      const cur = requireInit(st).config.currents;
-      const set = rtofsSetForConfig(msg.rtofs, cur.rtofsEnabled, cur.rtofsExtra);
-      st.rtofs = set ? set.runs.map(r => RtofsCurrentSource.fromSerialized(r)) : [];
-      rebuildStack(st);
-      sendCurrents(st);
+      adoptRtofs(st, msg.rtofs);
       return;
     }
     case 'smoc': {
       // Route worker: the data worker's run and resident area (shared memory; tiles workers: 'currents-ref').
       if (st.role === 'data') return;
-      const s = msg.smoc;
-      const cfgNow = requireInit(st).config;
-      if (!s || !cfgNow.currents.smocEnabled) st.smoc = null;
-      else if (
-        st.smoc &&
-        st.smoc.run.key === s.run.key &&
-        st.smoc.run.settled === s.run.settled &&
-        JSON.stringify(st.smoc.settings) === JSON.stringify(s.settings)
-      )
-        st.smoc.setResident(s.resident, s.centre);
-      else st.smoc = SmocCurrentSource.fromSerialized(s, st.smocClient, m => st.log('info', m));
-      rebuildStack(st);
-      sendCurrents(st);
-      if (st.smoc)
-        st.log(
-          'debug',
-          `smoc: adopted run ${st.smoc.run.key}${st.smoc.resident ? `, resident ${(st.smoc.memoryBytes() / 1e6).toFixed(1)} MB ${st.smoc.resident.u.buffer instanceof SharedArrayBuffer ? 'shared (no copy)' : 'copied'}` : ', nothing resident'}`
-        );
+      adoptSmoc(st, msg.smoc);
       return;
     }
     case 'currents-ref':
