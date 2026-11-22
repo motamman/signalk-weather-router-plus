@@ -2,10 +2,13 @@
  * Explicit full garbage collection after large short-lived forecast
  * memory is dropped: the streaming decoder's one-step block and decode
  * buffers at the end of an update, and a route's corridor store when the
- * route ends. An idle isolate (the route worker between jobs) can go
- * hours without a major GC, so that memory would otherwise stay resident
- * until some later collection. (The decoded forecast itself is on disk,
- * never resident; see data/decoded.ts.)
+ * route ends; and in the route worker, relayed SMOC / RTOFS shared
+ * memory it let go (worker/currents.ts: V8 does not count a
+ * SharedArrayBuffer from another thread toward this one's memory). An idle
+ * isolate (the route worker between jobs) can go hours without a major
+ * GC, so that memory would otherwise stay resident until some later
+ * collection. (The decoded forecast itself is on disk, never resident;
+ * see data/decoded.ts.)
  *
  * `gc` is obtained without a command-line flag: --expose_gc set at run
  * time installs `gc` in contexts created afterwards, so a fresh vm

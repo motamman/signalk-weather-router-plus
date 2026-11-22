@@ -120,6 +120,19 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The route worker no longer keeps every replaced SMOC area in memory.**
+  The data worker loads the SMOC resident area again at each step of the
+  window (3 h by default), with each new run and when the vessel has moved
+  away from it, and the route worker takes each new area in place of the
+  old one. V8 does not count shared memory received from another thread
+  toward that thread's memory, and between routes the route worker
+  allocates almost nothing, so it did not collect for hours and kept every
+  replaced area alive. On a boat running 0.2.1, the data worker's
+  `process.memoryUsage().arrayBuffers` read 282 MiB for two hours after a
+  reload and 203 MiB right after a full GC in the route worker alone
+  (#113). The route worker now runs a full GC whenever relayed SMOC or
+  RTOFS memory it holds is replaced or dropped (by the next relay, or by a
+  settings change), as it does after a route.
 - **A route on an ensemble member finds every member of the cycle in use.**
   While an ensemble set ran, a route asking for a member of that same cycle
   that the set had not taken was refused as "not on disk", though it was on
